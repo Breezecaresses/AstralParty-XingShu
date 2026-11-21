@@ -3,7 +3,7 @@
 <h3 align="center">感谢您选择 AstralParty-XingShu（星枢）！</h3>
 
 <p align="center">
-  <strong>反馈问题与建议：QQ 群 <code>540929823</code> &nbsp;|&nbsp; <a href="https://discord.gg/dxVS6ZF393">Discord</a></strong>
+  <strong>反馈问题与建议：QQ 群 <code>1080908767</code> &nbsp;|&nbsp; <a href="https://discord.gg/dxVS6ZF393">Discord</a></strong>
 </p>
 
 <p align="center">
