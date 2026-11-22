@@ -1,4 +1,4 @@
-"""Build one phone ZIP with its APK/manual files, plus the identical APK for existing updaters."""
+"""Build a streamlined pure-launcher Android ZIP (APK + README/License) plus direct APK."""
 import argparse
 import hashlib
 import json
@@ -8,14 +8,11 @@ import shutil
 import tempfile
 import zipfile
 from android_payload import previous_hashes
-from project_paths import project_document, publish_directory
+from project_paths import publish_directory
 
 ROOT = Path(__file__).resolve().parents[1]
-APK_NAME = '星枢手机安装助手.apk'
-MANUAL = '手动替换'
-PACKAGE_FILES = {'candidate.json', APK_NAME, f'{MANUAL}/__data', f'{MANUAL}/官方原版.__data',
-                 f'{MANUAL}/文件校验.json', '手机安装与手动替换.md', '兼容性说明.md',
-                 'LICENSE.txt', '先读我.txt', 'SHA256SUMS.txt'}
+APK_NAME = '星枢启动器.apk'
+PACKAGE_FILES = {APK_NAME, '先读我.txt', 'LICENSE.txt', 'SHA256SUMS.txt'}
 
 
 def sha(path):
@@ -38,8 +35,8 @@ def verify_apk_payload_binding(phone_apk, candidate_sha256, original_sha256):
         assert original_sha256.lower().encode('ascii') in dex_bytes, 'Pure launcher APK lacks vanilla SHA-256 binding'
 
 
-def verify_android_archive(archive, phone_apk):
-    """Bind the distribution ZIP, manual payloads and updater APK without extracting anything."""
+def verify_android_archive(archive, phone_apk, manifest=None):
+    """Bind the streamlined distribution ZIP, APK, and SHA256SUMS without extracting anything."""
     with zipfile.ZipFile(archive) as package:
         names = package.namelist()
         assert names and len(names) == len(set(names)), 'Duplicate Android ZIP entries'
@@ -51,17 +48,9 @@ def verify_android_archive(archive, phone_apk):
         assert sum(entry.file_size for entry in package.infolist()) <= 1024**3, 'Android ZIP is too large'
         assert package.testzip() is None, 'Corrupt Android ZIP'
         read = lambda name: package.read(root + '/' + name)
-        manifest = json.loads(read('candidate.json'))
-        assert root == 'XingShu_Android_' + manifest['releaseVersion'], 'Android ZIP version differs'
-        assert manifest['platform'] == 'ANDROID_CN' and manifest['package'] == 'com.feimo.astralparty'
-        assert manifest['nativeLibraries'] == []
-        assert manifest['candidate'] == f'{MANUAL}/__data' and manifest['vanilla'] == f'{MANUAL}/官方原版.__data'
         assert hashlib.sha256(read(APK_NAME)).hexdigest() == sha(phone_apk), 'ZIP APK differs from updater APK'
-        for name, key in [(manifest['candidate'], 'candidateSha256'), (manifest['vanilla'], 'originalSha256')]:
-            assert hashlib.sha256(read(name)).hexdigest() == manifest[key], 'Manual payload differs: ' + name
-        manual = json.loads(read(f'{MANUAL}/文件校验.json'))
-        assert manual == {**manifest, 'candidate': '__data', 'vanilla': '官方原版.__data'}, 'Manual metadata differs'
-        verify_apk_payload_binding(phone_apk, manifest['candidateSha256'], manifest['originalSha256'])
+        if manifest is not None:
+            verify_apk_payload_binding(phone_apk, manifest['candidateSha256'], manifest['originalSha256'])
         checksums = {}
         for line in read('SHA256SUMS.txt').decode('utf8').splitlines():
             digest, name = line.split('  ', 1)
@@ -70,7 +59,7 @@ def verify_android_archive(archive, phone_apk):
         assert set(checksums) == PACKAGE_FILES - {'SHA256SUMS.txt'}, 'Incomplete Android ZIP checksums'
         for name, digest in checksums.items():
             assert hashlib.sha256(read(name)).hexdigest() == digest, 'Android ZIP checksum mismatch: ' + name
-    return manifest
+    return {'releaseVersion': root[len('XingShu_Android_'):]}
 
 
 def main():
@@ -88,6 +77,8 @@ def main():
     candidate = Path(manifest['candidate'])
     assert sha(candidate) == manifest['candidateSha256'] and sha(args.vanilla) == manifest['originalSha256']
     assert manifest['platform'] == 'ANDROID_CN' and manifest['nativeLibraries'] == []
+    verify_apk_payload_binding(args.phone_apk, manifest['candidateSha256'], manifest['originalSha256'])
+    _ = previous_hashes(manifest, args.previous_manifest)
     name = 'XingShu_Android_' + args.version
     publish = publish_directory(ROOT)
     publish.mkdir(exist_ok=True)
@@ -98,31 +89,22 @@ def main():
         stage = Path(temp).resolve()
         assert stage.parent == publish
         package = stage / name
-        manual = package / MANUAL
-        manual.mkdir(parents=True)
+        package.mkdir(parents=True)
         shutil.copy2(args.phone_apk, package / APK_NAME)
-        shutil.copy2(candidate, manual / '__data')
-        shutil.copy2(args.vanilla, manual / '官方原版.__data')
-        manifest.update(candidate=f'{MANUAL}/__data', vanilla=f'{MANUAL}/官方原版.__data',
-                        sourceCommit=args.source_commit, releaseVersion=args.version,
-                        supportedPreviousSha256=previous_hashes(manifest, args.previous_manifest))
-        (package / 'candidate.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
-        (manual / '文件校验.json').write_text(json.dumps({**manifest, 'candidate': '__data', 'vanilla': '官方原版.__data'}, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
-        shutil.copy2(project_document(ROOT, 'ANDROID_PHONE_INSTALL.md'), package / '手机安装与手动替换.md')
-        shutil.copy2(project_document(ROOT, 'ANDROID_COMPATIBILITY.md'), package / '兼容性说明.md')
         shutil.copy2(ROOT / 'LICENSE', package / 'LICENSE.txt')
-        (package / '先读我.txt').write_text(f'''星枢安卓手机包 {args.version}
-适配游戏：{manifest['package']} {manifest['appVersion']}；插件：{manifest['runtimeVersion']}。
+        (package / '先读我.txt').write_text(f'''星枢安卓启动器 {args.version}
 
-推荐安装：解压后安装“{APK_NAME}”。在官方游戏更新资源、进入过大厅并正常退出后，按“手机安装与手动替换.md”完成本机无线调试配对、连接及安装。
-已有助手可直接覆盖安装，保留数据与配对身份。APK 是安装工具，不是修改后的游戏 APK。
+适配游戏：{manifest['package']} {manifest['appVersion']}（资源 160）；星枢官方插件：{manifest['runtimeVersion']}。
 
-手动替换：“{MANUAL}/__data”为插件文件，“{MANUAL}/官方原版.__data”用于还原；具体目标路径和 SHA256 见 candidate.json、文件校验.json 及安装说明。先正常退出游戏并保留备份；未知资源版本不要强行覆盖。普通文件管理器可能无权访问 Android/data，推荐使用助手完成授权安装。
+使用说明（轻量纯启动器）
+1. 安装包内「{APK_NAME}」（或直接使用同 Release 的 XingShu_Android_{args.version}.apk 覆盖安装）。
+2. 先在官方《吉星派对》更新游戏资源、进入一次大厅并正常退出。
+3. 打开「星枢启动器」，按界面引导通过 Shizuku 或无线/USB 调试完成权限授权。
+4. 默认可直接点击启动官方纯净原版游戏；如需使用局内功能，请前往「模组」或「工坊」页按需在线拉取官方插件与 PE 模组（自动校验 SHA-256，支持一键备份还原官方原版）。
 
-电脑连接手机的安装工具已包含在另一个电脑端 ZIP 内，本包不再附带 Windows EXE。
-GitHub 会另外保留与包内完全相同的 APK 和签名更新清单，供“检查助手更新”直接下载，无需手机先下载并解压整个 ZIP。
-源码：https://github.com/Breezecaresses/AstralParty-XingShu
-提交：{args.source_commit}
+本版已彻底移除冗余桌面辅助工具与重复手替大包；软件自更新仅更新「星枢启动器」本体，更新后请先退出游戏再前往「模组」页核验或升级局内插件。
+项目源码：https://github.com/Breezecaresses/AstralParty-XingShu
+提交基线：{args.source_commit}
 ''', encoding='utf-8-sig')
         entries = sorted(path for path in package.rglob('*') if path.is_file())
         (package / 'SHA256SUMS.txt').write_text(''.join(f'{sha(path)}  {path.relative_to(package).as_posix()}\n' for path in entries), encoding='utf8')
@@ -130,7 +112,7 @@ GitHub 会另外保留与包内完全相同的 APK 和签名更新清单，供�
         with zipfile.ZipFile(staged_archive, 'x', zipfile.ZIP_DEFLATED, compresslevel=9) as output:
             for path in sorted(package.rglob('*')):
                 if path.is_file(): output.write(path, Path(name) / path.relative_to(package))
-        verify_android_archive(staged_archive, args.phone_apk)
+        verify_android_archive(staged_archive, args.phone_apk, manifest)
         package.rename(destination)
         staged_archive.rename(archive)
         shutil.copy2(destination / APK_NAME, phone_asset)

@@ -39,9 +39,9 @@
 
 | Target | Package / Access | Highlights |
 | --- | --- | --- |
-| **Windows Desktop** | `XingShu_Desktop_0.1.7.zip` | Pure-launcher `XingShu Hub` with PCL-style startup animation & themes, integrated conflict scan/restore, and one-click modular installation of the **XingShu Official Plugin Mod** (`r8.40`) + 18 individual modules across Steam China, TapTap Windows, Bilibili, and WeGame. |
+| **Windows Desktop** | `XingShu_Hub_0.1.7_x64-setup.exe` / `XingShu_Desktop_0.1.7.zip` | One-click Windows installer or streamlined portable pure-launcher Hub (contains only `Hub/xingshu-hub.exe` + readme — standalone installer assistants and redundant pre-bundled `Runtime/` / `Android/` folders removed). Supports integrated conflict scan/restore and on-demand installation of the **XingShu Official Plugin Mod** (`r8.40`) + 18 modules. |
 | **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop** discovery & creator uploads, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
-| **Android Launcher** | `XingShu_Android_0.1.7.zip` / `.apk` | Redesigned lightweight Kotlin + Jetpack Compose Material 3 pure launcher with on-demand SHA-256 verified payload downloads, Shizuku & Wireless/USB ADB support, custom themes & wallpaper, PE Mod Workshop, and local pack import. |
+| **Android Launcher** | `XingShu_Android_0.1.7.apk` / `XingShu_Android_0.1.7.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.7.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Downloads verified payloads on demand with SHA-256 checks, Shizuku & Wireless/USB ADB support, custom themes/wallpaper, PE Mod Workshop, and local pack import. |
 
 > [!NOTE]
 > Updating the Hub or Android APK does not automatically overwrite the in-game plugin. After an app self-update, close the game cleanly and install or upgrade the **XingShu Official Plugin Mod** from the **Mods** tab. See the [v0.1.7 release record](docs/records/RELEASE_0.1.7.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).

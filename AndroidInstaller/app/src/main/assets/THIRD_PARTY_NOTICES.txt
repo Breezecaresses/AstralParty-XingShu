@@ -1,4 +1,4 @@
-星枢手机安装助手 — 开源组件
+星枢启动器 — 开源组件
 
 LibADB Android 3.1.1 — Copyright 2021 Muntashir Al-Islam.
 采用 Apache-2.0 授权，部分文件另含 BSD-3-Clause / MIT。

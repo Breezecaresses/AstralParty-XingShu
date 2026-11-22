@@ -206,7 +206,7 @@ final class MobileAuthHub {
 
     static BoundAccount completeQqHandoff(String handoff, BnSdkTokenExtractor.ChannelToken token, String deviceId) throws Exception {
         if (handoff == null || !handoff.matches("[A-Za-z0-9_-]{43}") || token == null || !token.nativeSupported) {
-            throw new IOException("请从 QQ 登录网页重新打开手机助手，或使用游戏内「趴绑定」。");
+            throw new IOException("请从 QQ 登录网页重新打开星枢启动器，或使用游戏内「趴绑定」。");
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("handoff", handoff);

@@ -27,7 +27,6 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
-  Smartphone,
   Upload,
   UserRound,
   Users,
@@ -140,7 +139,6 @@ const toolGroups: ToolGroup[] = [
       { to: '/diagnostics', Icon: ShieldCheck, zh: '组件诊断', en: 'Component diagnostics', detail: '核对游戏、启动组件和连接', english: 'Check game installation and runtime' },
       { to: '/maintenance/transactions?from=tools', Icon: History, zh: '安装记录', en: 'Install history', detail: '查看模组安装与还原记录', english: 'Review mod installation and rollback' },
       { to: '/maintenance/backups?from=tools', Icon: FolderOpen, zh: '备份与还原', en: 'Backups', detail: '查看并恢复文件备份', english: 'Review and restore file backups' },
-      { to: '/extensions/packages', Icon: Smartphone, zh: '手机连接与安装', en: 'Android Install', detail: '连接安卓手机无线调试或 USB 安装星枢', english: 'Connect Android device to install or update' },
     ],
   },
 ];

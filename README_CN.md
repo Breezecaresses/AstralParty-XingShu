@@ -39,9 +39,9 @@
 
 | 平台 | 获取方式 | 说明 |
 | --- | --- | --- |
-| **Windows 桌面端** | `XingShu_Desktop_0.1.7.zip` | **纯启动器版星枢 Hub**：内置 PCL 风格启动动画与主题配色、内嵌冲突扫描/卸载还原，支持按需一键安装**星枢官方插件 Mod**（`r8.40`）与 18 项官方功能模块，覆盖 Steam 国服、TapTap 电脑版、哔哩哔哩与 WeGame 四渠道。 |
+| **Windows 桌面端** | `XingShu_Hub_0.1.7_x64-setup.exe` / `XingShu_Desktop_0.1.7.zip` | **极简纯启动器发行**：提供一键安装包与解压即用便携包（仅含 `Hub/xingshu-hub.exe` 与说明文档，彻底移除独立安装助手及冗余 `Runtime/`、`Android/` 文件夹）；内嵌冲突检测/卸载还原，并在「模组」页按需在线安装**星枢官方插件 Mod**（`r8.40`）与 18 项官方模块。 |
 | **在线网页版** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | 免安装打开即用：Modrinth 风格社区**模组 / 卡牌 / 皮肤工坊**浏览下载与作者投稿、星枢平台账号体系、UID 战绩查询、`.rep` / 对局编号回放深度分析与离线全量图鉴。 |
-| **安卓手机端** | `XingShu_Android_0.1.7.zip` / `.apk` | 全新 Kotlin + Jetpack Compose Material 3 **轻量纯启动器**：按需从官方 HTTPS 拉取并校验 SHA-256 运行包，支持 Shizuku 与无线/USB ADB、动态主题与自定义壁纸、PE 工坊与本地模组/卡面导入。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
+| **安卓手机端** | `XingShu_Android_0.1.7.apk` / `XingShu_Android_0.1.7.zip` | 全新 Kotlin + Jetpack Compose Material 3 **轻量纯启动器**：支持直装 APK 或极简 ZIP（仅含 `星枢启动器.apk` 与说明文件，彻底取消独立助手命名与重复手替文件），按需从官方 HTTPS 拉取并校验 SHA-256 运行包，支持 Shizuku 与无线/USB ADB、动态主题与自定义壁纸、PE 工坊与本地模组/卡面导入。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
 
 > [!NOTE]
 > 软件自更新不会自动覆盖游戏内插件。应用自更新完成后，请先正常退出游戏，再前往「模组」页安装或升级**星枢官方插件 Mod**。详见[v0.1.7 发布记录](docs/records/RELEASE_0.1.7.md)与[发布打包说明](docs/guides/RELEASE_PACKAGING.md)。

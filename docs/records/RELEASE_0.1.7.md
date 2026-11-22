@@ -6,9 +6,10 @@
 
 - **适用游戏版本**：《吉星派对》`3.3.0 / 资源 160`（Steam 国服、TapTap Windows、哔哩哔哩、WeGame、安卓国服）
 - **版本号**：桌面端 Hub 与安卓启动器 `0.1.7`（更新序号 `2026112210`），电脑端官方插件 `1.0.0-game-ui-r8.40`，安卓端官方插件 `1.0.0-android-preview8.35`
-- [电脑端 ZIP](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Desktop_0.1.7.zip)：含星枢 Hub（纯启动器控制台）、四渠道验证插件清单与安卓配套连接组件。
-- [安卓手机 ZIP](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Android_0.1.7.zip)：含轻量纯启动器 APK、手动替换与官方原版还原文件。
-- [直接安装安卓 APK](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Android_0.1.7.apk)：与安卓 ZIP 内 APK 一致，支持应用内自更新与按需校验下载运行库。
+- [电脑端一键安装包](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Hub_0.1.7_x64-setup.exe)：Windows 安装程序，一步安装「星枢 Hub」（`xingshu-hub.exe`）。
+- [电脑端便携版 ZIP](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Desktop_0.1.7.zip)：极简纯启动器绿色版，仅含 `Hub/xingshu-hub.exe` 与使用说明（无独立安装助手、无预打包 `Runtime/` 与 `Android/` 大文件）。
+- [直接安装安卓 APK](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Android_0.1.7.apk)：轻量纯启动器 APK，支持覆盖安装、应用内自更新与按需校验下载运行库。
+- [安卓手机 ZIP](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.7/XingShu_Android_0.1.7.zip)：极简压缩包，仅含 `星枢启动器.apk`、`先读我.txt`、`LICENSE.txt` 与哈希校验文件（无旧版「手机安装助手」与 `手动替换/`）。
 
 ## 核心更新与架构升级
 
@@ -16,7 +17,7 @@
   - 电脑端与手机端默认均作为纯净启动器运行，不再强制捆绑修改游戏目录；可在「模组」页自由勾选安装、启停或一键批量安装**星枢官方插件 Mod**及全部 **18 项官方功能模块**（含实时下载进度展示）。
   - 精准识别各渠道官方原版基线哈希与 `r8.38` / `r8.39` 等历史运行时残留，杜绝误报“纯净启动”，支持跨版本备份检索与一键卸载还原。
 - **Hub 控制台深度整合与主题/工坊升级**：
-  - 移除独立外部 WinForms「星枢安装助手」弹窗，将目录冲突扫描、历史备份识别与确认覆盖安装全流程内置于 Hub 首页与模组页。
+  - 彻底剔除独立的「星枢安装助手.exe」「星枢安卓安装助手.exe」及外部 WinForms 弹窗，将目录冲突扫描、历史备份识别、在线下载安装与无损还原全流程直接整合于星枢 Hub；打包产物亦全面瘦身，不再重复附带离线运行库。
   - 新增 PCL 风格动态启动页动画与多套配色主题（支持自定义色调），全面重构电脑端与网页版（Modrinth 风格）模组工坊、星枢平台账号与游戏内实时开房管理（仅在大厅连接就绪后开放操作）。
   - 角色、卡牌、筹码与地图图鉴页直接标注当前已生效的本地 Mod 替换状态。
 - **游戏内 `r8.40` 原生功能中心修复与新模块**：

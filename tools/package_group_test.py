@@ -183,7 +183,7 @@ def main():
     parser.add_argument('--platform', choices=['all','STEAM_CN','TAPTAP','BILIBILI','WEGAME'], default='all')
     parser.add_argument('--deployment', type=Path, default=ROOT / 'XingShu-Dev/build/runtime-truth-fix/deployment.json')
     parser.add_argument('--official-baselines', type=Path, help='Audited directory containing PLATFORM/vanilla.__data for fresh-install checks')
-    parser.add_argument('--android-bundle', type=Path, help='Verified Android companion directory from prepare_android_hub_bundle.py')
+    parser.add_argument('--pure-launcher', action='store_true', help='Package streamlined pure-launcher Hub ZIP without standalone installer assistant, Runtime, or Android bundles')
     parser.add_argument('--release-notes', type=Path, help='Current release notes to include in the verified desktop ZIP')
     parser.add_argument('--hub-binary', type=Path, help='Completed isolated Hub build; keeps a running development Hub untouched')
     parser.add_argument('--mod-library', type=Path, help='Local texture adaptation candidate; not automatically uploaded or relicensed')
@@ -223,8 +223,6 @@ def main():
     stage.mkdir()
     (stage / 'Hub').mkdir()
     shutil.copy2(hub, stage / 'Hub/xingshu-hub.exe')
-    profiles = json.loads((ROOT / 'AstralParty-Hub/src-tauri/src/xing_shu/platform/platform_profiles.json').read_text('utf-8'))
-    deployment = json.loads(args.deployment.read_text('utf-8-sig'))
     release = {'FormatVersion': 1, 'Version': args.version, 'HubSha256': sha(hub),
                'SourceCommit': args.source_commit, 'RuntimeVersion': runtime_version, 'HubVersion': hub_version,
                'ExtensionManagementChannels': ['STEAM_CN', 'STEAM_GLOBAL', 'TAPTAP', 'BILIBILI', 'WEGAME'],
@@ -239,13 +237,47 @@ def main():
         if not args.local_build:
             raise SystemExit('The current third-party adaptation library is a local candidate; use --local-build')
         release['ModLibrary'] = stage_mod_library(args.mod_library, stage / 'ModLibrary')
-    if args.android_bundle:
-        from prepare_android_hub_bundle import verify
-        android = args.android_bundle.resolve()
-        info = verify(android)
-        shutil.copytree(android, stage / 'Android')
-        release['Android'] = {'RuntimeVersion': info['runtimeVersion'], 'Manifest': 'Android/bridge.json',
-                              'ManifestSha256': sha(stage / 'Android/bridge.json')}
+    if args.pure_launcher:
+        edition = '本地候选版' if args.local_build else ('测试版' if '-' in args.version else '正式版')
+        (stage / 'release.json').write_text(json.dumps(release, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        shutil.copy2(ROOT / 'LICENSE', stage / 'LICENSE.txt')
+        if args.release_notes:
+            shutil.copy2(args.release_notes.resolve(strict=True), stage / '本版更新.md')
+        (stage / '先读我.txt').write_text(f'''星枢启动器（XingShu Hub）{edition} {args.version}
+
+适配系统：Windows 10/11 64 位（《吉星派对》3.3.0 / 资源 160）。
+支持渠道：Steam 国服、Steam 国际服、TapTap Windows 版、哔哩哔哩、WeGame。
+
+使用方式（纯启动器发行，无需单独安装助手）
+1. 将本压缩包完整解压至普通文件夹，直接运行 Hub/xingshu-hub.exe（也可直接使用同 Release 提供的 XingShu_Hub_{args.version}_x64-setup.exe 一键安装）。
+2. 首次启动若系统提示缺少 WebView2 Runtime，请按提示完成微软运行库安装。
+3. 在「启动」页选择游戏主程序目录即可纯净启动原版游戏。
+4. 如需使用游戏内增强功能，请先正常退出游戏，再前往「模组」页一键下载安装「星枢官方插件 Mod」（{runtime_version}）并自由勾选或批量开启 18 项官方功能模块；卸载或还原原版均已在 Hub 内置完成，无需独立外部安装助手。
+5. 更多模组工坊下载、账号绑定、回放分析与图鉴详情可直接在星枢 Hub 或网页端使用。
+
+项目源码：https://github.com/Breezecaresses/AstralParty-XingShu
+提交基线：{args.source_commit}
+''', encoding='utf-8-sig')
+        entries = sorted(p for p in stage.rglob('*') if p.is_file())
+        (stage / 'SHA256SUMS.txt').write_text(''.join(f'{sha(p)}  {p.relative_to(stage).as_posix()}\n' for p in entries), encoding='utf-8')
+        stage.rename(destination)
+        with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
+            for path in sorted(destination.rglob('*')):
+                if path.is_file():
+                    output.write(path, Path(name) / path.relative_to(destination))
+        with zipfile.ZipFile(archive) as output:
+            assert output.testzip() is None
+            names = set(output.namelist())
+            assert not any('星枢安装助手' in n or '/Runtime/' in n or '/Android/' in n for n in names)
+            assert f'{name}/Hub/xingshu-hub.exe' in names and f'{name}/release.json' in names
+            assert len(names) == len(entries) + 1
+        digest = sha(archive)
+        (publish / (name + '.zip.sha256')).write_text(digest + '  ' + archive.name + '\n', encoding='utf-8')
+        print('Pure-launcher desktop package check PASS', flush=True)
+        print(f'READY: {archive}\nSIZE: {archive.stat().st_size / 1024 / 1024:.2f} MiB\nSHA256: {digest}', flush=True)
+        return
+    profiles = json.loads((ROOT / 'AstralParty-Hub/src-tauri/src/xing_shu/platform/platform_profiles.json').read_text('utf-8'))
+    deployment = json.loads(args.deployment.read_text('utf-8-sig'))
     for profile in profiles:
         platform = profile['platformId']
         if platform not in ('STEAM_CN', 'TAPTAP', 'BILIBILI', 'WEGAME'):
@@ -289,12 +321,7 @@ def main():
         f"{p['Label']} {p.get('GameVersion') or '清单指定游戏版本'} / 资源 {p.get('ResourceVersion') or '清单指定版本'}"
         for p in release['Platforms']))
     resource_versions = '、'.join(dict.fromkeys(p.get('ResourceVersion') or '清单指定版本' for p in release['Platforms']))
-    android_note = '''
-安卓手机安装已合并到电脑版 Hub：
-进入“星枢包管理器 → 安卓手机安装 / 更新 → 连接手机”。USB 接线并在手机允许调试后点“检测手机”；也可展开无线连接，按手机的配对地址和连接地址分别操作。
-选择手机后点“安装 / 更新星枢”，等待 SHA256 校验通过。可还原官方原版，也可点“安装手机助手 APK”，以后在手机上独立维护。
-已包含配套 ADB 与手机文件，无需另找 adb.exe。请保留与 Hub 同级的 Android 文件夹；多台设备需明确选择目标，游戏运行时拒绝替换。
-''' if args.android_bundle else ''
+    android_note = ''
     local_note = '本包为本地工作区候选，尚未上传发布；SourceCommit 记录源码基线，未代表此候选的完整发布标签。\n' if args.local_build else ''
     mod_note = '''本地模组库包含本机下载原包的纹理适配候选，作者和原包名称保留在游戏模组页及 ModLibrary/适配说明.md。只支持已核验的 Steam 国服 3.3.0；TapTap 与安卓不可沿用。模型、动画和语音待适配部分不会安装。资源映射与文件事务已检查，游戏中显示仍待实测。第三方资源不随本项目代码许可重新授权；当前包未上传发布。\n''' if args.mod_library else ''
     edition = '本地候选版' if args.local_build else ('测试版' if '-' in args.version else '正式版')
@@ -390,7 +417,7 @@ Windows 便携程序未附 Authenticode 代码签名；应用更新清单和手�
 • 头像手牌移至左侧点击展开；点赞仅显示 3 名队友。
 • 修复建筑牌选格视角拖动、星枢包管理器安装入口及移动端 443/TapTap/B 站登录同步。
 • 四个电脑渠道合并一包，助手按渠道路径与指纹校验。
-• {'安卓包附新版手机助手与手动替换／还原文件，并更新房间模板选项。' if args.android_bundle else '本包未附安卓安装组件，请使用已验证的安卓发布。'}
+• 本包仅用于遗留多通道归档核验。
 
 使用反馈：同房／换房重开、观战重连、结算点赞与手机授权；反馈附版本、渠道、步骤及截图（隐藏账号隐私）。
 源码：https://github.com/Breezecaresses/AstralParty-XingShu

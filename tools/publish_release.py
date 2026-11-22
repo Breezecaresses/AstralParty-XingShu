@@ -23,6 +23,7 @@ def main():
                         help='The single updater APK, byte-identical to the APK inside --android-package')
     parser.add_argument('--android-package', type=Path, help='One Android ZIP containing the phone APK and manual replacement files')
     parser.add_argument('--desktop-only', action='store_true', help='Publish only the desktop ZIP using a separate signed desktop update feed')
+    parser.add_argument('--setup-exe', type=Path, help='Optional standalone Windows Hub installer EXE')
     parser.add_argument('--update-manifest', type=Path, required=True, help='Signed xingshu-update.json for both application updaters')
     args = parser.parse_args()
     if args.desktop_only:
@@ -57,6 +58,12 @@ def main():
     assert ('android' not in metadata) == args.desktop_only, 'Signed update components differ from the selected release mode'
     verify_assets(metadata, upload_paths)
     upload_paths.append(manifest)
+    if args.setup_exe:
+        setup_exe = args.setup_exe.resolve(strict=True)
+        assert setup_exe.suffix.lower() == '.exe', 'Setup binary must be an .exe'
+        setup_checksum = Path(str(setup_exe) + '.sha256').resolve(strict=True)
+        assert hashlib.sha256(setup_exe.read_bytes()).hexdigest() == setup_checksum.read_text('utf-8').split()[0], 'Setup EXE checksum mismatch'
+        upload_paths.extend([setup_exe, setup_checksum])
     with zipfile.ZipFile(archive) as package:
         entries = [n for n in package.namelist() if n.endswith('/release.json') and n.count('/') == 1]
         assert len(entries) == 1, 'Not a complete desktop release'
@@ -94,8 +101,8 @@ def main():
         'tag_name': args.tag, 'target_commitish': commit, 'name': title,
         'body': args.body.read_text('utf-8'), 'draft': True, 'prerelease': not args.stable})
     assets = request('GET', api + '/releases/' + str(release['id']) + '/assets')
-    packages = {p.name for p in upload_paths if p.suffix.lower() in {'.zip', '.apk'}}
-    unexpected = [a['name'] for a in assets if Path(a['name']).suffix.lower() in {'.zip', '.apk'} and a['name'] not in packages]
+    packages = {p.name for p in upload_paths if p.suffix.lower() in {'.zip', '.apk', '.exe'}}
+    unexpected = [a['name'] for a in assets if Path(a['name']).suffix.lower() in {'.zip', '.apk', '.exe'} and a['name'] not in packages]
     if unexpected:
         raise SystemExit('Draft contains packages outside the selected release: ' + ', '.join(unexpected))
     for path in upload_paths:
@@ -104,13 +111,15 @@ def main():
         if asset:
             assert asset.get('digest') == digest and asset['size'] == path.stat().st_size, 'Existing draft asset differs'
         else:
-            labels = {archive.name: '电脑端 ZIP'}
+            labels = {archive.name: '电脑端便携版 ZIP（解压即用星枢 Hub）'}
+            if args.setup_exe:
+                labels[args.setup_exe.resolve(strict=True).name] = '电脑端安装包（一键安装星枢 Hub）'
             if not args.desktop_only:
-                labels.update({android_package.name: '安卓手机 ZIP（APK＋手动替换）', args.extra_package[0].name: '自动更新用 APK'})
+                labels.update({android_package.name: '安卓手机版 ZIP（星枢启动器 APK＋说明）', args.extra_package[0].name: '安卓启动器直接安装 / 自动更新用 APK'})
             query = {'name': path.name}
             if path.name in labels: query['label'] = labels[path.name]
             upload = release['upload_url'].split('{', 1)[0] + '?' + urllib.parse.urlencode(query)
-            content_types={'.zip':'application/zip','.apk':'application/vnd.android.package-archive','.json':'application/json'}
+            content_types={'.zip':'application/zip','.apk':'application/vnd.android.package-archive','.exe':'application/vnd.microsoft.portable-executable','.json':'application/json'}
             asset = request('POST', upload, path.read_bytes(), content_types.get(path.suffix,'text/plain'))
             assert asset.get('digest') == digest and asset['size'] == path.stat().st_size, 'Uploaded asset mismatch'
         print('Verified upload: ' + path.name, flush=True)

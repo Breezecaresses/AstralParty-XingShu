@@ -287,7 +287,6 @@ export const SettingsPage: React.FC = () => {
             <p>• 所有插件安装、替换与卸载均自动生成事务快照，支持随时一键无损还原。</p>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
-            <NavLink to="/extensions/packages" className="btn btn-secondary">手机连接与安装 →</NavLink>
             <NavLink to="/maintenance/transactions" className="btn btn-secondary">安装事务记录 →</NavLink>
             <NavLink to="/maintenance/backups" className="btn btn-secondary">数据备份与还原 →</NavLink>
             <NavLink to="/diagnostics" className="btn btn-secondary">系统诊断中心 →</NavLink>
