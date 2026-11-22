@@ -15,7 +15,7 @@ public final class LocalInstallerMain {
         try {
             int uid = android.os.Process.myUid();
             if (uid != 2000 && uid != 0) throw new SecurityException("需要本机无线调试授权");
-            if (args.length < 1 || args.length > 3) throw new IllegalArgumentException("操作不匹配");
+            if (args.length < 1 || args.length > 4) throw new IllegalArgumentException("操作不匹配");
 
             InstallerEngine engine = new InstallerEngine();
             String operation = args[0];
@@ -50,9 +50,43 @@ public final class LocalInstallerMain {
                 case "install":
                 case "restore":
                     boolean restore = operation.equals("restore");
+                    File vanillaStaged = new File(STAGING, "vanilla.__data");
                     try (InputStream p = restore ? null : new FileInputStream(new File(STAGING, "candidate.__data"));
-                         InputStream v = new FileInputStream(new File(STAGING, "vanilla.__data"))) {
+                         InputStream v = vanillaStaged.isFile() ? new FileInputStream(vanillaStaged) : null) {
                         result = engine.apply(packageName, restore, conflictHash, p, v);
+                    }
+                    break;
+                case "install-mod":
+                    if (args.length != 3 || !args[2].matches("[A-Za-z0-9+/=]{4,32768}")) {
+                        throw new IllegalArgumentException("模组元数据无效");
+                    }
+                    String modMetaJson = new String(Base64.getDecoder().decode(args[2]), StandardCharsets.UTF_8);
+                    try (InputStream z = new FileInputStream(new File(STAGING, "mod.zip"))) {
+                        result = engine.installModPack(packageName, modMetaJson, z);
+                    }
+                    break;
+                case "list-mods":
+                    result = engine.listInstalledMods(packageName);
+                    break;
+                case "remove-mod":
+                    if (args.length != 3 || !args[2].matches("[A-Za-z0-9._-]{1,120}")) {
+                        throw new IllegalArgumentException("模组标识无效");
+                    }
+                    result = engine.removeModPack(packageName, args[2]);
+                    break;
+                case "set-official-modules":
+                    if (args.length != 4 || !args[3].matches("[a-z0-9,-]{1,512}")) {
+                        throw new IllegalArgumentException("官方模块参数无效");
+                    }
+                    String mode = args[2];
+                    if ("enable".equals(mode)) {
+                        result = engine.setOfficialModules(packageName, args[3], true, false);
+                    } else if ("disable".equals(mode)) {
+                        result = engine.setOfficialModules(packageName, args[3], false, false);
+                    } else if ("remove".equals(mode)) {
+                        result = engine.setOfficialModules(packageName, args[3], false, true);
+                    } else {
+                        throw new IllegalArgumentException("官方模块操作模式无效");
                     }
                     break;
                 default:

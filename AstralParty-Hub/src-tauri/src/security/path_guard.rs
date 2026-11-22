@@ -31,8 +31,15 @@ impl PathGuard {
             match component {
                 Component::Normal(part) => {
                     let s = part.to_string_lossy();
-                    if s == ".." || s == "." {
-                        return Err(HubError::security_violation("Directory traversal tokens are strictly prohibited."));
+                    let stem = s.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+                    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+                        || ["COM", "LPT"].iter().any(|prefix| {
+                            matches!(stem.strip_prefix(*prefix), Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+                        });
+                    if s.ends_with(['.', ' ']) || device
+                        || s.chars().any(|c| c.is_control() || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+                    {
+                        return Err(HubError::security_violation("路径包含 Windows 不支持的文件名。"));
                     }
                     normalized.push(part);
                 }
@@ -52,7 +59,7 @@ impl PathGuard {
 
     /// Confines a resolved path strictly within a base directory.
     pub fn ensure_within_root(base: &Path, candidate: &Path) -> HubResult<PathBuf> {
-        let canonical_base = dunce::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+        let canonical_base = Self::resolve_existing_prefix(base)?;
         
         let candidate_full = if candidate.is_relative() {
             canonical_base.join(candidate)
@@ -60,28 +67,38 @@ impl PathGuard {
             candidate.to_path_buf()
         };
 
-        // If the candidate exists, canonicalize it; otherwise normalize
-        let canonical_candidate = if candidate_full.exists() {
-            dunce::canonicalize(&candidate_full).unwrap_or(candidate_full)
-        } else {
-            // Resolve an existing ancestor too: a new file under a junction must not escape.
-            let mut ancestor = candidate_full.as_path();
-            let mut missing = Vec::new();
-            while !ancestor.exists() {
-                if let Some(name) = ancestor.file_name() { missing.push(name.to_os_string()); }
-                ancestor = ancestor.parent().ok_or_else(|| HubError::security_violation("无法验证目标目录。"))?;
-            }
-            let mut resolved = dunce::canonicalize(ancestor).map_err(|e| HubError::security_violation(e.to_string()))?;
-            for name in missing.into_iter().rev() { resolved.push(name); }
-            resolved
-        };
-
+        let canonical_candidate = Self::resolve_existing_prefix(&candidate_full)?;
         if !canonical_candidate.starts_with(&canonical_base) {
             return Err(HubError::security_violation(format!(
                 "Path boundary escape detected: '{}' is outside base '{}'",
                 canonical_candidate.display(),
                 canonical_base.display()
             )));
+        }
+        Ok(canonical_candidate)
+    }
+
+    fn resolve_existing_prefix(path: &Path) -> HubResult<PathBuf> {
+        let absolute = std::path::absolute(path)
+            .map_err(|_| HubError::security_violation("无法读取目标路径。"))?;
+        let mut ancestor = absolute.as_path();
+        let mut missing = Vec::new();
+        loop {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if let Some(name) = ancestor.file_name() {
+                        missing.push(name.to_os_string());
+                    }
+                    ancestor = ancestor.parent().ok_or_else(|| HubError::security_violation("无法验证目标目录。"))?;
+                }
+                Err(_) => return Err(HubError::security_violation("无法读取目标路径。")),
+            }
+        }
+        let mut canonical_candidate = dunce::canonicalize(ancestor)
+            .map_err(|_| HubError::security_violation("无法解析目标路径。"))?;
+        for name in missing.into_iter().rev() {
+            canonical_candidate.push(name);
         }
 
         Ok(canonical_candidate)
@@ -112,5 +129,12 @@ mod tests {
         assert!(res.is_ok());
         let res = PathGuard::sanitize_relative_path("game/mods/texture.png");
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn rejects_windows_special_names_and_streams() {
+        for path in ["data/art.bytes:metadata", "data/art.wav.", "data/NUL.txt", "data/COM1.webp", "data/image.webp "] {
+            assert!(PathGuard::sanitize_relative_path(path).is_err());
+        }
     }
 }

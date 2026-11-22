@@ -38,9 +38,9 @@ fn should_drop_qq_session(status: reqwest::StatusCode, msg: &str) -> bool {
         || msg.contains("已使用")
 }
 
-async fn request(path: &str, body: Option<Value>, token: Option<&str>) -> HubResult<Value> {
+async fn request_inner(path: &str, body: Option<Value>, token: Option<&str>, timeout_secs: u64, allow_conflict: bool) -> HubResult<Value> {
     // Destination is fixed in native code; frontend input cannot redirect credentials elsewhere.
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(18))
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none())
         .build().map_err(|_| error("无法初始化安全登录连接。"))?;
     let mut call = if body.is_some() { client.post(format!("{ORIGIN}{path}")) }
@@ -48,10 +48,11 @@ async fn request(path: &str, body: Option<Value>, token: Option<&str>) -> HubRes
     if let Some(data) = body { call = call.json(&data); }
     if let Some(token) = token { call = call.bearer_auth(token); }
     let mut response = call.send().await.map_err(|_| error("登录服务连接未完成，请检查网络后重试。"))?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(HubError::new("ACCOUNT_LOGIN_EXPIRED", "登录已过期，请重新登录。", "HUB").with_recoverable(true));
     }
-    let ok = response.status().is_success();
+    let ok = status.is_success() || (allow_conflict && status == reqwest::StatusCode::CONFLICT);
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| error("登录响应读取失败。"))? {
         if bytes.len() + chunk.len() > MAX_RESPONSE { return Err(error("登录响应无效。")); }
@@ -59,11 +60,20 @@ async fn request(path: &str, body: Option<Value>, token: Option<&str>) -> HubRes
     }
     let parsed: Value = serde_json::from_slice(&bytes).map_err(|_| error(if ok { "登录服务返回了无效响应。" } else { "登录请求未完成，请稍后重试或重新发起登录。" }))?;
     if !ok {
-        let msg = parsed["error"].as_str().map(str::trim).filter(|s| !s.is_empty() && s.chars().count() <= 160)
+        let max_len = if allow_conflict { 180 } else { 160 };
+        let msg = parsed["error"].as_str().map(str::trim).filter(|s| !s.is_empty() && s.chars().count() <= max_len)
             .unwrap_or("登录请求未完成，请稍后重试或重新发起登录。");
         return Err(error(msg));
     }
     Ok(parsed)
+}
+
+async fn request(path: &str, body: Option<Value>, token: Option<&str>) -> HubResult<Value> {
+    request_inner(path, body, token, 18, false).await
+}
+
+async fn request_room(path: &str, body: Option<Value>, token: Option<&str>) -> HubResult<Value> {
+    request_inner(path, body, token, 25, true).await
 }
 fn data_root(app: &tauri::AppHandle) -> HubResult<PathBuf> {
     let path = app.path().app_data_dir().map_err(|_| error("无法读取 Hub 数据目录。"))?.join("account-login");
@@ -475,6 +485,95 @@ pub async fn complete_qq_channel_login(
     Ok(json!({ "status": "succeeded", "account": ch_json["account"] }))
 }
 
+fn sanitize_room_mode(mode: Option<i32>) -> i32 {
+    match mode {
+        Some(m @ (1 | 3 | 4 | 7 | 11 | 12)) => m,
+        _ => 4,
+    }
+}
+
+fn validate_numeric_id(raw: &str, field_name: &str) -> HubResult<String> {
+    let clean = raw.trim();
+    if clean.is_empty() || clean.len() > 20 || !clean.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(error(&format!("{field_name}格式无效（仅支持 1~20 位数字）。")));
+    }
+    Ok(clean.to_string())
+}
+
+#[tauri::command]
+pub async fn account_room_catalog() -> HubResult<Value> {
+    request_room("/account/room/catalog", None, None).await
+}
+
+#[tauri::command]
+pub async fn account_room_current(app: tauri::AppHandle) -> HubResult<Value> {
+    let Some(token) = token(&data_root(&app)?)? else {
+        return Ok(json!({ "signedIn": false, "active": false, "room": null }));
+    };
+    let mut result = request_room("/account/room/current", None, Some(&token)).await?;
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("signedIn".to_string(), Value::Bool(true));
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn account_room_create(app: tauri::AppHandle, payload: Value) -> HubResult<Value> {
+    if !payload.is_object() {
+        return Err(error("建房参数格式无效。"));
+    }
+    let token = token(&data_root(&app)?)?.ok_or_else(|| error("请先在游戏账号页登录。"))?;
+    request_room("/account/room/create", Some(payload), Some(&token)).await
+}
+
+#[tauri::command]
+pub async fn account_room_update(app: tauri::AppHandle, payload: Value) -> HubResult<Value> {
+    if !payload.is_object() {
+        return Err(error("修改房间参数格式无效。"));
+    }
+    let token = token(&data_root(&app)?)?.ok_or_else(|| error("请先在游戏账号页登录。"))?;
+    request_room("/account/room/update", Some(payload), Some(&token)).await
+}
+
+#[tauri::command]
+pub async fn account_room_kick(app: tauri::AppHandle, player_id: String) -> HubResult<Value> {
+    let clean = validate_numeric_id(&player_id, "玩家 UID")?;
+    let token = token(&data_root(&app)?)?.ok_or_else(|| error("请先在游戏账号页登录。"))?;
+    request_room("/account/room/kick", Some(json!({ "player_id": clean })), Some(&token)).await
+}
+
+#[tauri::command]
+pub async fn account_room_exit(app: tauri::AppHandle) -> HubResult<Value> {
+    let token = token(&data_root(&app)?)?.ok_or_else(|| error("请先在游戏账号页登录。"))?;
+    request_room("/account/room/exit", Some(json!({})), Some(&token)).await
+}
+
+#[tauri::command]
+pub async fn account_room_lobby(app: tauri::AppHandle, mode: Option<i32>) -> HubResult<Value> {
+    let m = sanitize_room_mode(mode);
+    let token = token(&data_root(&app)?)?.ok_or_else(|| error("请先在游戏账号页登录。"))?;
+    request_room(&format!("/account/room/lobby?mode={m}"), None, Some(&token)).await
+}
+
+pub(crate) async fn search_room_internal(app: &tauri::AppHandle, room_id: &str) -> Option<(bool, i32)> {
+    let clean = validate_numeric_id(room_id, "房间号").ok()?;
+    let root = data_root(app).ok()?;
+    let token = token(&root).ok().flatten()?;
+    let resp = request_room("/account/room/search", Some(json!({ "room_id": clean })), Some(&token))
+        .await
+        .ok()?;
+    let found = resp["found"].as_bool().unwrap_or(false);
+    let srv_id = resp["roomServerId"].as_i64().unwrap_or(0) as i32;
+    Some((found, srv_id))
+}
+
+#[tauri::command]
+pub async fn account_room_search(app: tauri::AppHandle, room_id: String) -> HubResult<Value> {
+    let clean = validate_numeric_id(&room_id, "房间号")?;
+    let token = token(&data_root(&app)?)?.ok_or_else(|| error("请先在游戏账号页登录。"))?;
+    request_room("/account/room/search", Some(json!({ "room_id": clean })), Some(&token)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +624,18 @@ mod tests {
         assert!(!should_drop_qq_session(reqwest::StatusCode::BAD_REQUEST, "请先退出渠道服游戏客户端后重试"));
         assert!(should_drop_qq_session(reqwest::StatusCode::FORBIDDEN, ""));
         assert!(should_drop_qq_session(reqwest::StatusCode::BAD_REQUEST, "授权页面已过期，请重新扫码登录"));
+    }
+    #[test]
+    fn validates_official_room_mode_and_numeric_ids() {
+        for valid in [1, 3, 4, 7, 11, 12] {
+            assert_eq!(sanitize_room_mode(Some(valid)), valid);
+        }
+        assert_eq!(sanitize_room_mode(None), 4);
+        assert_eq!(sanitize_room_mode(Some(99)), 4);
+        assert_eq!(sanitize_room_mode(Some(-1)), 4);
+        assert_eq!(validate_numeric_id(" 9123456 ", "房间号").unwrap(), "9123456");
+        assert!(validate_numeric_id("", "房间号").is_err());
+        assert!(validate_numeric_id("912a456", "房间号").is_err());
+        assert!(validate_numeric_id(&"9".repeat(21), "房间号").is_err());
     }
 }

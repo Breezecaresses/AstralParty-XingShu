@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { NavLink } from 'react-router-dom';
-import { assetUrl, isTauriRuntime } from '../../shared/runtime';
+import { assetUrl, installedArtworkUrl, isTauriRuntime } from '../../shared/runtime';
+import { steamAnimatedEmoteUrl } from '../../shared/gameEmotes';
 import { api } from '../../shared/api/tauri';
 import { accountKey, defaultLibraryKey, gameCatalog, plainGameText, platformName, sessionKey } from '../../shared/gameLibrary';
 import type { LibraryAccount, LibrarySession } from '../../shared/gameLibrary';
@@ -128,8 +129,11 @@ export function LibraryHeader({ title, description, state }: { title: string; de
 
 export function GameImage({ asset, name, className = '' }: { asset: string; name: string; className?: string }) {
   const raw = gameCatalog.assets[asset];
-  const src = raw ? assetUrl(raw) : '';
-  return src ? <img className={`library-image ${className}`} src={src} alt={name} loading="lazy" /> : <div className={`library-image library-image-missing ${className}`}>暂无图片</div>;
+  const src = installedArtworkUrl(asset) || steamAnimatedEmoteUrl(asset) || (raw ? assetUrl(raw) : '');
+  const [failedSrc, setFailedSrc] = useState('');
+  return src && failedSrc !== src
+    ? <img className={`library-image ${className}`} src={src} alt={name} loading="lazy" onError={() => setFailedSrc(src)} />
+    : <div className={`library-image library-image-missing ${className}`}>暂无图片</div>;
 }
 export function GameText({ text }: { text?: string }) { return <p className="library-text">{plainGameText(text || '官方配置暂未提供说明。')}</p>; }
 export function LibraryModal({ title, close, children }: { title: string; close: () => void; children: React.ReactNode }) {

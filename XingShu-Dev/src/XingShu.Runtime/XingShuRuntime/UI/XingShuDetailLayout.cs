@@ -20,8 +20,18 @@ namespace XingShuRuntime.UI
         }
         internal static Image Panel(RectTransform rt, string sprite = "card_base.png", float alpha = 1)
         {
-            var image = rt.gameObject.AddComponent<Image>(); image.sprite = XingShuUIAssetService.GetSprite(sprite);
-            image.type = Image.Type.Sliced; image.color = new Color(1, 1, 1, alpha); return image;
+            var image = rt.gameObject.AddComponent<Image>();
+            Sprite sp = XingShuUIAssetService.GetSprite(sprite);
+            image.sprite = sp;
+            image.type = Image.Type.Sliced;
+            image.color = XingShuUIAssetService.IsFallbackSprite(sp)
+                ? new Color(XingShuUITheme.Card.r, XingShuUITheme.Card.g, XingShuUITheme.Card.b, XingShuUITheme.Card.a * alpha)
+                : new Color(1f, 1f, 1f, alpha);
+            if (!string.IsNullOrEmpty(sprite) && XingShuNativeGameUI.IsNativeAssetName(System.IO.Path.GetFileName(sprite)))
+            {
+                XingShuNativeGameUI.BindLogicalIfMapped(image, System.IO.Path.GetFileName(sprite), Image.Type.Sliced, false, new Color(1f, 1f, 1f, alpha));
+            }
+            return image;
         }
         internal static void Fill(RectTransform rt, float l = 0, float t = 0, float r = 0, float b = 0)
         {

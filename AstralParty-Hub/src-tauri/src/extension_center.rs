@@ -66,13 +66,17 @@ fn register(db: &Database, platform: &str, selection: &str) -> HubResult<GameIns
 
 #[cfg_attr(feature = "web-ui", tauri::command)]
 pub async fn list_extension_targets(center: State<'_, ExtensionCenter>) -> HubResult<Vec<GameInstallation>> {
-    list_targets(&center.db)
+    let db = center.db.clone();
+    tokio::task::spawn_blocking(move || list_targets(&db))
+        .await
+        .map_err(|_| HubError::storage_error("游戏目录检测未完成，请重试。".to_string()))?
 }
 pub fn list_targets(db: &Database) -> HubResult<Vec<GameInstallation>> {
     let repo = GameRepository::new(db.clone());
     let saved = repo.list_all()?;
     let steam = crate::game::detector::GameDetector::detect_game();
-    for p in profiles() {
+    let platforms = profiles();
+    for p in &platforms {
         let platform = p["platformId"].as_str().unwrap_or_default();
         let mut candidates = Vec::new();
         if let Some(root) = p["installRoot"].as_str() { candidates.push(root.to_string()); }
@@ -82,7 +86,9 @@ pub fn list_targets(db: &Database) -> HubResult<Vec<GameInstallation>> {
         }
         for root in candidates { let _ = register(db, platform, &root); }
     }
-    Ok(repo.list_all()?.into_iter().filter(|g| profiles().iter().any(|p| p["platformId"] == g.platform)).collect())
+    Ok(repo.list_all()?.into_iter()
+        .filter(|g| platforms.iter().any(|p| p["platformId"] == g.platform) && game_root(g).is_ok())
+        .collect())
 }
 #[cfg_attr(feature = "web-ui", tauri::command)]
 pub async fn register_extension_target(platform_id: String, path: String, center: State<'_, ExtensionCenter>) -> HubResult<GameInstallation> {
@@ -173,11 +179,11 @@ where
     best.map(|(_, path)| dunce::canonicalize(&path).unwrap_or(path))
 }
 
-fn package_root() -> Option<PathBuf> {
+pub(crate) fn package_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     resolve_package_root(&exe, |p| installer_path(p).is_some())
 }
-fn installer_path(package: &Path) -> Option<PathBuf> {
+pub(crate) fn installer_path(package: &Path) -> Option<PathBuf> {
     ["星枢安装助手.exe", "星枢群测助手.exe"].into_iter()
         .map(|name| package.join(name)).find(|path| path.is_file())
 }
@@ -197,18 +203,27 @@ pub fn inventory(db: &Database, game: &GameInstallation) -> HubResult<ExtensionI
             description: manifest.and_then(|m| m["package"]["description"].as_str().map(String::from)).unwrap_or_default(), managed: true });
     }
     // This index contains only hashes of the checked local runtime, never user paths or credentials.
-    let runtimes: Vec<serde_json::Value> = serde_json::from_str(include_str!("runtime_inventory.generated.json")).unwrap_or_default();
+    let runtime_inventory = include_str!("runtime_inventory.generated.json");
+    #[cfg(feature = "launcher-preview")]
+    let runtime_inventory = option_env!("XINGSHU_PREVIEW_RUNTIME_INVENTORY").unwrap_or(runtime_inventory);
+    let runtimes: Vec<serde_json::Value> = serde_json::from_str(runtime_inventory).unwrap_or_default();
     if let Some(runtime) = runtimes.iter().find(|r| r["platform"] == game.platform) {
         let path = root.join(runtime["bundleRelativePath"].as_str().unwrap_or_default());
         if path.is_file() {
             let hash = compute_file_sha256(&path)?;
             let installed = hash.eq_ignore_ascii_case(runtime["sha256"].as_str().unwrap_or_default());
             if installed {
+                let name = if cfg!(feature = "launcher-preview") { "星枢启动组件" } else { "星枢运行时与内置功能" };
+                let description = if cfg!(feature = "launcher-preview") {
+                    "提供游戏连接与悬浮球。局内工具可在模组页单独安装。"
+                } else {
+                    "包含观战手牌、角色与战绩同步、功能中心及本地计时。内置功能随运行时一起更新，请在游戏中查看启用状态。"
+                };
                 out.entries.insert(0, ExtensionEntry { id: "builtin.runtime".into(), package_id: "xingshu.runtime.core".into(),
-                    name: "星枢运行时与内置功能".into(), category: "xingshu-plugin".into(), version: runtime["version"].as_str().map(String::from),
+                    name: name.into(), category: "xingshu-plugin".into(), version: runtime["version"].as_str().map(String::from),
                     path: path.display().to_string(), source: "游戏文件 SHA256 核验".into(), status: "文件已核验".into(),
-                    description: "包含观战手牌、角色与战绩同步、功能中心及本地计时。内置功能随运行时一起更新，请在游戏中查看启用状态。".into(), managed: false });
-            } else { out.warnings.push("当前游戏资源与本版运行时指纹不同；不将其视为已安装最新版。请使用安装助手检查。".into()); }
+                    description: description.into(), managed: false });
+            } else { out.warnings.push("当前游戏资源与本版运行时指纹不同；请在「模组」页使用「检查冲突」核对或更新。".into()); }
         }
     }
     let mut apx_markers = Vec::new();
@@ -234,7 +249,7 @@ pub fn inventory(db: &Database, game: &GameInstallation) -> HubResult<ExtensionI
     apx_markers.dedup();
     if !apx_markers.is_empty() {
         out.warnings.push(format!(
-            "检测到同定位冲突插件文件（{}）。建议点击“打开安装助手”，确认后备份删除冲突插件并替换为星枢。",
+            "检测到同定位冲突插件文件（{}）。请在「模组」页点击「检查冲突」，确认后即可在 Hub 内一键备份清理并替换为星枢。",
             apx_markers.join("、")
         ));
     }
@@ -369,6 +384,27 @@ mod tests {
         assert!(!target(&global).exists());
         assert!(target(&cn).exists() && target(&other_cn).exists());
         assert_eq!(ExtensionRepository::new(db).list_mods().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rollback_preserves_unknown_changes_and_restores_verified_original() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::in_memory().unwrap();
+        let game_dir = temp.path().join("game");
+        let game = fixture(&db, &game_dir, "STEAM_CN");
+        let target = game_dir.join("mods/scoped-test/settings.ini");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"original").unwrap();
+        let package = archive(temp.path(), "1.0.0", &["STEAM_CN"], b"mod");
+        let service = crate::application::InstallService::new(db, temp.path().join("backups"));
+        let installed = service.install_package_from_zip(&package, &game.id).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"mod");
+        std::fs::write(&target, b"external update").unwrap();
+        assert!(service.rollback_transaction(&installed.id).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"external update");
+        std::fs::write(&target, b"mod").unwrap();
+        service.rollback_transaction(&installed.id).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
     }
 
     #[test]

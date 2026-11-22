@@ -17,9 +17,11 @@ use crate::extension_center::{game_root, get_game, ExtensionCenter};
 use crate::install::gates::ProcessGate;
 use crate::packages::manifest::HubPackageManifestV1;
 use crate::packages::parser::PackageParser;
-use crate::security::archive_guard::{ArchiveGuard, ArchiveLimits};
+use crate::security::archive_guard::{decode_zip_entry_name, ArchiveGuard, ArchiveLimits};
 use crate::security::hash::compute_file_sha256;
 use crate::security::path_guard::PathGuard;
+use crate::mod_resources::{self, SwitchFile, target_key};
+use crate::workshop::operation_lock;
 use crate::storage::repositories::BackupRepository;
 
 const MAX_DROP_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
@@ -33,6 +35,7 @@ const FORBIDDEN_EXTS: &[&str] = &[
 ];
 
 const PREVIEW_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".webm"];
+const MODIMG_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp"];
 const DOC_EXTS: &[&str] = &[".txt", ".md", ".pdf"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +135,8 @@ struct DroppedModReceipt {
     transaction_id: Option<String>,
     backup_id: Option<String>,
     files: Vec<DroppedModReceiptFile>,
+    #[serde(default)]
+    archive_sha256: Option<String>,
 }
 
 struct DiscoveredTargets {
@@ -195,23 +200,6 @@ fn atomic_write(path: &Path, data: &[u8]) -> HubResult<()> {
     Ok(())
 }
 
-fn operation_lock(root: &Path) -> HubResult<fs::File> {
-    let path = confined(root, ".xingshu-mods/operation.lock")?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| HubError::storage_error(e.to_string()))?;
-    }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(false);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.share_mode(0);
-    }
-    options
-        .open(path)
-        .map_err(|_| HubError::storage_error("另一个模组或扩展安装任务正在进行中，请稍后重试。"))
-}
-
 fn game_closed(game: &GameInstallation) -> HubResult<()> {
     ProcessGate::check_target(Path::new(
         game.executable_path.as_deref().unwrap_or_default(),
@@ -231,6 +219,22 @@ fn backup_file_path(root: &Path, mod_id: &str, index: usize) -> HubResult<PathBu
     )
 }
 
+pub(crate) fn payload_file_path(root: &Path, mod_id: &str, index: usize) -> HubResult<PathBuf> {
+    let clean_id = sanitize_mod_id(mod_id)?;
+    confined(
+        root,
+        &format!(".xingshu-mods/dropped-payloads/{clean_id}/{index}.bundle"),
+    )
+}
+
+fn xspkg_payload_path(root: &Path, mod_id: &str) -> HubResult<PathBuf> {
+    let clean_id = sanitize_mod_id(mod_id)?;
+    confined(
+        root,
+        &format!(".xingshu-mods/dropped-payloads/{clean_id}/package.xspkg"),
+    )
+}
+
 fn read_receipt(root: &Path, mod_id: &str) -> HubResult<Option<DroppedModReceipt>> {
     let path = receipt_path(root, mod_id)?;
     if !path.is_file() {
@@ -240,7 +244,7 @@ fn read_receipt(root: &Path, mod_id: &str) -> HubResult<Option<DroppedModReceipt
     let receipt: DroppedModReceipt =
         serde_json::from_slice(&raw).map_err(|e| HubError::storage_error(e.to_string()))?;
     if receipt.mod_id != mod_id
-        || !matches!(receipt.phase.as_str(), "prepared" | "installed" | "restored")
+        || !matches!(receipt.phase.as_str(), "prepared" | "installed" | "restored" | "disabled")
     {
         return Err(HubError::security_violation("本地模组收据校验无效。"));
     }
@@ -253,20 +257,39 @@ fn save_receipt(root: &Path, receipt: &DroppedModReceipt) -> HubResult<()> {
     atomic_write(&path, &bytes)
 }
 
+fn modimg_target_name(clean_rel: &str) -> Option<String> {
+    let norm = clean_rel.trim().replace('\\', "/");
+    let parts: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
+    for (idx, part) in parts.iter().enumerate() {
+        if part.eq_ignore_ascii_case("modimg") && idx + 2 == parts.len() {
+            let fname = parts[idx + 1];
+            let lower = fname.to_ascii_lowercase();
+            if MODIMG_EXTS.iter().any(|ext| lower.ends_with(ext)) && !fname.contains("..") {
+                return Some(fname.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn validate_dropped_target_rel(root: &Path, target_rel: &str) -> HubResult<(String, PathBuf)> {
     let clean = target_rel.trim().replace('\\', "/");
     let parts: Vec<&str> = clean.split('/').collect();
-    let valid_shape = parts.len() >= 4
-        && parts[0].ends_with("_Data")
-        && ((parts[1] == "StreamingAssets"
-            && parts[2] == "aa"
-            && parts.last().is_some_and(|f| f.ends_with(".bundle")))
-            || (parts[1] == "com.unity.addressables"
-                && parts[2] == "AssetBundles"
-                && parts.last() == Some(&"__data")));
+    let valid_modimg = parts.len() == 2
+        && parts[0] == "modimg"
+        && MODIMG_EXTS.iter().any(|ext| parts[1].to_ascii_lowercase().ends_with(ext));
+    let valid_shape = valid_modimg
+        || (parts.len() >= 4
+            && parts[0].ends_with("_Data")
+            && ((parts[1] == "StreamingAssets"
+                && parts[2] == "aa"
+                && parts.last().is_some_and(|f| f.ends_with(".bundle")))
+                || (parts[1] == "com.unity.addressables"
+                    && parts[2] == "AssetBundles"
+                    && parts.last() == Some(&"__data"))));
     if !valid_shape {
         return Err(HubError::security_violation(format!(
-            "安全策略拒绝：目标路径 '{clean}' 不在游戏 Addressables / StreamingAssets 资源目录内。"
+            "安全策略拒绝：目标路径 '{clean}' 不在游戏 Addressables / StreamingAssets / modimg 资源目录内。"
         )));
     }
     let resolved = confined(root, &clean)?;
@@ -428,7 +451,7 @@ fn discover_game_targets(game: &GameInstallation, root: &Path) -> HubResult<Disc
     })
 }
 
-fn collect_active_target_owners(root: &Path, current_mod_id: &str) -> HubResult<HashMap<String, String>> {
+pub(crate) fn collect_active_target_owners(root: &Path, current_mod_id: &str) -> HubResult<HashMap<String, String>> {
     let mut owners: HashMap<String, String> = HashMap::new();
 
     // 1. Dropped mod receipts
@@ -444,7 +467,7 @@ fn collect_active_target_owners(root: &Path, current_mod_id: &str) -> HubResult<
                     if let Ok(r) = serde_json::from_slice::<DroppedModReceipt>(&raw) {
                         if r.mod_id != current_mod_id && matches!(r.phase.as_str(), "installed" | "prepared") {
                             for f in r.files {
-                                owners.insert(f.target.replace('\\', "/"), format!("已安装拖入模组「{}」", r.name));
+                                owners.insert(target_key(&f.target), format!("已安装拖入模组「{}」", r.name));
                             }
                         }
                     }
@@ -470,7 +493,7 @@ fn collect_active_target_owners(root: &Path, current_mod_id: &str) -> HubResult<
                             if let Some(files) = val["files"].as_array() {
                                 for f in files {
                                     if let Some(target) = f["target"].as_str() {
-                                        owners.insert(target.replace('\\', "/"), format!("工坊模组「{name}」"));
+                                        owners.insert(target_key(target), format!("工坊模组「{name}」"));
                                     }
                                 }
                             }
@@ -494,14 +517,14 @@ fn collect_active_target_owners(root: &Path, current_mod_id: &str) -> HubResult<
                     if let Ok(raw) = fs::read(&rpath) {
                         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&raw) {
                             let phase = val["phase"].as_str().unwrap_or("");
-                            let item_id = val["itemId"].as_str().unwrap_or("");
+                            let item_id = val["itemId"].as_str().or_else(|| val["item_id"].as_str()).unwrap_or("");
                             if matches!(phase, "installed" | "prepared") && !item_id.is_empty() {
                                 if let Some(item) = catalog["items"].as_array().and_then(|arr| arr.iter().find(|i| i["id"].as_str() == Some(item_id))) {
                                     let name = item["name"].as_str().unwrap_or(item_id);
                                     if let Some(files) = item["files"].as_array() {
                                         for f in files {
                                             if let Some(target) = f["target"].as_str() {
-                                                owners.insert(target.replace('\\', "/"), format!("内置模组库「{name}」"));
+                                                owners.insert(target_key(target), format!("内置模组库「{name}」"));
                                             }
                                         }
                                     }
@@ -526,7 +549,7 @@ fn check_forbidden_extension(lower_name: &str) -> HubResult<()> {
     Ok(())
 }
 
-fn derive_mod_id(source_path: &Path) -> String {
+pub(crate) fn derive_mod_id(source_path: &Path) -> String {
     let canonical = dunce::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
     let name_key = canonical
         .file_name()
@@ -600,10 +623,10 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
             }
 
             let file_name = Path::new(&lower).file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if lower.ends_with(".bundle") || file_name == "__data" {
+            if lower.ends_with(".bundle") || file_name == "__data" || modimg_target_name(&clean).is_some() {
                 if meta.len() == 0 || meta.len() > MAX_DROP_PAYLOAD_BYTES as u64 {
                     return Err(HubError::security_violation(format!(
-                        "Bundle 文件体积异常（{clean}）。"
+                        "模组资源文件体积异常（{clean}）。"
                     )));
                 }
                 let data = fs::read(entry.path()).map_err(|e| HubError::storage_error(e.to_string()))?;
@@ -679,9 +702,12 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
         if entry.is_symlink() {
             return Err(HubError::security_violation("安全限制：压缩包内禁止包含符号链接。"));
         }
-        let raw_name = entry.name().replace('\\', "/");
+        let raw_name = decode_zip_entry_name(entry.name_raw()).replace('\\', "/");
         if entry.is_dir() {
-            let _ = PathGuard::sanitize_relative_path(&raw_name)?;
+            let trimmed = raw_name.trim_matches('/');
+            if !trimmed.is_empty() {
+                let _ = PathGuard::sanitize_relative_path(trimmed)?;
+            }
             continue;
         }
         total_uncompressed = total_uncompressed.saturating_add(entry.size());
@@ -695,7 +721,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
         check_forbidden_extension(&lower)?;
 
         let entry_fname = Path::new(&lower).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if lower.ends_with(".bundle") || entry_fname == "__data" {
+        if lower.ends_with(".bundle") || entry_fname == "__data" || modimg_target_name(&clean).is_some() {
             let mut data = Vec::new();
             entry
                 .by_ref()
@@ -704,7 +730,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
                 .map_err(|e| HubError::storage_error(e.to_string()))?;
             if data.is_empty() || data.len() > MAX_DROP_PAYLOAD_BYTES {
                 return Err(HubError::security_violation(format!(
-                    "压缩包内 Bundle 文件体积异常（{clean}）。"
+                    "压缩包内资源文件体积异常（{clean}）。"
                 )));
             }
             payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
@@ -723,7 +749,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
     Ok((source_kind.into(), display_name, payloads, preview_files, doc_files))
 }
 
-fn is_xspkg_archive(source_path: &Path) -> HubResult<bool> {
+pub(crate) fn is_xspkg_archive(source_path: &Path) -> HubResult<bool> {
     if !source_path.is_file() {
         return Ok(false);
     }
@@ -754,7 +780,7 @@ fn inspect_against_game(
     let existing_receipt = read_receipt(root, &mod_id)?;
     let already_installed = existing_receipt
         .as_ref()
-        .is_some_and(|r| matches!(r.phase.as_str(), "installed" | "prepared"));
+        .is_some_and(|r| matches!(r.phase.as_str(), "installed" | "prepared" | "disabled"));
 
     if is_xspkg_archive(source_path)? {
         let manifest = PackageParser::parse_archive(source_path)?;
@@ -823,6 +849,17 @@ fn inspect_against_game(
         let path_obj = Path::new(&raw.source_entry);
         let file_name = path_obj.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let file_lower = file_name.to_ascii_lowercase();
+        let source_bundle_id = if file_lower == "__data" {
+            path_obj.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+        } else {
+            path_obj.file_stem().and_then(|name| name.to_str())
+        };
+        if source_bundle_id.zip(discovered.protected_runtime_bundle_id.as_deref())
+            .is_some_and(|(source, protected)| source.eq_ignore_ascii_case(protected))
+        {
+            conflicts.push(format!("{file_name} 属于星枢运行时核心容器，第三方模组无法覆盖。"));
+            continue;
+        }
 
         let mut candidate_targets: Vec<(String, String, String, bool)> = Vec::new();
 
@@ -894,10 +931,17 @@ fn inspect_against_game(
                 });
                 continue;
             }
+        } else if let Some(modimg_name) = modimg_target_name(&raw.source_entry) {
+            candidate_targets.push((
+                modimg_name.clone(),
+                format!("modimg/{modimg_name}"),
+                "modimg".into(),
+                false,
+            ));
         } else {
             unmatched_files.push(DroppedModUnmatchedFile {
                 source_entry: raw.source_entry,
-                reason: "非 32 位 Hash Bundle 文件，且未指定 StreamingAssets/aa 路径".into(),
+                reason: "非 32 位 Hash Bundle 文件，且未指定 StreamingAssets/aa 或 modimg/ 路径".into(),
                 size: raw.bytes.len() as u64,
             });
             continue;
@@ -928,7 +972,7 @@ fn inspect_against_game(
                 let msg = "星枢运行时核心容器（受保护，禁止第三方模组覆盖）".to_string();
                 conflicts.push(format!("{norm_target}：{msg}"));
                 conflict_with = Some(msg);
-            } else if let Some(owner) = active_owners.get(&norm_target) {
+            } else if let Some(owner) = active_owners.get(&target_key(&norm_target)) {
                 conflicts.push(format!("{norm_target} 已被 {owner} 占用，请先还原冲突模组"));
                 conflict_with = Some(owner.clone());
             }
@@ -1013,6 +1057,22 @@ fn restore_bundle_receipt(root: &Path, receipt: &DroppedModReceipt) -> HubResult
 
     for f in &receipt.files {
         let (_, target_abs) = validate_dropped_target_rel(root, &f.target)?;
+        let current_hash = if target_abs.is_file() {
+            compute_file_sha256(&target_abs)?
+        } else {
+            String::new()
+        };
+        if f.baseline_sha256.is_empty() {
+            if !f.target.starts_with("modimg/") {
+                return Err(HubError::storage_error("安装前备份校验标识缺失，无法还原。"));
+            }
+            if !current_hash.is_empty() && !current_hash.eq_ignore_ascii_case(&f.mod_sha256) {
+                return Err(HubError::security_violation(
+                    "目标文件已被外部修改或游戏已更新，已停止还原以防覆盖。",
+                ));
+            }
+            continue;
+        }
         let backup_abs = backup_file_path(root, &receipt.mod_id, f.index)?;
         if !backup_abs.is_file() {
             return Err(HubError::storage_error("安装前备份文件缺失，无法还原。"));
@@ -1020,11 +1080,6 @@ fn restore_bundle_receipt(root: &Path, receipt: &DroppedModReceipt) -> HubResult
         if !compute_file_sha256(&backup_abs)?.eq_ignore_ascii_case(&f.baseline_sha256) {
             return Err(HubError::security_violation("安装前备份文件校验失败，停止还原。"));
         }
-        let current_hash = if target_abs.is_file() {
-            compute_file_sha256(&target_abs)?
-        } else {
-            String::new()
-        };
         if !current_hash.eq_ignore_ascii_case(&f.mod_sha256)
             && !current_hash.eq_ignore_ascii_case(&f.baseline_sha256)
         {
@@ -1036,6 +1091,12 @@ fn restore_bundle_receipt(root: &Path, receipt: &DroppedModReceipt) -> HubResult
 
     for f in &receipt.files {
         let (_, target_abs) = validate_dropped_target_rel(root, &f.target)?;
+        if f.baseline_sha256.is_empty() {
+            if target_abs.is_file() {
+                fs::remove_file(&target_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
+            }
+            continue;
+        }
         let backup_abs = backup_file_path(root, &receipt.mod_id, f.index)?;
         let baseline_bytes = fs::read(&backup_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
         if !sha256_hex(&baseline_bytes).eq_ignore_ascii_case(&f.baseline_sha256) {
@@ -1060,6 +1121,18 @@ pub(crate) fn install_dropped_from_path(
     install_service: Option<&InstallService>,
     backup_repo: Option<&BackupRepository>,
 ) -> HubResult<DroppedModInstallResult> {
+    let _lock = operation_lock(root)?;
+    install_dropped_in_locked_root(game, root, source_path, include_catalog, install_service, backup_repo)
+}
+
+pub(crate) fn install_dropped_in_locked_root(
+    game: &GameInstallation,
+    root: &Path,
+    source_path: &Path,
+    include_catalog: bool,
+    install_service: Option<&InstallService>,
+    backup_repo: Option<&BackupRepository>,
+) -> HubResult<DroppedModInstallResult> {
     game_closed(game)?;
     let (inspect, candidates) = inspect_against_game(game, &game.id, root, source_path)?;
 
@@ -1071,8 +1144,13 @@ pub(crate) fn install_dropped_from_path(
 
     if inspect.source_kind == "xspkg" {
         let svc = install_service.ok_or_else(|| HubError::storage_error("安装服务未就绪。"))?;
-        let _lock = operation_lock(root)?;
-        let tx = svc.install_package_from_zip(source_path, &game.id)?;
+        let cache = xspkg_payload_path(root, &inspect.mod_id)?;
+        let raw = crate::workshop::read_local_archive(source_path, MAX_DROP_ARCHIVE_BYTES)?;
+        atomic_write(&cache, &raw)?;
+        let tx = svc.install_mod_package_in_locked_root(&cache, game)?;
+        if tx.state != "COMPLETED" {
+            return Err(HubError::transaction_error("模组安装事务未完成。"));
+        }
         let receipt = DroppedModReceipt {
             mod_id: inspect.mod_id.clone(),
             name: inspect.display_name.clone(),
@@ -1082,6 +1160,7 @@ pub(crate) fn install_dropped_from_path(
             transaction_id: Some(tx.id.clone()),
             backup_id: tx.backup_id.clone(),
             files: Vec::new(),
+            archive_sha256: Some(sha256_hex(&raw)),
         };
         save_receipt(root, &receipt)?;
         return Ok(DroppedModInstallResult {
@@ -1121,19 +1200,21 @@ pub(crate) fn install_dropped_from_path(
         }
     }
 
-    let _lock = operation_lock(root)?;
     game_closed(game)?;
 
     let mut targets_and_baselines = Vec::with_capacity(selected.len());
     for c in &selected {
         let (_, target_abs) = validate_dropped_target_rel(root, &c.target_rel)?;
-        if !target_abs.is_file() {
+        let baseline_hash = if target_abs.is_file() {
+            compute_file_sha256(&target_abs)?
+        } else if c.target_rel.starts_with("modimg/") {
+            String::new()
+        } else {
             return Err(HubError::invalid_manifest(format!(
                 "目标资产 {} 不存在，无法安全替换。",
                 c.target_rel
             )));
-        }
-        let baseline_hash = compute_file_sha256(&target_abs)?;
+        };
         targets_and_baselines.push((target_abs, baseline_hash));
     }
 
@@ -1141,14 +1222,16 @@ pub(crate) fn install_dropped_from_path(
     for (idx, ((target_abs, baseline_hash), entry)) in
         targets_and_baselines.iter().zip(selected.iter()).enumerate()
     {
-        let backup_dest = backup_file_path(root, &inspect.mod_id, idx)?;
-        let baseline_bytes = fs::read(target_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
-        if sha256_hex(&baseline_bytes) != *baseline_hash {
-            return Err(HubError::security_violation("备份期间原游戏文件发生变化，已终止。"));
-        }
-        atomic_write(&backup_dest, &baseline_bytes)?;
-        if compute_file_sha256(&backup_dest)? != *baseline_hash {
-            return Err(HubError::security_violation("安装前备份校验失败。"));
+        if !baseline_hash.is_empty() {
+            let backup_dest = backup_file_path(root, &inspect.mod_id, idx)?;
+            let baseline_bytes = fs::read(target_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
+            if sha256_hex(&baseline_bytes) != *baseline_hash {
+                return Err(HubError::security_violation("备份期间原游戏文件发生变化，已终止。"));
+            }
+            atomic_write(&backup_dest, &baseline_bytes)?;
+            if compute_file_sha256(&backup_dest)? != *baseline_hash {
+                return Err(HubError::security_violation("安装前备份校验失败。"));
+            }
         }
         receipt_files.push(DroppedModReceiptFile {
             index: idx,
@@ -1170,6 +1253,7 @@ pub(crate) fn install_dropped_from_path(
         transaction_id: None,
         backup_id: Some(backup_id.clone()),
         files: receipt_files,
+        archive_sha256: None,
     };
 
     save_receipt(root, &receipt)?;
@@ -1178,6 +1262,9 @@ pub(crate) fn install_dropped_from_path(
         for (idx, ((target_abs, _), entry)) in
             targets_and_baselines.iter().zip(selected.iter()).enumerate()
         {
+            if let Ok(payload_dest) = payload_file_path(root, &receipt.mod_id, idx) {
+                let _ = atomic_write(&payload_dest, &entry.bytes);
+            }
             atomic_write(target_abs, &entry.bytes)?;
             let post_hash = compute_file_sha256(target_abs)?;
             if !post_hash.eq_ignore_ascii_case(&receipt.files[idx].mod_sha256) {
@@ -1242,19 +1329,31 @@ pub(crate) fn restore_dropped_by_id(
     mod_id: &str,
     install_service: Option<&InstallService>,
 ) -> HubResult<String> {
+    let _lock = operation_lock(root)?;
+    restore_dropped_in_locked_root(game, root, mod_id, install_service)
+}
+
+pub(crate) fn restore_dropped_in_locked_root(
+    game: &GameInstallation, root: &Path, mod_id: &str, install_service: Option<&InstallService>,
+) -> HubResult<String> {
     let clean_id = sanitize_mod_id(mod_id)?;
     game_closed(game)?;
-    let _lock = operation_lock(root)?;
     let receipt = read_receipt(root, &clean_id)?
         .ok_or_else(|| HubError::storage_error("未找到该拖入模组的安装备份记录。"))?;
 
+    if receipt.phase == "disabled" {
+        let mut updated = receipt;
+        updated.phase = "restored".into();
+        save_receipt(root, &updated)?;
+        return Ok("已移除停用的模组记录，备份与缓存会保留。".into());
+    }
     if receipt.source_kind == "xspkg" {
         let tx_id = receipt
             .transaction_id
             .clone()
             .ok_or_else(|| HubError::storage_error("缺少 .xspkg 事务标识，请前往安装事务页回滚。"))?;
         let svc = install_service.ok_or_else(|| HubError::storage_error("安装服务未就绪。"))?;
-        svc.rollback_transaction(&tx_id)?;
+        svc.rollback_mod_transaction(&tx_id, &game.id)?;
         let mut updated = receipt;
         updated.phase = "restored".into();
         save_receipt(root, &updated)?;
@@ -1327,6 +1426,102 @@ pub async fn restore_dropped_mod(
 }
 
 #[tauri::command]
+pub async fn toggle_dropped_mod(
+    installation_id: String,
+    mod_id: String,
+    enabled: bool,
+    center: State<'_, ExtensionCenter>,
+    install_service: State<'_, InstallService>,
+) -> HubResult<DroppedModRecord> {
+    let game = get_game(&center.db, &installation_id)?;
+    let root = game_root(&game)?;
+    let service = install_service.inner();
+    tokio::task::block_in_place(|| {
+        let _lock = operation_lock(&root)?;
+        toggle_dropped_in_locked_root(&game, &root, &mod_id, enabled, service)
+    })
+}
+
+impl From<DroppedModReceipt> for DroppedModRecord {
+    fn from(receipt: DroppedModReceipt) -> Self {
+        let has_catalog = receipt.files.iter().any(|f| f.is_catalog);
+        let targets: Vec<_> = receipt.files.into_iter().map(|f| f.target).collect();
+        Self {
+            mod_id: receipt.mod_id,
+            name: receipt.name,
+            source_kind: receipt.source_kind,
+            can_restore: matches!(receipt.phase.as_str(), "installed" | "prepared" | "disabled"),
+            phase: receipt.phase,
+            installed_at: receipt.installed_at,
+            file_count: targets.len(),
+            targets,
+            has_catalog,
+            transaction_id: receipt.transaction_id,
+            backup_id: receipt.backup_id,
+        }
+    }
+}
+
+pub(crate) fn managed_drop(root: &Path, id: &str) -> HubResult<Option<DroppedModRecord>> {
+    Ok(read_receipt(root, id)?.map(DroppedModRecord::from).filter(|record| record.can_restore))
+}
+
+pub(crate) fn toggle_dropped_in_locked_root(
+    game: &GameInstallation, root: &Path, id: &str, enabled: bool, service: &InstallService,
+) -> HubResult<DroppedModRecord> {
+    game_closed(game)?;
+    let clean_id = sanitize_mod_id(id)?;
+    let mut receipt = read_receipt(root, &clean_id)?
+        .ok_or_else(|| HubError::storage_error("未找到该本地模组的安装收据。"))?;
+    let phase = if enabled { "installed" } else { "disabled" };
+    if receipt.phase == phase {
+        return Ok(receipt.into());
+    }
+    if !matches!(receipt.phase.as_str(), "installed" | "disabled") {
+        return Err(HubError::invalid_manifest("请先还原上次未完成的模组操作。"));
+    }
+
+    if receipt.source_kind == "xspkg" {
+        let cache = xspkg_payload_path(root, &clean_id)?;
+        crate::workshop::validate_cached_package(&cache, receipt.archive_sha256.as_deref(), MAX_DROP_ARCHIVE_BYTES)?;
+        if enabled {
+            let tx = service.install_mod_package_in_locked_root(&cache, game)?;
+            if tx.state != "COMPLETED" {
+                return Err(HubError::transaction_error("模组启用事务未完成。"));
+            }
+            receipt.transaction_id = Some(tx.id);
+            receipt.backup_id = tx.backup_id;
+        } else {
+            let tx = receipt.transaction_id.as_deref()
+                .ok_or_else(|| HubError::storage_error("缺少模组安装事务标识。"))?;
+            service.rollback_mod_transaction(tx, &game.id)?;
+        }
+    } else {
+        let mut files = Vec::with_capacity(receipt.files.len());
+        for file in &receipt.files {
+            let (_, target) = validate_dropped_target_rel(root, &file.target)?;
+            files.push(SwitchFile {
+                target,
+                baseline: backup_file_path(root, &clean_id, file.index)?,
+                payload: payload_file_path(root, &clean_id, file.index)?,
+                baseline_sha256: file.baseline_sha256.clone(),
+                mod_sha256: file.mod_sha256.clone(),
+            });
+        }
+        if enabled {
+            let owners = collect_active_target_owners(root, &clean_id)?;
+            if receipt.files.iter().any(|file| owners.contains_key(&target_key(&file.target))) {
+                return Err(HubError::security_violation("该资源正在由其他模组使用，请先停用冲突项。"));
+            }
+        }
+        mod_resources::set_enabled(&files, enabled)?;
+    }
+    receipt.phase = phase.into();
+    save_receipt(root, &receipt)?;
+    Ok(receipt.into())
+}
+
+#[tauri::command]
 pub async fn list_dropped_mods(
     installation_id: String,
     center: State<'_, ExtensionCenter>,
@@ -1347,24 +1542,9 @@ pub async fn list_dropped_mods(
             if p.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(raw) = fs::read(&p) {
-                if let Ok(r) = serde_json::from_slice::<DroppedModReceipt>(&raw) {
-                    let can_restore = matches!(r.phase.as_str(), "installed" | "prepared");
-                    let has_catalog = r.files.iter().any(|f| f.is_catalog);
-                    let targets: Vec<String> = r.files.iter().map(|f| f.target.clone()).collect();
-                    records.push(DroppedModRecord {
-                        mod_id: r.mod_id,
-                        name: r.name,
-                        source_kind: r.source_kind,
-                        phase: r.phase,
-                        installed_at: r.installed_at,
-                        file_count: targets.len(),
-                        targets,
-                        has_catalog,
-                        can_restore,
-                        transaction_id: r.transaction_id,
-                        backup_id: r.backup_id,
-                    });
+            if let Some(id) = p.file_stem().and_then(|stem| stem.to_str()) {
+                if let Ok(Some(receipt)) = read_receipt(&root, id) {
+                    records.push(DroppedModRecord::from(receipt));
                 }
             }
         }
@@ -1375,17 +1555,32 @@ pub async fn list_dropped_mods(
     .map_err(|e| HubError::storage_error(e.to_string()))?
 }
 
-/// Fallback staging endpoint for HTML `<input type="file">` selection when a full path is unavailable.
-#[tauri::command]
-pub async fn stage_dropped_mod_bytes(
-    file_name: String,
-    bytes: Vec<u8>,
-    app: tauri::AppHandle,
-) -> HubResult<String> {
+fn percent_decode_utf8(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn save_staged_drop_file(app: &tauri::AppHandle, file_name: &str, bytes: &[u8]) -> HubResult<String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_DROP_ARCHIVE_BYTES {
         return Err(HubError::security_violation("选择的文件为空或超过 256MB 安全上限。"));
     }
-    let raw_name = Path::new(&file_name)
+    let raw_name = Path::new(file_name)
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| HubError::security_violation("文件名无效。"))?;
@@ -1405,8 +1600,36 @@ pub async fn stage_dropped_mod_bytes(
     let stage_dir = base_dir.join("staged-drops");
     fs::create_dir_all(&stage_dir).map_err(|e| HubError::storage_error(e.to_string()))?;
     let dest = stage_dir.join(format!("{}-{clean_name}", uuid::Uuid::new_v4()));
-    atomic_write(&dest, &bytes)?;
+    atomic_write(&dest, bytes)?;
     Ok(dest.display().to_string())
+}
+
+/// Fallback staging endpoint for HTML `<input type="file">` selection when a full path is unavailable.
+#[tauri::command]
+pub async fn stage_dropped_mod_bytes(
+    file_name: String,
+    bytes: Vec<u8>,
+    app: tauri::AppHandle,
+) -> HubResult<String> {
+    save_staged_drop_file(&app, &file_name, &bytes)
+}
+
+/// Fast binary IPC staging endpoint for HTML `<input type="file">` without JSON array overhead.
+#[tauri::command]
+pub async fn stage_dropped_mod_raw(
+    request: tauri::ipc::Request<'_>,
+    app: tauri::AppHandle,
+) -> HubResult<String> {
+    let raw_header = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| HubError::invalid_manifest("缺少上传文件名请求头。"))?;
+    let file_name = percent_decode_utf8(raw_header);
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(HubError::invalid_manifest("仅支持二进制原始数据流上传。"));
+    };
+    save_staged_drop_file(&app, &file_name, bytes)
 }
 
 #[cfg(test)]
@@ -1554,6 +1777,22 @@ mod tests {
         assert!(!conflict_inspect.conflicts.is_empty());
         assert!(install_dropped_from_path(&game, &game_dir, &conflict_zip, false, None, None).is_err());
 
+        let service = InstallService::new(
+            crate::storage::database::Database::in_memory().unwrap(),
+            tmp.path().join("backups"),
+        );
+        let target = game_dir.join(format!("AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64/{TEST_HEX_A}.bundle"));
+        {
+            let _lock = operation_lock(&game_dir).unwrap();
+            let disabled = toggle_dropped_in_locked_root(&game, &game_dir, &installed.mod_id, false, &service).unwrap();
+            assert_eq!(disabled.phase, "disabled");
+            assert_eq!(fs::read(&target).unwrap(), b"orig-streaming-a");
+            fs::remove_file(&zip_path).unwrap();
+            let enabled = toggle_dropped_in_locked_root(&game, &game_dir, &installed.mod_id, true, &service).unwrap();
+            assert_eq!(enabled.phase, "installed");
+            assert_eq!(fs::read(&target).unwrap(), b"mod-a-v1");
+        }
+
         // Restore restores original bytes
         restore_dropped_by_id(&game, &game_dir, &installed.mod_id, None).unwrap();
         assert_eq!(
@@ -1615,5 +1854,94 @@ mod tests {
         assert!(!inspect.can_install);
         assert!(!inspect.conflicts.is_empty());
         assert!(install_dropped_from_path(&game, &game_dir, &bad_zip, false, None, None).is_err());
+    }
+
+    #[test]
+    fn inspects_standalone_windows64_addressables_and_gbk_zips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("game");
+        fs::create_dir_all(&game_dir).unwrap();
+        let game = fixture_game(&game_dir);
+
+        let zip_path = tmp.path().join("StandaloneWindows64.zip");
+        {
+            let f = fs::File::create(&zip_path).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            z.add_directory("StandaloneWindows64/", opts).unwrap();
+            z.start_file(format!("StandaloneWindows64/{TEST_HEX_A}.bundle"), opts).unwrap();
+            z.write_all(b"mod-a").unwrap();
+            z.start_file(format!("com.unity.addressables/AssetBundles/052b/{TEST_HEX_B}/__data"), opts).unwrap();
+            z.write_all(b"mod-b").unwrap();
+            z.finish().unwrap();
+        }
+        let (inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &zip_path).unwrap();
+        assert!(inspect.compatible);
+        assert!(inspect.can_install);
+        assert_eq!(inspect.matched_files.len(), 2);
+
+        // Zip with raw GBK bytes in readme filename (non-UTF-8) plus valid bundle
+        let gbk_zip = tmp.path().join("gbk_named.zip");
+        {
+            use zip::write::SimpleFileOptions;
+            let f = fs::File::create(&gbk_zip).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            let opts = SimpleFileOptions::default();
+            z.start_file(format!("StandaloneWindows64/{TEST_HEX_A}.bundle"), opts).unwrap();
+            z.write_all(b"gbk-mod-a").unwrap();
+            // Simulate raw non-UTF-8 GBK bytes in entry name (e.g. 卡牌.txt -> 0xBF 0xA8 0xC5 0xC6 .txt)
+            let raw_entry = unsafe {
+                String::from_utf8_unchecked(vec![0xBF, 0xA8, b'/', b'r', b'e', b'a', b'd', b'm', b'e', b'.', b't', b'x', b't'])
+            };
+            let _ = z.start_file(&raw_entry, opts);
+            let _ = z.write_all(b"notes");
+            z.finish().unwrap();
+        }
+        let (gbk_inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &gbk_zip).unwrap();
+        assert!(gbk_inspect.compatible);
+        assert_eq!(gbk_inspect.matched_files.len(), 1);
+    }
+
+    #[test]
+    fn inspects_installs_toggles_and_restores_modimg_zip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("game");
+        fs::create_dir_all(&game_dir).unwrap();
+        let game = fixture_game(&game_dir);
+
+        let pe_zip = tmp.path().join("PE手机端(星枢).zip");
+        write_zip(&pe_zip, &[
+            ("PE手机端(星枢)/modimg/UT_HandCard_21022.png", b"png-mod-card"),
+            ("PE手机端(星枢)/手机端安装说明.txt", b"readme"),
+        ]);
+
+        let (inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &pe_zip).unwrap();
+        assert!(inspect.compatible);
+        assert!(inspect.can_install);
+        assert_eq!(inspect.matched_files.len(), 1);
+        assert_eq!(inspect.matched_files[0].target_rel, "modimg/UT_HandCard_21022.png");
+        assert_eq!(inspect.matched_files[0].target_kind, "modimg");
+
+        let installed = install_dropped_from_path(&game, &game_dir, &pe_zip, false, None, None).unwrap();
+        assert_eq!(installed.installed_count, 1);
+        let modimg_target = game_dir.join("modimg/UT_HandCard_21022.png");
+        assert_eq!(fs::read(&modimg_target).unwrap(), b"png-mod-card");
+
+        let service = InstallService::new(
+            crate::storage::database::Database::in_memory().unwrap(),
+            tmp.path().join("backups"),
+        );
+        {
+            let _lock = operation_lock(&game_dir).unwrap();
+            let off = toggle_dropped_in_locked_root(&game, &game_dir, &installed.mod_id, false, &service).unwrap();
+            assert_eq!(off.phase, "disabled");
+            assert!(!modimg_target.exists());
+            let on = toggle_dropped_in_locked_root(&game, &game_dir, &installed.mod_id, true, &service).unwrap();
+            assert_eq!(on.phase, "installed");
+            assert_eq!(fs::read(&modimg_target).unwrap(), b"png-mod-card");
+        }
+
+        restore_dropped_by_id(&game, &game_dir, &installed.mod_id, None).unwrap();
+        assert!(!modimg_target.exists());
     }
 }

@@ -66,4 +66,32 @@ public final class InstallerService extends IInstaller.Stub {
         caller();
         return engine.writeGameHandoff(packageName, payloadJson);
     }
+
+    @Override
+    public synchronized String installModPack(String packageName, String metaJson, ParcelFileDescriptor modZip) {
+        caller();
+        try (InputStream z = modZip == null ? null : new ParcelFileDescriptor.AutoCloseInputStream(modZip)) {
+            return engine.installModPack(packageName, metaJson, z);
+        } catch (Exception e) {
+            return MiniJson.stringify(java.util.Collections.singletonMap("error", e.getMessage() == null ? "安装模组失败" : e.getMessage()));
+        }
+    }
+
+    @Override
+    public synchronized String listInstalledMods(String packageName) {
+        caller();
+        return engine.listInstalledMods(packageName);
+    }
+
+    @Override
+    public synchronized String removeModPack(String packageName, String modId) {
+        caller();
+        return engine.removeModPack(packageName, modId);
+    }
+
+    @Override
+    public synchronized String setOfficialModules(String packageName, String moduleIdsCsv, boolean enable, boolean remove) {
+        caller();
+        return engine.setOfficialModules(packageName, moduleIdsCsv, enable, remove);
+    }
 }

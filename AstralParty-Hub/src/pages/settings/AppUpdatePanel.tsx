@@ -132,7 +132,7 @@ export function AppUpdatePanel() {
           disabled={busy}
           title={isZh ? '接收测试版 / 群测更新推送' : 'Receive preview / test releases'}
           description={isZh
-            ? '与手机端安装助手保持一致，开启后同步接收 test / 群测先行补丁与新功能更新。'
+            ? '与手机端保持一致，开启后同步接收 test / 群测先行补丁与新功能更新。'
             : 'Include signed pre-release and beta patches alongside stable releases.'}
           onChange={checked => appUpdateStore.setPreference('includePreview', checked)}
         />
@@ -150,8 +150,8 @@ export function AppUpdatePanel() {
 
       <p style={{ color: 'var(--text-muted)', lineHeight: 1.8 }}>
         {isZh
-          ? '这里只更新 Hub。手机安装助手请在手机上点“检查助手更新”，新版 APK 需要确认安装。游戏内插件在“星枢包管理器”或手机助手中单独更新。'
-          : 'This updates Desktop Hub only. Android Installer and in-game plugins update separately.'}
+          ? '这里只更新电脑端星枢 Hub。安卓版请在手机端点击「检查更新」升级；「星枢官方插件 Mod」及 18 项局内功能模组请在顶部「模组」页直接更新与管理。'
+          : 'This updates Desktop Hub only. Android APK and in-game mods update in their own Mods screens.'}
       </p>
 
       {phase === 'checking' && (

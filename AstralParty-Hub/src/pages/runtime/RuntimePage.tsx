@@ -65,19 +65,45 @@ export function RuntimeDiagnosticsPanel() {
   const runtime = current?.entries.find(entry => entry.id === 'builtin.runtime');
   return <div>
     <DesktopOnlyBanner feature="runtime" compact />
-    <header className="extension-header"><div><h2 style={{ fontSize: 18 }}>游戏组件状态</h2><p>检查所选游戏的文件版本、进程与实时连接，排查安装后未生效的问题</p></div><button className="btn btn-secondary" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} />重新校验文件</button></header>
-    <ExtensionTargetPicker target={target} purpose="diagnose" />
+    <header className="extension-header"><div><h2 style={{ fontSize: 18 }}>游戏组件状态</h2><p>核对所选游戏目录的星枢版本、运行进程与实时桥接状态</p></div><button className="btn btn-secondary" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} />重新校验文件</button></header>
+    <ExtensionTargetPicker target={target} purpose="diagnose" compact />
     {game ? <>
       <div className="runtime-status-grid">
         <section className="panel"><FileCheck2 size={21} /><span>本地运行时文件</span><strong>{busy ? '正在校验…' : runtime?.version || (current ? '未识别为本版运行时' : '尚未读取')}</strong><small>{runtime?.status || '文件校验与实时连接分别显示'}</small></section>
         <section className="panel"><Activity size={21} /><span>所选目录的游戏进程</span><strong>{currentProcess ? currentProcess.processIds.length ? '游戏运行中' : '游戏未运行' : liveError ? '读取失败' : '正在检测…'}</strong><small>{currentProcess?.processIds.length ? `PID：${currentProcess.processIds.join('、')}` : game.executable_path}</small></section>
-        <section className="panel"><Radio size={21} /><span>当前连接上报版本</span><strong>{currentSessions.length ? currentSessions.map(session => session.runtimeVersion || '未上报版本').join(' / ') : '尚无已确认连接'}</strong><small>仅匹配当前渠道与此目录的游戏程序</small></section>
+        <section className="panel"><Radio size={21} /><span>当前连接上报版本</span><strong>{currentSessions.length ? currentSessions.map(session => session.runtimeVersion || '未上报版本').join(' / ') : '尚无已确认连接'}</strong><small>游戏进程存在或磁盘文件匹配，不代表运行时已连接</small></section>
       </div>
-      <section className="panel extension-runtime"><Radio size={24} /><div><h2>运行时连接</h2><p>{currentSessions.length ? '已收到所选游戏程序的实时连接。下方版本由运行时上报。' : '游戏进程存在或磁盘文件匹配，不代表运行时已连接；连接成功后将显示上报版本。'}</p>
-        <div className="runtime-sessions">{currentSessions.map(session => <div key={session.connectionId}><strong>PID {session.pid}</strong><span>{session.runtimeVersion || '未上报版本'}</span><span>{({ MAIN: '主游戏', USER_SPECTATOR: '观战端', UNBOUND: '尚未绑定账号' } as Record<string, string>)[session.boundRole || ''] || session.boundRole || '尚未绑定账号'}</span>{session.lastSeenAt && <small>最近通信：{session.lastSeenAt}</small>}</div>)}</div>
-      </div></section>
-      <section className="panel extension-runtime"><Cpu size={24} /><div><h2>加载器与兼容性</h2><p>{currentProcess?.bepInExFilesDetected ? '检测到 BepInEx/core 文件。磁盘存在不代表已加载；外部插件和冲突检查统一在游戏模组中管理。' : '未检测到 BepInEx/core；星枢内置功能不需要另行安装同名插件。'}</p></div><Link className="btn btn-secondary" to="/extensions/mods">检查游戏模组</Link></section>
-      <p className="extension-path">需要安装、更新或还原星枢时，请前往 <Link to="/extensions/packages">星枢包管理器</Link>。</p>
+      {currentSessions.length > 0 && (
+        <section className="panel extension-runtime" style={{ marginBottom: 14 }}>
+          <Radio size={22} />
+          <div>
+            <h2>实时连接会话（{currentSessions.length}）</h2>
+            <p>已收到所选游戏程序的实时连接，以下版本由游戏内运行时直接上报。</p>
+            <div className="runtime-sessions">
+              {currentSessions.map(session => <div key={session.connectionId}><strong>PID {session.pid}</strong><span>{session.runtimeVersion || '未上报版本'}</span><span>{({ MAIN: '主游戏', USER_SPECTATOR: '观战端', UNBOUND: '尚未绑定账号' } as Record<string, string>)[session.boundRole || ''] || session.boundRole || '尚未绑定账号'}</span>{session.lastSeenAt && <small>最近通信：{session.lastSeenAt}</small>}</div>)}
+            </div>
+          </div>
+        </section>
+      )}
+      {currentProcess?.bepInExFilesDetected ? (
+        <section className="panel extension-runtime">
+          <Cpu size={22} />
+          <div>
+            <h2>检测到第三方加载器 (BepInEx/core)</h2>
+            <p>磁盘存在 BepInEx/core 文件；若需排查外部插件冲突，可前往游戏模组页面检查。</p>
+          </div>
+          <Link className="btn btn-secondary" to="/extensions/mods">检查游戏模组</Link>
+        </section>
+      ) : (
+        <details className="mod-notes" style={{ marginTop: 10 }}>
+          <summary>兼容性与附加项检查（当前未检测到 BepInEx/core 冲突）</summary>
+          <p>未检测到 BepInEx/core；星枢内置功能已随游戏自动加载，无需另行安装同名外部插件。</p>
+        </details>
+      )}
+      <div className="extension-tags" style={{ marginTop: 14 }}>
+        <Link className="btn btn-secondary" to="/dashboard">前往启动页（自动安装/更新）</Link>
+        <Link className="btn btn-secondary" to="/extensions/mods">检查游戏模组</Link>
+      </div>
     </> : <div className="panel extension-empty"><Cpu size={32} /><h2>先配置此渠道的游戏位置</h2><p>选择或添加实际游戏目录后，即可查看文件校验和运行时连接。</p></div>}
     {(!!error || !!liveError || !!current?.warnings.length) && <p className="extension-hint" role="status">{[error, liveError, ...(current?.warnings || [])].filter(Boolean).join('；')}</p>}
   </div>;

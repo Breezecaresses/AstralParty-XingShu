@@ -1,4 +1,5 @@
 using System;
+using XingShuRuntime.Core;
 using XingShuRuntime.Utilities;
 using XingShuRuntime.Targeting;
 using UnityEngine;
@@ -22,6 +23,14 @@ namespace XingShuRuntime.UI
         private Toggle _arrowBoostToggle;
         private Text _targetingSummary;
         private Toggle _defenseHintToggle;
+        private Toggle _battleCardHintToggle;
+        private Toggle _battleCardLockToggle;
+        private Slider _battleCardScaleSlider;
+        private Slider _battleCardMarginXSlider;
+        private Slider _battleCardYSlider;
+        private Text _battleCardScaleText;
+        private Text _battleCardMarginXText;
+        private Text _battleCardYText;
 
         // Card 2: Target & Preview
         private Button _previewBtn;
@@ -92,16 +101,14 @@ namespace XingShuRuntime.UI
             VerticalLayoutGroup vlg = contentArea.GetComponent<VerticalLayoutGroup>();
             if (vlg != null)
             {
-                vlg.spacing = 14f;
-                vlg.padding = new RectOffset(0, 10, 0, 24);
+                vlg.spacing = 12f;
+                vlg.padding = new RectOffset(0, 12, 4, 28);
             }
-
-            // 0. 特色功能卡片 (Feature Header Card: 76px)
-            BuildHeaderCard(contentArea);
 
             // 1. 全局总开关控制 (Switch Card: 96px)
             BuildSwitchCard(contentArea);
             BuildDefenseHintCard(contentArea);
+            BuildBattleCardHintCard(contentArea);
 
             // 2. 目标与拖动卡预览 (Target & Preview Card: 180px)
             BuildTargetCard(contentArea);
@@ -138,6 +145,124 @@ namespace XingShuRuntime.UI
             rt.pivot = new Vector2(1f, 1f);
             rt.anchoredPosition = new Vector2(-20f, -12f);
             rt.sizeDelta = new Vector2(160f, 32f);
+            card.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("DefensePointHint"));
+        }
+
+        private void BuildBattleCardHintCard(GameObject parent)
+        {
+            GameObject card = CreateCardContainer(parent, "BattleCardPointHintCard", 278f);
+            var title = XingShuUIFactory.CreateText(card, "Title", "战斗卡牌点数提示", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
+            title.rectTransform.pivot = new Vector2(0f, 1f);
+            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
+            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
+
+            var desc = XingShuUIFactory.CreateText(card, "Description", "战斗时显示攻防双方卡牌与点数明细；未锁定时可在局内直接拖动调整位置", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            desc.rectTransform.anchorMin = new Vector2(0f, 1f);
+            desc.rectTransform.anchorMax = new Vector2(1f, 1f);
+            desc.rectTransform.pivot = new Vector2(0.5f, 1f);
+            desc.rectTransform.anchoredPosition = new Vector2(0f, -38f);
+            desc.rectTransform.sizeDelta = new Vector2(-40f, 20f);
+
+            _battleCardHintToggle = XingShuUIFactory.CreateToggle(card, "EnableBattleCardHint", "显示点数", BattleCardPointHint.IsEnabled,
+                value => { if (!_suppressCallbacks) BattleCardPointHint.SetEnabled(value); });
+            var rt = _battleCardHintToggle.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 1f);
+            rt.anchoredPosition = new Vector2(-20f, -10f);
+            rt.sizeDelta = new Vector2(165f, 34f);
+
+            _battleCardLockToggle = XingShuUIFactory.CreateToggle(card, "BattleCardLockToggle", "锁定位置（禁止拖动）", BattleCardPointHint.Locked,
+                value => { if (!_suppressCallbacks) BattleCardPointHint.SetLocked(value); });
+            var lockRt = _battleCardLockToggle.GetComponent<RectTransform>();
+            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
+            lockRt.pivot = new Vector2(0f, 1f);
+            lockRt.anchoredPosition = new Vector2(20f, -64f);
+            lockRt.sizeDelta = new Vector2(240f, 32f);
+
+            Button resetBtn = CreateActionButton(card, "ResetBattleCardLayout", "恢复默认",
+                () => { BattleCardPointHint.ResetLayout(); SyncBattleCardControls(); }, 104f, 30f, 12);
+            var resetRt = resetBtn.GetComponent<RectTransform>();
+            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
+            resetRt.pivot = new Vector2(1f, 1f);
+            resetRt.anchoredPosition = new Vector2(-20f, -64f);
+
+            AddPercentSliderRow(card, "BattleCardScale", "显示大小（60%–180%）", 104f,
+                XingShuConfigKeys.BattleCardPointScaleMin, XingShuConfigKeys.BattleCardPointScaleMax,
+                BattleCardPointHint.Scale,
+                v => { BattleCardPointHint.SetScale(Mathf.Round(v * 20f) / 20f); SyncBattleCardControls(); },
+                out _battleCardScaleSlider, out _battleCardScaleText);
+
+            AddPercentSliderRow(card, "BattleCardMarginX", "两侧水平边距（0%–45%）", 158f,
+                0f, 0.45f, Mathf.Clamp(BattleCardPointHint.AtkX, 0f, 0.45f),
+                v => { BattleCardPointHint.SetMirrorMarginX(v); SyncBattleCardControls(); },
+                out _battleCardMarginXSlider, out _battleCardMarginXText);
+
+            AddPercentSliderRow(card, "BattleCardY", "垂直位置 Y（上 → 下）", 212f,
+                0f, 1f, BattleCardPointHint.AtkY,
+                v => { BattleCardPointHint.SetUnifiedY(v); SyncBattleCardControls(); },
+                out _battleCardYSlider, out _battleCardYText);
+
+            card.SetActive(LauncherModules.CanLoad("BattleCardPointHint"));
+        }
+
+        private void AddPercentSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial,
+            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
+        {
+            GameObject pair = XingShuUIFactory.CreateUIObject("MetricPair_" + id, card);
+            var pRt = pair.GetComponent<RectTransform>();
+            pRt.anchorMin = new Vector2(0f, 1f);
+            pRt.anchorMax = new Vector2(1f, 1f);
+            pRt.pivot = new Vector2(0.5f, 1f);
+            pRt.anchoredPosition = new Vector2(0f, -topY);
+            pRt.sizeDelta = new Vector2(-40f, 22f);
+            var hlg = pair.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 8f;
+            hlg.childControlWidth = true;
+            hlg.childControlHeight = true;
+            hlg.childForceExpandWidth = false;
+            hlg.childForceExpandHeight = true;
+
+            Text lbl = XingShuUIFactory.CreateText(pair, id + "Label", labelText, 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            var lblLe = lbl.gameObject.AddComponent<LayoutElement>();
+            lblLe.flexibleWidth = 1f;
+            lblLe.minWidth = 140f;
+
+            valueText = XingShuUIFactory.CreateText(pair, id + "Value", $"{Mathf.RoundToInt(initial * 100f)}%", 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            var valLe = valueText.gameObject.AddComponent<LayoutElement>();
+            valLe.minWidth = 60f;
+            valLe.preferredWidth = 72f;
+            valLe.flexibleWidth = 0f;
+
+            slider = XingShuUIFactory.CreateSlider(card, id + "Slider", min, max, initial,
+                v => { if (!_suppressCallbacks) onChanged(v); });
+            var sRt = slider.GetComponent<RectTransform>();
+            sRt.anchorMin = new Vector2(0f, 1f);
+            sRt.anchorMax = new Vector2(1f, 1f);
+            sRt.pivot = new Vector2(0.5f, 1f);
+            sRt.anchoredPosition = new Vector2(0f, -(topY + 24f));
+            sRt.sizeDelta = new Vector2(-40f, 26f);
+        }
+
+        private void SyncBattleCardControls()
+        {
+            float scale = BattleCardPointHint.Scale;
+            float marginX = Mathf.Clamp(BattleCardPointHint.AtkX, 0f, 0.45f);
+            float posY = BattleCardPointHint.AtkY;
+            bool locked = BattleCardPointHint.Locked;
+            _suppressCallbacks = true;
+            if (_battleCardScaleSlider != null && Mathf.Abs(_battleCardScaleSlider.value - scale) > 0.005f)
+                _battleCardScaleSlider.value = scale;
+            if (_battleCardMarginXSlider != null && Mathf.Abs(_battleCardMarginXSlider.value - marginX) > 0.005f)
+                _battleCardMarginXSlider.value = marginX;
+            if (_battleCardYSlider != null && Mathf.Abs(_battleCardYSlider.value - posY) > 0.005f)
+                _battleCardYSlider.value = posY;
+            if (_battleCardLockToggle != null && _battleCardLockToggle.isOn != locked)
+                _battleCardLockToggle.isOn = locked;
+            _suppressCallbacks = false;
+            if (_battleCardScaleText != null) _battleCardScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
+            if (_battleCardMarginXText != null) _battleCardMarginXText.text = $"{Mathf.RoundToInt(BattleCardPointHint.AtkX * 100f)}%";
+            if (_battleCardYText != null) _battleCardYText.text = $"{Mathf.RoundToInt(posY * 100f)}%";
         }
 
         private GameObject CreateCardContainer(GameObject parent, string name, float height)
@@ -173,58 +298,6 @@ namespace XingShuRuntime.UI
             RectTransform rt = btn.GetComponent<RectTransform>();
             rt.sizeDelta = new Vector2(width, height);
             return btn;
-        }
-
-        private void BuildHeaderCard(GameObject parent)
-        {
-            GameObject headerGo = XingShuUIFactory.CreateUIObject("FeatureHeaderCard", parent);
-            LayoutElement le = headerGo.AddComponent<LayoutElement>();
-            le.preferredHeight = 76f;
-            le.minHeight = 76f;
-            le.flexibleHeight = 0f;
-
-            Sprite cfhSprite = XingShuUIAssetService.GetSprite("card_feature_header.png");
-            Image headerBg = headerGo.AddComponent<Image>();
-            headerBg.sprite = cfhSprite;
-            headerBg.type = Image.Type.Sliced;
-            headerBg.color = XingShuUIAssetService.IsFallbackSprite(cfhSprite) ? XingShuUITheme.CardFeatureBase : Color.white;
-
-            Text titleText = XingShuUIFactory.CreateText(headerGo, "Title", "击飞预测 (Knockback Prediction)", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform titleRt = titleText.rectTransform;
-            titleRt.anchorMin = new Vector2(0f, 0.5f);
-            titleRt.anchorMax = new Vector2(0f, 0.5f);
-            titleRt.pivot = new Vector2(0f, 0.5f);
-            titleRt.anchoredPosition = new Vector2(24f, 12f);
-            titleRt.sizeDelta = new Vector2(360f, 28f);
-
-            Text descText = XingShuUIFactory.CreateText(headerGo, "Description", "对局增强 · 击飞概率估算与战局监测，支持拖动卡预测与浮字微调", 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            RectTransform descRt = descText.rectTransform;
-            descRt.anchorMin = new Vector2(0f, 0.5f);
-            descRt.anchorMax = new Vector2(0f, 0.5f);
-            descRt.pivot = new Vector2(0f, 0.5f);
-            descRt.anchoredPosition = new Vector2(24f, -14f);
-            descRt.sizeDelta = new Vector2(500f, 22f);
-
-            GameObject badgeGo = XingShuUIFactory.CreateUIObject("SourceBadge", headerGo);
-            RectTransform badgeRt = badgeGo.GetComponent<RectTransform>();
-            badgeRt.anchorMin = new Vector2(1f, 0.5f);
-            badgeRt.anchorMax = new Vector2(1f, 0.5f);
-            badgeRt.pivot = new Vector2(1f, 0.5f);
-            badgeRt.anchoredPosition = new Vector2(-24f, 0f);
-            badgeRt.sizeDelta = new Vector2(140f, 32f);
-
-            Sprite badgeSprite = XingShuUIAssetService.GetSprite("hotkey_badge.png");
-            Image badgeImg = badgeGo.AddComponent<Image>();
-            badgeImg.sprite = badgeSprite;
-            badgeImg.type = Image.Type.Sliced;
-            badgeImg.color = XingShuUIAssetService.IsFallbackSprite(badgeSprite) ? new Color(0.15f, 0.18f, 0.24f, 0.85f) : Color.white;
-
-            Text badgeText = XingShuUIFactory.CreateText(badgeGo, "Text", "悬浮球/菜单驱动", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleCenter, FontStyle.Bold);
-            RectTransform btRt = badgeText.rectTransform;
-            btRt.anchorMin = Vector2.zero;
-            btRt.anchorMax = Vector2.one;
-            btRt.offsetMin = Vector2.zero;
-            btRt.offsetMax = Vector2.zero;
         }
 
         private void BuildSwitchCard(GameObject parent)
@@ -733,7 +806,9 @@ namespace XingShuRuntime.UI
         {
             _suppressCallbacks = true;
             if (_defenseHintToggle != null) _defenseHintToggle.isOn = DefensePointHint.IsEnabled;
+            if (_battleCardHintToggle != null) _battleCardHintToggle.isOn = BattleCardPointHint.IsEnabled;
             _suppressCallbacks = false;
+            SyncBattleCardControls();
             // This module is independent from the kill-probability switch and status.
             if (_targetingSummary != null && _targetingSummary.text != MonsterTargetRuntime.Summary)
                 _targetingSummary.text = MonsterTargetRuntime.Summary;

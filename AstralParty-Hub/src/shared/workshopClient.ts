@@ -11,30 +11,113 @@ export interface WorkshopModFile {
   payloadUrl?: string | null;
 }
 
+export interface WorkshopVersionEntry {
+  id?: string;
+  version: string;
+  title?: string;
+  channel?: 'release' | 'beta' | 'optional' | string;
+  fileName: string;
+  sizeBytes: number;
+  sha256: string;
+  gameVersion: string;
+  platforms: string[];
+  platformLabel?: string;
+  installKind: string;
+  downloadUrl?: string | null;
+  publishedAt: string;
+  downloads?: number;
+  notes?: string;
+  reviewStatus?: string;
+  reviewNote?: string;
+}
+
+export interface WorkshopChangelogEntry {
+  version: string;
+  date: string;
+  title: string;
+  notes: string;
+}
+
+export interface WorkshopReactionCount {
+  emoteId: string;
+  count: number;
+}
+
+export interface WorkshopGalleryImage {
+  id: string;
+  url: string;
+  caption: string;
+  featured: boolean;
+  mime: string;
+  sizeBytes: number;
+  uploadedAt: string;
+}
+
+export interface WorkshopModViewerState {
+  following: boolean;
+  bookmarked: boolean;
+  viewerEmoteId?: string | null;
+  isOwner: boolean;
+}
+
 export interface WorkshopModItem {
   id: string;
+  slug?: string;
   name: string;
   author: string;
+  authorUid?: number | null;
+  authorAvatarUrl?: string | null;
+  authorAvatarColor?: string | null;
+  authorIsOfficial?: boolean;
+  authorKey?: string | null;
+  ownerUserId?: string | null;
+  ownerUsername?: string | null;
+  visibility?: 'public' | 'unlisted' | 'private' | string;
+  license?: string;
   category: Exclude<WorkshopCategory, 'all'> | string;
+  secondaryCategories?: string[];
   categoryLabel: string;
   installKind: 'bundle_mod' | 'xspkg' | 'external_archive' | string;
   status: string;
   isSeed: boolean;
+  isOfficialSeed?: boolean;
+  version?: string | null;
+  versionCount?: number;
+  platformLabels?: string[];
   gameVersion: string;
   platforms: string[];
+  packageFile?: string | null;
   sizeBytes: number;
   sha256: string;
   tags: string[];
   description: string;
+  longDescription?: string;
   targetInfo: string;
   assets: string[];
   targets: string[];
   files: WorkshopModFile[];
+  versions?: WorkshopVersionEntry[];
+  changelog?: WorkshopChangelogEntry[];
   downloadable: boolean;
   downloadUrl?: string | null;
   externalUrl?: string | null;
   previewUrl?: string | null;
+  featuredImageUrl?: string | null;
+  galleryCount?: number;
+  promoHeadline?: string;
+  promoVideoUrl?: string;
+  gallery?: WorkshopGalleryImage[];
   submittedAt?: string | null;
+  downloads?: number;
+  follows?: number;
+  bookmarks?: number;
+  reactions?: WorkshopReactionCount[];
+  reactionTotal?: number;
+  viewerState?: WorkshopModViewerState;
+  reviewNote?: string;
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  pendingVersionCount?: number;
 }
 
 export interface WorkshopCategoryCount {
@@ -59,6 +142,8 @@ export interface WorkshopSubmitInput {
   targetInfo: string;
   externalUrl: string;
   gameVersion?: string;
+  platforms?: string;
+  token?: string | null;
   archiveFile?: File | null;
   previewFile?: File | null;
 }
@@ -81,7 +166,7 @@ export const WORKSHOP_CATEGORIES: Array<{ id: WorkshopCategory; labelZh: string;
   { id: 'voice_vfx', labelZh: '语音·特效', labelEn: 'Voice & VFX' },
 ];
 
-export const MAX_WORKSHOP_UPLOAD_BYTES = 24 * 1024 * 1024;
+export const MAX_WORKSHOP_UPLOAD_BYTES = 32 * 1024 * 1024;
 export const MAX_WORKSHOP_PREVIEW_BYTES = 2 * 1024 * 1024;
 
 export function formatModBytes(bytes: number): string {
@@ -104,6 +189,123 @@ export function installKindLabel(kind: string): string {
   }
 }
 
+const PC_PLATFORM_SET = new Set(['STEAM_CN', 'TAPTAP', 'BILIBILI', 'WEGAME', 'STEAM_GLOBAL', 'PC']);
+const MOBILE_PLATFORM_SET = new Set(['ANDROID_CN', 'PE', 'MOBILE']);
+
+export const WORKSHOP_CHANNEL_FILTER_OPTIONS = [
+  { id: 'STEAM_CN', labelZh: 'Steam 国服', labelEn: 'Steam CN' },
+  { id: 'TAPTAP', labelZh: 'TapTap', labelEn: 'TapTap' },
+  { id: 'BILIBILI', labelZh: '哔哩哔哩', labelEn: 'Bilibili' },
+  { id: 'WEGAME', labelZh: 'WeGame', labelEn: 'WeGame' },
+  { id: 'ANDROID_CN', labelZh: '手机端 (安卓 / PE)', labelEn: 'Mobile (Android / PE)' },
+] as const;
+
+export const WORKSHOP_UPLOAD_CHANNEL_PRESETS = [
+  {
+    value: 'STEAM_CN,TAPTAP,BILIBILI,WEGAME',
+    labelZh: 'PC 全渠道 (Steam / TapTap / B站 / WeGame)',
+    labelEn: 'PC All Channels',
+  },
+  {
+    value: 'STEAM_CN,TAPTAP,BILIBILI,WEGAME,ANDROID_CN',
+    labelZh: 'PC / 手机端通用 (桌面与安卓 PE)',
+    labelEn: 'PC & Mobile Universal',
+  },
+  {
+    value: 'PE,ANDROID_CN',
+    labelZh: '手机端 / PE (安卓 / modimg 贴图包)',
+    labelEn: 'Mobile / PE (Android / modimg)',
+  },
+  {
+    value: 'STEAM_CN',
+    labelZh: '仅 Steam 国服',
+    labelEn: 'Steam CN Only',
+  },
+] as const;
+
+export function sanitizeWorkshopPlatforms(platforms?: readonly string[] | null): string[] {
+  const out: string[] = [];
+  for (const raw of platforms || []) {
+    const up = String(raw || '').trim().toUpperCase();
+    if (!up || up === 'IOS' || up === 'IOS_CN' || up.includes('IOS')) continue;
+    if (!out.includes(up)) out.push(up);
+  }
+  return out;
+}
+
+export function formatWorkshopChannelName(code: string, zh = true): string {
+  switch (String(code || '').trim().toUpperCase()) {
+    case 'STEAM_CN':
+      return zh ? 'Steam 国服' : 'Steam CN';
+    case 'STEAM_GLOBAL':
+      return zh ? 'Steam 国际服' : 'Steam Global';
+    case 'TAPTAP':
+      return 'TapTap';
+    case 'BILIBILI':
+      return zh ? '哔哩哔哩' : 'Bilibili';
+    case 'WEGAME':
+      return 'WeGame';
+    case 'ANDROID_CN':
+    case 'PE':
+    case 'MOBILE':
+      return zh ? '手机端 (安卓 / PE)' : 'Mobile (Android / PE)';
+    default:
+      return code;
+  }
+}
+
+export function modSupportsChannelFilter(
+  item: Pick<WorkshopModItem, 'platforms' | 'versions'>,
+  filterCode: string,
+): boolean {
+  const target = String(filterCode || '').trim().toUpperCase();
+  if (!target || target === 'ALL') return true;
+  const collected = new Set<string>(sanitizeWorkshopPlatforms(item.platforms));
+  for (const ver of item.versions || []) {
+    for (const p of sanitizeWorkshopPlatforms(ver.platforms)) {
+      collected.add(p);
+    }
+  }
+  if (target === 'ANDROID_CN') {
+    for (const m of MOBILE_PLATFORM_SET) {
+      if (collected.has(m)) return true;
+    }
+    return false;
+  }
+  return collected.has(target);
+}
+
+export function modPlatformSummaryBadge(
+  item: Pick<WorkshopModItem, 'platforms' | 'platformLabels' | 'versionCount' | 'versions'>,
+  zh = true,
+): string | null {
+  const collected = new Set<string>(sanitizeWorkshopPlatforms(item.platforms));
+  for (const ver of item.versions || []) {
+    for (const p of sanitizeWorkshopPlatforms(ver.platforms)) {
+      collected.add(p);
+    }
+  }
+  const hasPc = Array.from(collected).some((p) => PC_PLATFORM_SET.has(p));
+  const hasMobile = Array.from(collected).some((p) => MOBILE_PLATFORM_SET.has(p));
+  const versionCount = Number(item.versionCount ?? 0);
+
+  if (versionCount > 1) {
+    const cleanLabels = (item.platformLabels || [])
+      .map((l) => String(l || '').replace(/\s*\/\s*iOS/gi, '').replace(/iOS\s*\/\s*/gi, '').trim())
+      .filter((l) => l && !/ios/i.test(l));
+    const suffix = cleanLabels.length ? ` · ${cleanLabels.slice(0, 2).join(' / ')}` : '';
+    return `${versionCount} ${zh ? '个版本' : 'versions'}${suffix}`;
+  }
+
+  if (hasPc && hasMobile) {
+    return zh ? 'PC / 手机端通用' : 'PC & Mobile';
+  }
+  if (hasMobile) {
+    return zh ? '手机端 (安卓 / PE)' : 'Mobile (Android / PE)';
+  }
+  return null;
+}
+
 export function workshopAssetUrl(pathOrUrl?: string | null): string {
   if (!pathOrUrl) return '';
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
@@ -115,6 +317,7 @@ export function workshopAssetUrl(pathOrUrl?: string | null): string {
 export async function fetchWorkshopMods(
   category: WorkshopCategory = 'all',
   query = '',
+  signal?: AbortSignal,
 ): Promise<WorkshopListResponse> {
   const base = webApiBaseUrl();
   const params = new URLSearchParams();
@@ -126,7 +329,11 @@ export async function fetchWorkshopMods(
   let res: Response;
   let text: string;
   try {
-    res = await fetch(url);
+    const deadline = AbortSignal.timeout(12_000);
+    res = await fetch(url, {
+      cache: 'no-store',
+      signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+    });
     text = await res.text();
   } catch {
     throw new Error('暂时无法连接模组工坊，请检查网络后点击刷新列表。');
@@ -139,10 +346,45 @@ export async function fetchWorkshopMods(
   }
   if (!res.ok) {
     throw new Error(
-      (typeof parsed.error === 'string' && parsed.error) || `加载工坊失败（HTTP ${res.status}）`,
+      (typeof parsed?.error === 'string' && parsed.error) || `加载工坊失败（HTTP ${res.status}）`,
     );
   }
+  if (!Array.isArray(parsed?.items)) {
+    throw new Error('工坊列表格式异常，请刷新重试。');
+  }
   return parsed as unknown as WorkshopListResponse;
+}
+
+export async function fetchWorkshopModDetail(
+  modIdOrSlug: string,
+  token?: string | null,
+): Promise<WorkshopModItem> {
+  const base = webApiBaseUrl();
+  const clean = encodeURIComponent(modIdOrSlug.trim());
+  const url = `${base}/api/workshop/mods/${clean}`;
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(url, { headers });
+    text = await res.text();
+  } catch {
+    throw new Error('暂时无法连接模组工坊详情接口，请检查网络后重试。');
+  }
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    throw new Error(`模组详情解析失败（HTTP ${res.status}）`);
+  }
+  if (!res.ok || !parsed.item) {
+    throw new Error(
+      (typeof parsed.error === 'string' && parsed.error) || `未找到该模组详情（HTTP ${res.status}）`,
+    );
+  }
+  return parsed.item as WorkshopModItem;
 }
 
 export function validateWorkshopSubmission(input: WorkshopSubmitInput): string | null {
@@ -162,7 +404,7 @@ export function validateWorkshopSubmission(input: WorkshopSubmitInput): string |
       return '在线投稿压缩包仅支持 .zip 或 .xspkg 格式';
     }
     if (input.archiveFile.size <= 0 || input.archiveFile.size > MAX_WORKSHOP_UPLOAD_BYTES) {
-      return '上传压缩包大小需在 1B ~ 24MB 之间';
+      return '上传压缩包大小需在 1B ~ 32MB 之间';
     }
   }
   if (input.previewFile) {
@@ -194,11 +436,18 @@ export async function submitWorkshopMod(input: WorkshopSubmitInput): Promise<Wor
   if (input.targetInfo.trim()) form.set('targetInfo', input.targetInfo.trim());
   if (input.externalUrl.trim()) form.set('externalUrl', input.externalUrl.trim());
   if (input.gameVersion?.trim()) form.set('gameVersion', input.gameVersion.trim());
+  if (input.platforms?.trim()) form.set('platforms', input.platforms.trim());
   if (input.archiveFile) form.set('archive', input.archiveFile);
   if (input.previewFile) form.set('preview', input.previewFile);
 
+  const headers: Record<string, string> = {};
+  if (input.token?.trim()) {
+    headers['Authorization'] = `Bearer ${input.token.trim()}`;
+  }
+
   const res = await fetch(`${webApiBaseUrl()}/api/workshop/submit`, {
     method: 'POST',
+    headers,
     body: form,
   });
   const text = await res.text();
@@ -214,4 +463,23 @@ export async function submitWorkshopMod(input: WorkshopSubmitInput): Promise<Wor
     );
   }
   return parsed as unknown as WorkshopSubmitResponse;
+}
+
+export function modHeatScore(item: WorkshopModItem): number {
+  return (
+    (item.downloads || 0) * 3 +
+    (item.reactionTotal || 0) * 5 +
+    (item.follows || 0) * 4 +
+    (item.bookmarks || 0) * 2
+  );
+}
+
+export function compareModsByHeat(a: WorkshopModItem, b: WorkshopModItem, locale = 'zh-CN'): number {
+  const heatDiff = modHeatScore(b) - modHeatScore(a);
+  if (heatDiff !== 0) return heatDiff;
+  const dlDiff = (b.downloads || 0) - (a.downloads || 0);
+  if (dlDiff !== 0) return dlDiff;
+  const reactDiff = (b.reactionTotal || 0) - (a.reactionTotal || 0);
+  if (reactDiff !== 0) return reactDiff;
+  return a.name.localeCompare(b.name, locale);
 }

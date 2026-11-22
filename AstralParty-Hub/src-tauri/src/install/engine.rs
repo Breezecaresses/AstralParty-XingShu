@@ -38,12 +38,26 @@ impl InstallEngine {
 
     /// Resolves logical targets against the actual game installation root
     pub fn resolve_logical_target(game_root: &Path, logical_target: &str) -> HubResult<PathBuf> {
+        use crate::security::path_guard::PathGuard;
         let clean = logical_target.replace('\\', "/");
-        crate::security::path_guard::PathGuard::sanitize_relative_path(&clean)?;
-        let target = [("xingshu/plugins/", "xingshu/plugins"), ("game/mods/", "mods"), ("game/resources/", "resources"), ("hub/data/", "hub_data")]
-            .iter().find_map(|(prefix, directory)| clean.strip_prefix(prefix).map(|rel| game_root.join(directory).join(rel)))
+        let (directory, relative) = [("xingshu/plugins/", "xingshu/plugins"), ("game/mods/", "mods"), ("game/resources/", "resources"), ("hub/data/", "hub_data")]
+            .iter().find_map(|(prefix, directory)| clean.strip_prefix(prefix).map(|rel| (*directory, rel)))
             .ok_or_else(|| HubError::invalid_manifest(format!("Unrecognized logical prefix in '{logical_target}'")))?;
-        crate::security::path_guard::PathGuard::ensure_within_root(game_root, &target)
+        let expected = Path::new(directory).join(PathGuard::sanitize_relative_path(relative)?);
+        let root = PathGuard::ensure_within_root(game_root, Path::new("."))?;
+        let target = PathGuard::ensure_within_root(&root, &expected)?;
+        let actual = target.strip_prefix(&root)
+            .map_err(|_| HubError::security_violation("模组目标已离开指定目录。"))?;
+        let matches = if cfg!(windows) {
+            actual.to_string_lossy().replace('\\', "/").to_lowercase()
+                == expected.to_string_lossy().replace('\\', "/").to_lowercase()
+        } else {
+            actual == expected
+        };
+        if !matches {
+            return Err(HubError::security_violation("模组目标经过目录重定向，已停止安装。"));
+        }
+        Ok(target)
     }
 
     pub fn check_compatibility(manifest: &crate::packages::manifest::HubPackageManifestV1, game: &GameInstallation) -> HubResult<()> {
@@ -115,7 +129,8 @@ impl InstallEngine {
         CatalogGate::check(&manifest, &["xingshu/plugins/", "game/mods/", "game/resources/", "hub/data/"])?;
         ProcessGate::check_target(Path::new(game_installation.executable_path.as_deref().unwrap_or_default()))?;
         
-        let total_size: u64 = manifest.files.iter().map(|f| f.size).sum();
+        let total_size = manifest.files.iter().try_fold(0_u64, |total, file| total.checked_add(file.size))
+            .ok_or_else(|| HubError::invalid_manifest("模组清单中的文件大小超出范围。"))?;
         DiskSpaceGate::check(game_root, total_size)?;
 
         self.update_tx_state(&mut tx, TransactionState::CatalogGatePassed)?;
@@ -136,7 +151,7 @@ impl InstallEngine {
 
         // Step 3: Create pre-install backup
         self.log_step(&tx_id, 2, "BACKUP", "RUNNING")?;
-        let backup = if manifest.install.backup {
+        let backup = if manifest.install.backup || matches!(pkg_type.as_str(), "mod" | "resource-pack") {
             let b = BackupEngine::create_pre_install_backup(
                 &self.backup_storage_root,
                 &tx_id,

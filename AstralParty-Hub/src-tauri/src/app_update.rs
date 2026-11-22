@@ -13,7 +13,18 @@ pub struct AppUpdater {
 const BUILD: &str = include_str!("update_build.json");
 const WORKER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/XingShuUpdate.exe"));
 fn error(s: impl Into<String>) -> HubError { HubError::new("APP_UPDATE", s, "HUB").with_recoverable(true) }
-fn identity() -> Value { serde_json::from_str(BUILD).expect("invalid build identity") }
+fn identity() -> Value {
+    if cfg!(feature = "launcher-preview") {
+        return json!({"version":"0.1.6-launcher-preview.1","sequence":2026112001});
+    }
+    serde_json::from_str(BUILD).expect("invalid build identity")
+}
+fn ensure_updates_enabled() -> HubResult<()> {
+    if cfg!(feature = "launcher-preview") {
+        return Err(error("启动器预览版使用完整安装包更新。"));
+    }
+    Ok(())
+}
 fn package_root() -> HubResult<PathBuf> {
     let exe = std::env::current_exe().map_err(|e| error(e.to_string()))?;
     let hub = exe.parent().ok_or_else(|| error("Hub 目录无效"))?;
@@ -49,11 +60,13 @@ async fn run(mode: &str, request: Value, seconds: u64) -> HubResult<Value> {
 }
 #[tauri::command]
 pub async fn check_app_update(state: State<'_, AppUpdater>, preview: bool) -> HubResult<Value> {
+    ensure_updates_enabled()?;
     let _guard = state.gate.try_lock().map_err(|_| error("已有更新任务正在处理。"))?;
     run("--check", json!({"current":identity()["sequence"],"preview":preview}), 30).await
 }
 #[tauri::command]
 pub async fn prepare_app_update(state: State<'_, AppUpdater>, preview: bool, sequence: i64) -> HubResult<Value> {
+    ensure_updates_enabled()?;
     let _guard = state.gate.try_lock().map_err(|_| error("已有更新任务正在处理。"))?;
     package_root()?;
     *state.prepared.lock().await = None;
@@ -65,6 +78,7 @@ pub async fn prepare_app_update(state: State<'_, AppUpdater>, preview: bool, seq
 }
 #[tauri::command]
 pub async fn apply_app_update(app: tauri::AppHandle, state: State<'_, AppUpdater>, android: State<'_, crate::android_installer::AndroidInstaller>) -> HubResult<()> {
+    ensure_updates_enabled()?;
     let _guard = state.gate.try_lock().map_err(|_| error("已有更新任务正在处理。"))?;
     let cache = state.prepared.lock().await.clone().ok_or_else(|| error("请先下载并校验更新。"))?;
     let root = package_root()?;

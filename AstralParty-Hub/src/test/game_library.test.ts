@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { accountKey, characterStaticEmoteAssets, defaultLibraryKey, gameCatalog, pickStaticEmoteAsset, plainGameText, isPreviewCharacter, libraryCharacterName, matchDetailRefreshComplete } from '../shared/gameLibrary.ts';
 import type { LibraryAccount, LibrarySession, MatchDetail } from '../shared/gameLibrary.ts';
+import { assetUrl, installedArtworkUrl } from '../shared/runtime.ts';
 
 const saved: MatchDetail = {requestId:'old',playerId:1,index:0,time:1,heroId:101,mapId:81003,status:'ready',error:'',participants:[],observedAt:'2026-10-24',statsSource:'replay_settlement',statsError:''};
 assert.equal(matchDetailRefreshComplete(saved,'new'),false,'An older saved result must not end a refresh');
@@ -85,4 +86,9 @@ for(const character of gameCatalog.characters){
     assert.ok(!animatedSet.has(picked),`Picked avatar for ${character.id} must not be animated`);
   }
 }
+assert.equal(installedArtworkUrl('UT_HandCard_10001'), '');
+assert.equal(assetUrl('/catalog/UT_HandCard_10001.webp'), '/catalog/UT_HandCard_10001.webp');
+assert.equal(assetUrl('/catalog/video/VHandCard_13020002.mp4'), '/catalog/video/VHandCard_13020002.mp4');
+assert.equal(assetUrl('/catalog/spine/SpineHandCard_13020001/skeleton.skel'), '/catalog/spine/SpineHandCard_13020001/skeleton.skel');
+assert.ok(gameCatalog.assets.VHandCard_13020002?.startsWith('/catalog/video/'));
 console.log('Game library: account isolation, unknown state, real catalog effects and images passed.');

@@ -10,7 +10,13 @@ import {
   Plus,
   RefreshCw,
   Laptop,
+  Link2,
 } from 'lucide-react';
+import {
+  bindPlatformGameAccount,
+  openPlatformAuthModal,
+  usePlatformAccount,
+} from '../../shared/platformAccountClient';
 import {
   gameAccountService,
   type GameAccountBinding,
@@ -29,6 +35,9 @@ import { isTauriRuntime } from '../../shared/runtime';
 export const GameAccountCenter: React.FC = () => {
   const { locale } = useTranslation();
   const isZh = locale === 'zh-CN';
+  const platformAccount = usePlatformAccount();
+  const [platBindBusy, setPlatBindBusy] = useState(false);
+  const [platBindMsg, setPlatBindMsg] = useState('');
 
   const [bindings, setBindings] = useState<GameAccountBinding[]>(() =>
     gameAccountService.getBindings()
@@ -366,6 +375,102 @@ export const GameAccountCenter: React.FC = () => {
           <span>{isZh ? '刷新状态' : 'Refresh'}</span>
         </button>
       </div>
+
+      <section className="panel" style={{ marginBottom: 18, padding: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h2 style={{ fontSize: 17, margin: 0 }}>
+                {isZh ? '星枢平台账号 & 跨端游戏身份绑定' : 'XingShu Platform Account & Game Bindings'}
+              </h2>
+              <span className={`status-pill ${platformAccount.user ? 'ok' : 'info'}`} style={{ fontSize: 11 }}>
+                {platformAccount.user
+                  ? `${platformAccount.user.displayName} (@${platformAccount.user.username})`
+                  : isZh
+                    ? '独立社区身份'
+                    : 'Signed Out'}
+              </span>
+            </div>
+            <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: '6px 0 0', lineHeight: 1.6 }}>
+              {platformAccount.user
+                ? isZh
+                  ? `已同步 ${platformAccount.gameBindings.length} 个游戏账号、${platformAccount.follows.length + platformAccount.bookmarks.length} 个关注与收藏，可跨网页工坊与桌面启动器互通。`
+                  : `${platformAccount.gameBindings.length} linked game accounts synced across Web & Desktop.`
+                : isZh
+                  ? '登录独立的星枢平台账号后，可将本机多渠道游戏 UID 绑定到平台账号，并在网页版模组工坊同步管理项目与收藏。'
+                  : 'Sign in with a XingShu Platform Account to sync game bindings and mod projects across Web & Desktop.'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {!platformAccount.user ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => openPlatformAuthModal('login')}
+                >
+                  {isZh ? '登录星枢账号' : 'Sign In'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => openPlatformAuthModal('register')}
+                >
+                  {isZh ? '注册账号' : 'Register'}
+                </button>
+              </>
+            ) : (
+              <>
+                {effectiveLivePlayerId && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={platBindBusy}
+                    onClick={async () => {
+                      setPlatBindBusy(true);
+                      setPlatBindMsg('');
+                      try {
+                        await bindPlatformGameAccount({
+                          gameUid: String(effectiveLivePlayerId),
+                          platform: currentPlatform || 'STEAM_CN',
+                        });
+                        setPlatBindMsg(
+                          isZh
+                            ? `已将当前 ${currentPlatform || 'STEAM_CN'} UID ${effectiveLivePlayerId} 绑定至星枢平台账号。`
+                            : `Linked UID ${effectiveLivePlayerId} to platform account.`,
+                        );
+                      } catch (err) {
+                        setPlatBindMsg(err instanceof Error ? err.message : String(err));
+                      } finally {
+                        setPlatBindBusy(false);
+                      }
+                    }}
+                  >
+                    <Link2 size={13} />
+                    <span>
+                      {platBindBusy
+                        ? isZh
+                          ? '同步中…'
+                          : 'Linking…'
+                        : isZh
+                          ? `绑定当前游戏 UID ${effectiveLivePlayerId}`
+                          : `Link Active UID ${effectiveLivePlayerId}`}
+                    </span>
+                  </button>
+                )}
+                <Link to="/platform-account?tab=game-bindings" className="btn btn-secondary btn-sm">
+                  {isZh ? '管理平台账号与全部绑定' : 'Manage Platform & Bindings'}
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+        {platBindMsg && (
+          <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--primary)' }} role="status">
+            {platBindMsg}
+          </p>
+        )}
+      </section>
 
       <CloudLoginCard isZh={isZh} />
 

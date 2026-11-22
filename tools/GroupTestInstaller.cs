@@ -548,9 +548,25 @@ internal static class GroupTest
         }
     }
 
+    internal static void WriteAtomic(string path, byte[] bytes)
+    {
+        if (!File.Exists(path))
+        {
+            WriteNew(path, bytes);
+            return;
+        }
+        var stage = path + ".xs" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".t";
+        try
+        {
+            WriteNew(stage, bytes);
+            File.Replace(stage, path, null);
+        }
+        finally { if (File.Exists(stage)) File.Delete(stage); }
+    }
+
     internal static void ReplaceWith(string source, string target, string expected)
     {
-        var stage = target + ".xingshu-" + Guid.NewGuid().ToString("N") + ".tmp";
+        var stage = target + ".xs" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".t";
         try
         {
             File.Copy(source, stage, false);
@@ -567,6 +583,174 @@ internal static class GroupTest
         finally { if (File.Exists(stage)) File.Delete(stage); }
     }
 
+    private static string ResolveBackupRoot(string root, string version, string platformId)
+    {
+        return Within(root, ".xingshu-backup/" + version + "/" + platformId);
+    }
+
+    private static bool TryReadValidBackup(
+        PlatformInfo platform,
+        string root,
+        string dir,
+        out string sourcePath,
+        out InstallReceipt receipt)
+    {
+        sourcePath = null;
+        receipt = null;
+        var receiptPath = Path.Combine(dir, "receipt.json");
+        if (!File.Exists(receiptPath)) return false;
+        try { receipt = Json.Deserialize<InstallReceipt>(File.ReadAllText(receiptPath, Encoding.UTF8)); }
+        catch { return false; }
+        if (receipt == null ||
+            !String.Equals(receipt.Platform, platform.Id, StringComparison.OrdinalIgnoreCase) ||
+            !String.Equals(NormalizeRel(receipt.Target), NormalizeRel(platform.BundleRelativePath), StringComparison.OrdinalIgnoreCase))
+            return false;
+        var backup = Path.Combine(dir, "__data.before");
+        var candidate = backup;
+        if (receipt.ReplacedConflict && !String.IsNullOrEmpty(receipt.ConflictBackupRelative))
+        {
+            var conflictSource = Path.Combine(dir, receipt.ConflictBackupRelative + "/target.__data");
+            if (File.Exists(conflictSource)) candidate = conflictSource;
+        }
+        if (!File.Exists(candidate)) return false;
+        var fullDir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var fullCand = Path.GetFullPath(candidate);
+        if (!fullCand.StartsWith(fullDir, StringComparison.OrdinalIgnoreCase)) return false;
+        bool validBefore = platform.AcceptedHashes.Contains(receipt.BeforeSha256) || receipt.ReplacedConflict;
+        bool validInstalled = receipt.InstalledSha256 == platform.PayloadSha256 || platform.AcceptedHashes.Contains(receipt.InstalledSha256);
+        if (!validBefore || !validInstalled || !String.Equals(Hash(candidate), receipt.BeforeSha256, StringComparison.OrdinalIgnoreCase))
+            return false;
+        sourcePath = candidate;
+        return true;
+    }
+
+    private static bool FindRestorableBackup(
+        PlatformInfo platform,
+        string root,
+        out string foundDir,
+        out string foundSource,
+        out InstallReceipt foundReceipt)
+    {
+        foundDir = null;
+        foundSource = null;
+        foundReceipt = null;
+        var vanillaSha = (platform.AcceptedHashes != null && platform.AcceptedHashes.Length > 0)
+            ? platform.AcceptedHashes[0]
+            : "";
+        var candidates = new List<Tuple<string, string, InstallReceipt, DateTime>>();
+
+        var currentDir = ResolveBackupRoot(root, Release.Version, platform.Id);
+        string src;
+        InstallReceipt rec;
+        if (Directory.Exists(currentDir) && TryReadValidBackup(platform, root, currentDir, out src, out rec))
+        {
+            candidates.Add(Tuple.Create(currentDir, src, rec, Directory.GetLastWriteTimeUtc(currentDir)));
+        }
+
+        var baseBackupDir = Within(root, ".xingshu-backup");
+        if (Directory.Exists(baseBackupDir))
+        {
+            foreach (var verDir in Directory.GetDirectories(baseBackupDir))
+            {
+                var platDir = Path.Combine(verDir, platform.Id);
+                if (String.Equals(Path.GetFullPath(platDir), Path.GetFullPath(currentDir), StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (Directory.Exists(platDir) && TryReadValidBackup(platform, root, platDir, out src, out rec))
+                {
+                    candidates.Add(Tuple.Create(platDir, src, rec, Directory.GetLastWriteTimeUtc(platDir)));
+                }
+            }
+        }
+
+        if (candidates.Count == 0) return false;
+        var best = candidates
+            .OrderByDescending(c => !String.IsNullOrEmpty(vanillaSha) && String.Equals(c.Item3.BeforeSha256, vanillaSha, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(c => !c.Item3.ReplacedConflict)
+            .ThenByDescending(c => c.Item4)
+            .First();
+        foundDir = best.Item1;
+        foundSource = best.Item2;
+        foundReceipt = best.Item3;
+        return true;
+    }
+
+    internal static string InspectJson(PlatformInfo platform, string selection)
+    {
+        var root = GameRoot(platform, selection, null);
+        var target = Within(root, platform.BundleRelativePath);
+        if (!File.Exists(target))
+            throw new InvalidOperationException("未找到本包对应的资源缓存（" + CompatibleVersion(platform) + "）。请先完成官方游戏更新并正常进入一次大厅，再退出游戏重试。");
+        var current = Hash(target);
+        var conflict = ScanConflicts(platform, root, target, current, null);
+        var vanillaSha = (platform.AcceptedHashes != null && platform.AcceptedHashes.Length > 0)
+            ? platform.AcceptedHashes[0]
+            : "";
+        bool isInstalled = String.Equals(current, platform.PayloadSha256, StringComparison.OrdinalIgnoreCase);
+        bool isVanilla = !String.IsNullOrEmpty(vanillaSha) && String.Equals(current, vanillaSha, StringComparison.OrdinalIgnoreCase);
+        bool isAccepted = platform.AcceptedHashes != null && platform.AcceptedHashes.Contains(current);
+
+        string targetState;
+        if (isInstalled) targetState = "installed";
+        else if (isVanilla) targetState = "vanilla";
+        else if (isAccepted) targetState = "updateAvailable";
+        else if (conflict.TargetIsConflict) targetState = "conflict";
+        else targetState = "incompatible";
+
+        string bDir, bSrc;
+        InstallReceipt bRec;
+        bool hasBackup = FindRestorableBackup(platform, root, out bDir, out bSrc, out bRec);
+        bool backupIsVanilla = hasBackup && !String.IsNullOrEmpty(vanillaSha) && String.Equals(bRec.BeforeSha256, vanillaSha, StringComparison.OrdinalIgnoreCase);
+
+        string summary;
+        if (conflict.HasConflicts)
+        {
+            var names = conflict.PluginNames.Length > 0 ? String.Join("、", conflict.PluginNames) : "同定位插件";
+            summary = platform.Label + "：检测到冲突插件（" + names + "，共 " + conflict.Items.Count + " 项）。确认后可先备份并删除冲突插件再替换为星枢。";
+        }
+        else if (targetState == "installed")
+        {
+            summary = platform.Label + "：已安装当前版本星枢官方插件 Mod，未发现冲突插件。";
+        }
+        else if (targetState == "updateAvailable")
+        {
+            summary = platform.Label + "：检测到旧版星枢插件残留，可更新至最新版或直接一键卸载还原官方原版。";
+        }
+        else if (targetState == "vanilla")
+        {
+            summary = platform.Label + "：当前为纯净官方原版，未检测到冲突插件。";
+        }
+        else
+        {
+            summary = platform.Label + "：资源指纹与当前官方基线不一致，建议通过官方启动器校验游戏文件。";
+        }
+
+        var payload = new Dictionary<string, object>
+        {
+            { "ok", true },
+            { "platform", platform.Id },
+            { "platformLabel", platform.Label },
+            { "gameRoot", root },
+            { "targetSha256", current },
+            { "targetState", targetState },
+            { "hasConflicts", conflict.HasConflicts },
+            { "targetIsConflict", conflict.TargetIsConflict },
+            { "pluginNames", conflict.PluginNames },
+            { "items", conflict.Items.Select(i => new Dictionary<string, string>
+                {
+                    { "pluginName", i.PluginName ?? "" },
+                    { "category", i.Category ?? "" },
+                    { "relativePath", i.RelativePath ?? "" },
+                    { "sha256", i.Sha256 ?? "" },
+                }).ToArray()
+            },
+            { "hasBackup", hasBackup },
+            { "backupIsVanilla", backupIsVanilla },
+            { "summary", summary },
+            { "conflictPrompt", conflict.HasConflicts ? FormatConflictPrompt(conflict) : "" },
+        };
+        return Json.Serialize(payload);
+    }
+
     internal static string Perform(PlatformInfo platform, string selection, string action, bool replaceConflicts = false, DiagnosticLog diag = null)
     {
         if (diag != null)
@@ -574,7 +758,10 @@ internal static class GroupTest
             diag.Action = action + (replaceConflicts ? " (replace-conflicts)" : "");
             diag.Add("开始执行操作: " + diag.Action);
         }
-        VerifyPayload(platform);
+        if (action == "install")
+        {
+            VerifyPayload(platform);
+        }
         var root = GameRoot(platform, selection, diag);
         var target = Within(root, platform.BundleRelativePath);
         if (diag != null) diag.TargetPath = target;
@@ -610,30 +797,19 @@ internal static class GroupTest
                 var receiptPath = Within(backupDirectory, "receipt.json");
                 if (action == "restore")
                 {
-                    if (!File.Exists(receiptPath))
-                        throw new InvalidOperationException("没有此助手的安装前备份。若由其他方式安装，请使用原备份或官方平台校验游戏。");
-                    var receipt = Json.Deserialize<InstallReceipt>(File.ReadAllText(receiptPath, Encoding.UTF8));
-                    string restoreSource = backup;
-                    if (receipt != null && receipt.ReplacedConflict && !String.IsNullOrEmpty(receipt.ConflictBackupRelative))
-                    {
-                        var candidateSource = Within(backupDirectory, receipt.ConflictBackupRelative + "/target.__data");
-                        if (File.Exists(candidateSource)) restoreSource = candidateSource;
-                    }
-                    if (!File.Exists(restoreSource))
-                        throw new InvalidOperationException("没有此助手的安装前备份。若由其他方式安装，请使用原备份或官方平台校验游戏。");
-                    bool validBefore = receipt != null && (platform.AcceptedHashes.Contains(receipt.BeforeSha256) || receipt.ReplacedConflict);
-                    if (receipt == null || receipt.Version != Release.Version || receipt.Platform != platform.Id ||
-                        receipt.Target != platform.BundleRelativePath || receipt.InstalledSha256 != platform.PayloadSha256 ||
-                        !validBefore || Hash(restoreSource) != receipt.BeforeSha256)
-                        throw new InvalidOperationException("安装前备份校验失败，未还原。");
+                    string restoreDir;
+                    string restoreSource;
+                    InstallReceipt receipt;
+                    if (!FindRestorableBackup(platform, root, out restoreDir, out restoreSource, out receipt))
+                        throw new InvalidOperationException("没有可还原的安装前备份。若由其他方式安装，请使用原备份或官方平台校验游戏。");
                     if (current == receipt.BeforeSha256) return "已是安装前版本，无需重复还原。";
-                    if (current != receipt.InstalledSha256)
+                    if (current != receipt.InstalledSha256 && current != platform.PayloadSha256 && !platform.AcceptedHashes.Contains(current))
                         throw new InvalidOperationException("游戏文件已被其他更新修改，不能覆盖还原。请使用官方平台修复。");
                     EnsureGameClosed(platform, root);
                     ReplaceWith(restoreSource, target, receipt.BeforeSha256);
                     if (receipt.ReplacedConflict)
                         return platform.Label + "：已还原至安装星枢前的文件（注意：替换前为冲突插件版本，如需官方原版请通过官方平台修复）。";
-                    return platform.Label + "：已还原到本次安装前的版本。";
+                    return platform.Label + "：已还原到安装前版本。";
                 }
                 if (action != "install") throw new ArgumentException("未知操作。");
                 if (conflict.HasConflicts && !replaceConflicts)
@@ -646,15 +822,82 @@ internal static class GroupTest
                 if (conflict.HasConflicts)
                     conflictBackupRel = ArchiveAndRemoveConflicts(conflict, backupDirectory, diag);
 
+                InstallReceipt existingReceipt = null;
+                if (File.Exists(receiptPath))
+                {
+                    try { existingReceipt = Json.Deserialize<InstallReceipt>(File.ReadAllText(receiptPath, Encoding.UTF8)); }
+                    catch (Exception) { existingReceipt = null; }
+                }
+
                 string restoreBackupFile = backup;
+                string effectiveBeforeSha256 = current;
+                bool preserveReplacedConflict = false;
+                string preservedConflictRel = "";
                 if (accepted || current == platform.PayloadSha256)
                 {
+                    var vanillaSha = (platform.AcceptedHashes != null && platform.AcceptedHashes.Length > 0)
+                        ? platform.AcceptedHashes[0]
+                        : "";
+                    string priorDir, priorSrc;
+                    InstallReceipt priorRec;
+                    if (!File.Exists(backup) &&
+                        current != vanillaSha &&
+                        FindRestorableBackup(platform, root, out priorDir, out priorSrc, out priorRec) &&
+                        !priorRec.ReplacedConflict &&
+                        platform.AcceptedHashes.Contains(priorRec.BeforeSha256))
+                    {
+                        File.Copy(priorSrc, backup, false);
+                        if (Hash(backup) != priorRec.BeforeSha256)
+                            throw new IOException("继承历史安装前原版备份失败，已停止安装以保护原备份。");
+                        if (diag != null) diag.Add("检测到历史版本中的原版备份（" + priorRec.Version + "），已完整延续至当前版本备份目录。");
+                    }
+
                     if (File.Exists(backup))
                     {
-                        if (Hash(backup) != current) throw new IOException("已有备份与当前文件不同，已停止安装以保留原备份。");
+                        var backupHash = Hash(backup);
+                        if (backupHash == current)
+                        {
+                            effectiveBeforeSha256 = current;
+                        }
+                        else if (accepted && platform.AcceptedHashes.Contains(backupHash))
+                        {
+                            if (existingReceipt != null && (existingReceipt.Platform != platform.Id ||
+                                !String.Equals(NormalizeRel(existingReceipt.Target), NormalizeRel(platform.BundleRelativePath), StringComparison.OrdinalIgnoreCase) ||
+                                existingReceipt.BeforeSha256 != backupHash))
+                            {
+                                throw new IOException("已有安装记录与已有备份不一致，已停止安装以保留原备份。");
+                            }
+                            effectiveBeforeSha256 = backupHash;
+                            if (diag != null) diag.Add("检测到已有受信任原版备份，保留原备份并原地升级组件。");
+                        }
+                        else
+                        {
+                            throw new IOException("已有备份与当前文件不同，已停止安装以保留原备份。");
+                        }
                     }
-                    else File.Copy(target, backup, false);
-                    if (Hash(backup) != current) throw new IOException("安装前备份校验失败，未替换游戏文件。");
+                    else if (!conflict.HasConflicts && existingReceipt != null && existingReceipt.ReplacedConflict &&
+                             !String.IsNullOrEmpty(existingReceipt.ConflictBackupRelative))
+                    {
+                        var prevConflictTarget = Within(backupDirectory, existingReceipt.ConflictBackupRelative + "/target.__data");
+                        if (File.Exists(prevConflictTarget) && Hash(prevConflictTarget) == existingReceipt.BeforeSha256)
+                        {
+                            restoreBackupFile = prevConflictTarget;
+                            effectiveBeforeSha256 = existingReceipt.BeforeSha256;
+                            preserveReplacedConflict = true;
+                            preservedConflictRel = existingReceipt.ConflictBackupRelative;
+                            if (diag != null) diag.Add("检测到已有同版本冲突清理前备份，保留原备份并原地升级组件。");
+                        }
+                        else
+                        {
+                            File.Copy(target, backup, false);
+                            if (Hash(backup) != current) throw new IOException("安装前备份校验失败，未替换游戏文件。");
+                        }
+                    }
+                    else
+                    {
+                        File.Copy(target, backup, false);
+                        if (Hash(backup) != current) throw new IOException("安装前备份校验失败，未替换游戏文件。");
+                    }
                 }
                 else
                 {
@@ -667,13 +910,27 @@ internal static class GroupTest
                 {
                     var receiptObj = new InstallReceipt {
                         Version = Release.Version, Platform = platform.Id, Target = platform.BundleRelativePath,
-                        BeforeSha256 = current, InstalledSha256 = platform.PayloadSha256
+                        BeforeSha256 = effectiveBeforeSha256, InstalledSha256 = platform.PayloadSha256,
+                        ReplacedConflict = preserveReplacedConflict,
+                        ConflictBackupRelative = preserveReplacedConflict ? preservedConflictRel : null
                     };
                     var receiptBytes = Encoding.UTF8.GetBytes(Json.Serialize(receiptObj));
                     if (File.Exists(receiptPath))
                     {
                         if (!File.ReadAllBytes(receiptPath).SequenceEqual(receiptBytes))
-                            throw new IOException("已有安装记录不匹配，未修改游戏文件。");
+                        {
+                            if (effectiveBeforeSha256 != current && existingReceipt != null &&
+                                existingReceipt.BeforeSha256 == effectiveBeforeSha256 &&
+                                existingReceipt.Platform == platform.Id &&
+                                existingReceipt.Target == platform.BundleRelativePath)
+                            {
+                                WriteAtomic(receiptPath, receiptBytes);
+                            }
+                            else
+                            {
+                                throw new IOException("已有安装记录不匹配，未修改游戏文件。");
+                            }
+                        }
                     }
                     else WriteNew(receiptPath, receiptBytes);
                 }
@@ -691,16 +948,32 @@ internal static class GroupTest
                 EnsureGameClosed(platform, root);
                 if (current != platform.PayloadSha256)
                 {
-                    try { ReplaceWith(Within(PackageRoot, platform.Payload), target, platform.PayloadSha256); }
+                    string prevStage = null;
+                    try
+                    {
+                        if (effectiveBeforeSha256 != current)
+                        {
+                            prevStage = target + ".xs" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".b";
+                            File.Copy(target, prevStage, false);
+                            restoreBackupFile = prevStage;
+                        }
+                        ReplaceWith(Within(PackageRoot, platform.Payload), target, platform.PayloadSha256);
+                    }
                     catch
                     {
                         if (Hash(target) != current) ReplaceWith(restoreBackupFile, target, current);
                         throw;
                     }
+                    finally
+                    {
+                        if (!String.IsNullOrEmpty(prevStage) && File.Exists(prevStage)) File.Delete(prevStage);
+                    }
                 }
                 if (diag != null) diag.Add("安装与校验成功完成");
                 if (conflict.HasConflicts)
                     return platform.Label + "：已备份并删除原冲突插件（" + conflict.Items.Count + " 项），成功安装并校验星枢。请从官方平台正常启动游戏。";
+                if (effectiveBeforeSha256 != current)
+                    return platform.Label + "：升级完成，已保留原有安装前备份。请从官方平台正常启动游戏。";
                 return platform.Label + "：安装完成，已保留安装前备份。请从官方平台正常启动游戏。";
             }
             finally { mutex.ReleaseMutex(); }
@@ -761,12 +1034,17 @@ internal static class GroupTest
                     if (Hash(Within(PackageRoot, "Hub/xingshu-hub.exe")) != Release.HubSha256) throw new IOException("Hub hash mismatch");
                     result = "PASS: " + Release.Version;
                 }
+                else if (filtered.Count == 3 && filtered[0] == "--inspect-json")
+                {
+                    var platform = Release.Platforms.Single(p => p.Id == filtered[1]);
+                    result = InspectJson(platform, filtered[2]);
+                }
                 else if (filtered.Count == 3 && new[] { "--check", "--check-closed", "--install", "--restore" }.Contains(filtered[0]))
                 {
                     var platform = Release.Platforms.Single(p => p.Id == filtered[1]);
                     result = Perform(platform, filtered[2], filtered[0].Substring(2), replaceConflicts, diag);
                 }
-                else throw new ArgumentException("Usage: --verify-package | [--replace-conflicts] [--export-log PATH] --check/--install/--restore PLATFORM GAME_ROOT");
+                else throw new ArgumentException("Usage: --verify-package | [--replace-conflicts] [--export-log PATH] --check/--inspect-json/--install/--restore PLATFORM GAME_ROOT");
                 if (!String.IsNullOrEmpty(exportLogPath))
                     File.WriteAllText(exportLogPath, diag.Render(), new UTF8Encoding(true));
                 Console.WriteLine(result);

@@ -1,16 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { openExternalUrl, isTauriRuntime } from '../../shared/runtime';
+import { openExternalUrl, isLauncherPreview, isTauriRuntime } from '../../shared/runtime';
 import { DesktopOnlyBanner } from '../../components/DesktopOnlyBanner';
 import { PROJECT_SOURCE, PROJECT_SOURCE_LABEL } from '../../shared/projectSource';
 import { api } from '../../shared/api/tauri';
 import type { GameInstallation, ProbeResult, ProviderMetadata } from '../../shared/types';
-import { Folder, Save, Database, Shield, RefreshCw, Globe, Check } from 'lucide-react';
+import { Folder, Save, Database, Shield, RefreshCw, Globe, Check, Palette, Sparkles } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from '../../i18n';
+import { PCL_THEMES, useLauncherTheme } from '../launcher/launcherTheme';
 import { AppUpdatePanel } from './AppUpdatePanel';
 
 export const SettingsPage: React.FC = () => {
   const { locale, setLocale, t } = useTranslation();
+  const zh = locale === 'zh-CN';
+  const desktopRuntime = isTauriRuntime();
+  const { theme, setTheme, startupAnimEnabled, setStartupAnimEnabled, replayStartup } = useLauncherTheme();
   const [game, setGame] = useState<GameInstallation | null>(null);
   const [manualPath, setManualPath] = useState('');
   const [providers, setProviders] = useState<Array<[ProviderMetadata, ProbeResult]>>([]);
@@ -56,7 +60,88 @@ export const SettingsPage: React.FC = () => {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <DesktopOnlyBanner feature="diagnostics" compact />
-        <AppUpdatePanel />
+        {!isLauncherPreview && <AppUpdatePanel />}
+        {desktopRuntime && (
+          <section className="panel pcl-appearance-panel" aria-label={zh ? '个性化与启动动画' : 'Appearance & Startup Animation'}>
+            <div className="panel-header">
+              <div>
+                <h2 className="panel-title">
+                  <Palette size={18} color="var(--primary)" />
+                  <span>{zh ? '个性化与启动动画' : 'Appearance & Startup Animation'}</span>
+                </h2>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {zh
+                    ? '选择星枢启动器主题色板与窗口入场动效，切换后即时应用于标题栏、导航胶囊与全部桌面页面。'
+                    : 'Customize the launcher palette and startup sequence. Changes apply immediately across all desktop pages.'}
+                </p>
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={replayStartup}>
+                <Sparkles size={14} />
+                <span>{zh ? '预览启动动画' : 'Preview startup animation'}</span>
+              </button>
+            </div>
+
+            <div className="pcl-settings-theme-grid" role="group" aria-label={zh ? '主题配色' : 'Color themes'}>
+              {PCL_THEMES.map((preset) => {
+                const selected = theme === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    aria-pressed={selected}
+                    className={`pcl-settings-theme-card ${selected ? 'is-selected' : ''} ${preset.isDark ? 'is-dark-preset' : ''}`}
+                    onClick={() => setTheme(preset.id)}
+                  >
+                    <span
+                      className="pcl-settings-theme-swatch"
+                      style={{
+                        background: `linear-gradient(135deg, ${preset.swatchPrimary}, ${preset.swatchSecondary})`,
+                      }}
+                      aria-hidden="true"
+                    >
+                      {selected && <Check size={14} strokeWidth={2.6} />}
+                    </span>
+                    <span className="pcl-settings-theme-meta">
+                      <strong>{zh ? preset.nameZh : preset.nameEn}</strong>
+                      <small>{zh ? preset.descZh : preset.descEn}</small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="xingshu-update-switch-row"
+              style={{ marginTop: 14 }}
+              onClick={() => setStartupAnimEnabled(!startupAnimEnabled)}
+            >
+              <div className="xingshu-update-switch-copy" id="pcl-startup-anim-label">
+                <span className="xingshu-update-switch-title">
+                  {zh ? '启用启动开屏与入场动画' : 'Enable startup splash & entrance animation'}
+                </span>
+                <span className="xingshu-update-switch-desc">
+                  {zh
+                    ? '开启后每次打开桌面客户端都会播放星枢轨道开屏与窗口弹性入场；系统开启减弱动态效果时自动跳过。'
+                    : 'Play the orbital emblem splash and spring entrance on launch (automatically skipped when reduced motion is enabled).'}
+                </span>
+              </div>
+              <button
+                id="pcl-startup-anim-toggle"
+                type="button"
+                role="switch"
+                aria-checked={startupAnimEnabled}
+                aria-labelledby="pcl-startup-anim-label"
+                className={`xingshu-switch-track${startupAnimEnabled ? ' is-on' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setStartupAnimEnabled(!startupAnimEnabled);
+                }}
+              >
+                <span className="xingshu-switch-thumb" />
+              </button>
+            </div>
+          </section>
+        )}
         {/* Language Selection Card */}
         <div className="panel">
           <h2 className="panel-title" style={{ marginBottom: 8 }}>
@@ -202,7 +287,7 @@ export const SettingsPage: React.FC = () => {
             <p>• 所有插件安装、替换与卸载均自动生成事务快照，支持随时一键无损还原。</p>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
-            <NavLink to="/extensions/packages" className="btn btn-secondary">星枢包管理器 →</NavLink>
+            <NavLink to="/extensions/packages" className="btn btn-secondary">手机连接与安装 →</NavLink>
             <NavLink to="/maintenance/transactions" className="btn btn-secondary">安装事务记录 →</NavLink>
             <NavLink to="/maintenance/backups" className="btn btn-secondary">数据备份与还原 →</NavLink>
             <NavLink to="/diagnostics" className="btn btn-secondary">系统诊断中心 →</NavLink>

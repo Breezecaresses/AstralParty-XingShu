@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import zipfile
 from android_payload import previous_hashes, sha
+from package_android_preview import verify_apk_payload_binding
 from project_paths import project_document
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,10 +38,7 @@ def main():
     assert m['package'] == 'com.feimo.astralparty' and m['platform'] == 'ANDROID_CN'
     assert m['appVersion'] == '3.3.0' and m['nativeLibraries'] == []
     assert sha(m['candidate']) == m['candidateSha256'] and sha(a.vanilla) == m['originalSha256']
-    with zipfile.ZipFile(a.phone_apk) as apk:
-        import hashlib
-        assert hashlib.sha256(apk.read('assets/candidate.__data')).hexdigest() == m['candidateSha256']
-        assert hashlib.sha256(apk.read('assets/vanilla.__data')).hexdigest() == m['originalSha256']
+    verify_apk_payload_binding(a.phone_apk, m['candidateSha256'], m['originalSha256'])
     root = a.out.resolve()
     if root.exists(): raise SystemExit('Choose a new output directory; existing bundles are preserved')
     root.mkdir(parents=True)

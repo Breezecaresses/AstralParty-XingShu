@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Heart, Sparkles, Sword, Shield, Users } from 'lucide-react';
+import { useEncyclopediaModOverrides, type EncyclopediaAssetOverride } from '../../shared/encyclopediaMods';
 import { gameCatalog, libraryCharacterName, isPreviewCharacter, pickStaticEmoteAsset } from '../../shared/gameLibrary';
 import type { HeroProgress, LibraryCharacter, LibrarySkin } from '../../shared/gameLibrary';
 import { EncyclopediaTabs, GameImage, GameText, LibraryHeader, RewardItems, useGameLibrary } from './LibraryUI';
+import { EncyclopediaModSummary, LazyModArtwork, ModReplacedPill } from './ModOverrideUI';
 
 type CharacterDetails = LibraryCharacter & {
   pveProgression?: { level: number; description: string }[];
@@ -15,8 +17,12 @@ const releasedCharacters = characters.filter(c => !isPreviewCharacter(c));
 
 export function CharactersPage() {
   const state = useGameLibrary();
+  const modOvr = useEncyclopediaModOverrides('character');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
+  const [selectedModId, setSelectedModId] = useState('');
+  const [onlyReplaced, setOnlyReplaced] = useState(false);
+  const [showModdedArt, setShowModdedArt] = useState(true);
   const [selectedId, setSelectedId] = useState(characters[0]?.id);
   const [skinId, setSkinId] = useState<number | null>(null);
   const [tab, setTab] = useState('roster');
@@ -25,8 +31,26 @@ export function CharactersPage() {
   const detail = characters.find(c => c.id === selectedId) || characters[0];
   const preview = !!detail && isPreviewCharacter(detail);
   const p = progress?.find(h => h.id === detail?.id);
-  const visible = useMemo(() => characters.filter(c => `${libraryCharacterName(c)} ${c.title} ${c.id}`.toLowerCase().includes(query.toLowerCase()) && (filter !== 'owned' || progress?.some(h => h.id === c.id)) && (filter !== 'bond' || c.hasBond) && (filter !== 'preview' || isPreviewCharacter(c))), [query, filter, progress]);
+
+  const pickHeroOverrides = (heroId: number, skinImg?: string): EncyclopediaAssetOverride[] => {
+    const bySkin = skinImg ? modOvr.overridesByAsset.get(skinImg.toLowerCase()) ?? [] : [];
+    const byHero = modOvr.overridesByEntity.get(String(heroId)) ?? [];
+    const merged = [...bySkin, ...byHero.filter((x) => !bySkin.some((y) => y.assetName === x.assetName && y.modId === x.modId))];
+    return selectedModId ? merged.filter((o) => o.modId === selectedModId) : merged;
+  };
+
+  const visible = useMemo(() => characters.filter(c => {
+    if (!`${libraryCharacterName(c)} ${c.title} ${c.id}`.toLowerCase().includes(query.toLowerCase())) return false;
+    if (filter === 'owned' && !progress?.some(h => h.id === c.id)) return false;
+    if (filter === 'bond' && !c.hasBond) return false;
+    if (filter === 'preview' && !isPreviewCharacter(c)) return false;
+    if ((onlyReplaced || selectedModId) && pickHeroOverrides(c.id).length === 0) return false;
+    return true;
+  }), [query, filter, progress, onlyReplaced, selectedModId, modOvr.overridesByAsset, modOvr.overridesByEntity]);
+
   const currentSkin = detail?.skins.find(s => s.id === skinId) || detail?.skins.find(s => s.index === p?.skin) || detail?.skins.find(s => s.default) || detail?.skins[0];
+  const detailOverrides = detail ? pickHeroOverrides(detail.id, currentSkin?.image || detail.image) : [];
+  const activePosterOverride = detailOverrides.find((o) => o.enabled) ?? detailOverrides[0] ?? null;
   const maxBond = Math.max(...gameCatalog.favorLevels.map(l => l.Id || 0), 0);
   const knownOwned = progress?.filter(h => characters.some(c => c.id === h.id)).length;
   const ownedSkin = (s: LibrarySkin) => !state.account ? '持有未知' : state.account.snapshot.skins.includes(s.id) || (!!p && (s.default || p.skin === s.index)) ? '已持有' : '未持有';
@@ -42,13 +66,32 @@ export function CharactersPage() {
   return <div>
     <EncyclopediaTabs />
     <LibraryHeader title="角色中心" description="走近每位角色，查看技能、成长、皮肤与羁绊" state={state} />
-    <div className="character-collection-line"><span><Users size={15} /> 角色图鉴 <strong>{characters.length}</strong></span><span>官方预更新 <strong>{characters.filter(isPreviewCharacter).length}</strong></span><span>已持有 <strong>{knownOwned ?? '待同步'}</strong>{knownOwned !== undefined && ` / ${releasedCharacters.length}`}</span><span>满羁绊 <strong>{progress ? progress.filter(h => characters.some(c => c.id === h.id) && h.level >= maxBond).length : '待同步'}</strong></span><span>皮肤与装扮 <strong>{characters.reduce((n, c) => n + c.skins.length, 0)}</strong></span></div>
+    <div className="character-collection-line"><span><Users size={15} /> 角色图鉴 <strong>{characters.length}</strong></span><span>官方预更新 <strong>{characters.filter(isPreviewCharacter).length}</strong></span><span>已持有 <strong>{knownOwned ?? '待同步'}</strong>{knownOwned !== undefined && ` / ${releasedCharacters.length}`}</span><span>满羁绊 <strong>{progress ? progress.filter(h => characters.some(c => c.id === h.id) && h.level >= maxBond).length : '待同步'}</strong></span><span>皮肤与装扮 <strong>{characters.reduce((n, c) => n + c.skins.length, 0)}</strong></span>{modOvr.replacedCount > 0 && <span>Mod 替换角色 <strong>{modOvr.replacedCount}</strong></span>}</div>
+    <EncyclopediaModSummary
+      sectionLabel="角色中心"
+      installedMods={modOvr.installedMods}
+      allInstalledMods={modOvr.allInstalledMods}
+      replacedCount={modOvr.replacedCount}
+      selectedModId={selectedModId}
+      onSelectModId={setSelectedModId}
+      onlyReplaced={onlyReplaced}
+      onToggleOnlyReplaced={() => setOnlyReplaced((v) => !v)}
+      showModdedArt={showModdedArt}
+      onToggleShowModdedArt={() => setShowModdedArt((v) => !v)}
+    />
     {preview && <div className="character-preview-notice">官方预更新角色 · 已收录当前预装数值、技能参数、关联状态与成长。名称和完整效果尚未提供，借用其他角色的名称或形象已收起；内容可能在正式上线前调整。</div>}
     <div className="character-studio">
       <aside className="character-poster">
         <div className="character-poster-halo" />
-        <div className="character-poster-heading"><span>CHARACTER / {String(detail.id).padStart(3, '0')}</span><span className="library-tag">{preview ? '官方预更新' : !progress ? '持有未知' : p ? '已持有' : '未持有'}</span></div>
-        <GameImage key={`${detail.id}:${currentSkin?.id}`} asset={currentSkin?.image || detail.image} name={currentSkin?.name || libraryCharacterName(detail)} className="character-full-art" />
+        <div className="character-poster-heading"><span>CHARACTER / {String(detail.id).padStart(3, '0')}</span><span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><ModReplacedPill override={activePosterOverride} /><span className="library-tag">{preview ? '官方预更新' : !progress ? '持有未知' : p ? '已持有' : '未持有'}</span></span></div>
+        <LazyModArtwork
+          installationId={modOvr.installationId}
+          override={activePosterOverride}
+          active={Boolean(activePosterOverride && showModdedArt && activePosterOverride.enabled)}
+          alt={currentSkin?.name || libraryCharacterName(detail)}
+          className="character-full-art"
+          fallback={<GameImage key={`${detail.id}:${currentSkin?.id}`} asset={currentSkin?.image || detail.image} name={currentSkin?.name || libraryCharacterName(detail)} className="character-full-art" />}
+        />
         <div className="character-poster-caption"><p>{detail.title}</p><h2>{libraryCharacterName(detail)}</h2><p>{currentSkin?.name}</p><div className="character-bond-hearts" aria-label={p ? `羁绊等级 ${p.level}` : '羁绊进度未知'}>{Array.from({ length: Math.min(maxBond, 6) }, (_, i) => <Heart key={i} size={22} fill={p && p.level > i ? 'currentColor' : 'none'} className={p && p.level > i ? 'filled' : ''} />)}</div><span>{p ? `羁绊 Lv.${p.level}${p.level >= maxBond ? ' · MAX' : ''}` : preview ? '资料尚未完整发布' : '同步后查看羁绊进度'}</span></div>
         <button className="character-step previous" aria-label="上一个角色" onClick={() => stepCharacter(-1)}><ChevronLeft size={22} /></button><button className="character-step next" aria-label="下一个角色" onClick={() => stepCharacter(1)}><ChevronRight size={22} /></button>
       </aside>
@@ -59,9 +102,12 @@ export function CharactersPage() {
             <div className="library-filters"><input aria-label="搜索角色" placeholder="搜索角色、称号或编号…" value={query} onChange={e => setQuery(e.target.value)} /><select aria-label="角色筛选" value={filter} onChange={e => setFilter(e.target.value)}><option value="all">全部角色</option><option value="owned">我持有的角色</option><option value="bond">支持羁绊</option><option value="preview">官方预更新</option></select></div>
             <div className="character-roster">{visible.map(c => {
               const hero = progress?.find(h => h.id === c.id);
+              const heroOvs = pickHeroOverrides(c.id);
+              const topOv = heroOvs.find((o) => o.enabled) ?? heroOvs[0] ?? null;
               return <button className={`character-roster-card ${detail.id === c.id ? 'selected' : ''}`} key={c.id} onClick={() => selectCharacter(c.id)} aria-pressed={detail.id === c.id}>
+                <ModReplacedPill override={topOv} compact />
                 <GameImage asset={pickStaticEmoteAsset(c.id, `roster:${c.id}`)} name={libraryCharacterName(c)} />
-                <div><strong>{libraryCharacterName(c)}</strong><small>{isPreviewCharacter(c) ? '官方预更新 · 资料待补全' : !progress ? '持有未知' : hero ? `羁绊 Lv.${hero.level}` : '未持有'}</small></div>
+                <div><strong>{libraryCharacterName(c)}</strong><small>{topOv ? `${topOv.modName}` : isPreviewCharacter(c) ? '官方预更新 · 资料待补全' : !progress ? '持有未知' : hero ? `羁绊 Lv.${hero.level}` : '未持有'}</small></div>
               </button>;
             })}</div>
             {!visible.length && <div className="library-empty">{filter === 'owned' && !progress ? '同步账号后可筛选已持有角色。' : '没有符合条件的角色。'}</div>}
@@ -91,7 +137,29 @@ export function CharactersPage() {
           {tab === 'skins' && <>
             {preview && <p className="character-preview-notice">装扮栏位已预装，当前资源未提供对应立绘；占位名称不代表正式皮肤名称。</p>}
             <p className="library-text library-section">选择皮肤可在左侧查看完整立绘。{currentSkin && `当前预览：${currentSkin.name}。`}</p>
-            <div className="character-skins">{detail.skins.map(s => <button key={s.id} className={`character-skin-card ${currentSkin?.id === s.id ? 'selected' : ''}`} onClick={() => setSkinId(s.id)} aria-pressed={currentSkin?.id === s.id}><GameImage asset={s.image} name={s.name} /><div><h3>{s.name}</h3><p>{ownedSkin(s)}{p?.skin === s.index ? ' · 游戏当前装扮' : ''}</p></div></button>)}</div>
+            {detailOverrides.length > 0 && (
+              <div className="mod-ovr-detail-bar" style={{ marginBottom: 14 }}>
+                <span>该角色已替换资源：{detailOverrides.map((o) => `${o.modName}(${o.assetName})`).slice(0, 4).join('、')}</span>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowModdedArt((v) => !v)}>
+                  {showModdedArt ? '切换为原版立绘' : '切换为 Mod 替换立绘'}
+                </button>
+              </div>
+            )}
+            <div className="character-skins">{detail.skins.map(s => {
+              const skinOv = (modOvr.overridesByAsset.get(s.image.toLowerCase()) ?? [])[0] ?? null;
+              return <button key={s.id} className={`character-skin-card ${currentSkin?.id === s.id ? 'selected' : ''}`} onClick={() => setSkinId(s.id)} aria-pressed={currentSkin?.id === s.id}>
+                <ModReplacedPill override={skinOv} compact />
+                <LazyModArtwork
+                  installationId={modOvr.installationId}
+                  override={skinOv}
+                  active={Boolean(skinOv && showModdedArt && skinOv.enabled)}
+                  alt={s.name}
+                  className="library-image"
+                  fallback={<GameImage asset={s.image} name={s.name} />}
+                />
+                <div><h3>{s.name}</h3><p>{skinOv ? `Mod 替换 · ${skinOv.modName}` : ownedSkin(s)}{p?.skin === s.index ? ' · 游戏当前装扮' : ''}</p></div>
+              </button>;
+            })}</div>
             {currentSkin?.description && <div className="character-skin-caption"><h3>{currentSkin.name}</h3><GameText text={currentSkin.description} /></div>}
           </>}
           {tab === 'archive' && <><div className="character-archive"><h3>{detail.title}</h3><GameText text={detail.biography || detail.comment || '官方尚未填写角色档案。'} /></div>{detail.comment && detail.biography && <div className="library-section"><GameText text={detail.comment} /></div>}</>}

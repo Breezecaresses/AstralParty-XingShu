@@ -3,12 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEngine;
+using Image = UnityEngine.UI.Image;
 
 namespace XingShuRuntime.UI
 {
     /// <summary>
     /// XingShu 统一原版 UI 资源加载与生命周期服务 (Phase 2B-R4 生产整合版)
-    /// 1. 优先从 Assembly Embedded Resources 读取原子切片，确保 Candidate 100% 自包含；
+    /// 1. 优先从游戏原生 FairyGUI 包及 Assembly Embedded Resources 读取切片；
     /// 2. 建立确定性资源名称映射 (Exact Resource Lookup) 与 9-Slice Border 映射；
     /// 3. Stream 循环读满保底 (Read Stream Fully)；
     /// 4. LoadImage 结果诊断与 DECODE_FAILED 探测；
@@ -21,6 +22,21 @@ namespace XingShuRuntime.UI
         private static readonly Dictionary<string, Sprite> _sprites = new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> _loggedAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly object _logLock = new object();
+
+        internal static void ApplyGameSliderArtwork(Image fill, Image handle)
+        {
+            XingShuNativeGameUI.EnsureLoaded(null);
+            if (fill != null)
+            {
+                fill.color = XingShuUITheme.ToggleActiveLime;
+                XingShuNativeGameUI.Bind(fill, XingShuNativeSprite.SliderFill, Image.Type.Sliced, false, Color.white);
+            }
+            if (handle != null)
+            {
+                handle.color = XingShuUITheme.PresetSelectedLime;
+                XingShuNativeGameUI.Bind(handle, XingShuNativeSprite.SliderStar, Image.Type.Simple, true, Color.white);
+            }
+        }
 
         // R3.2 24 项生产资产确定性资源名称映射 (严禁 brand_mark)
         private static readonly Dictionary<string, string> _exactResourceMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -141,7 +157,7 @@ namespace XingShuRuntime.UI
         {
             if (radius <= 0) return WhiteSprite;
             string key = $"{radius}_{(topOnly ? "top" : "all")}";
-            if (_roundedFallbackSprites.TryGetValue(key, out Sprite cached) && cached != null)
+            if (_roundedFallbackSprites.TryGetValue(key, out Sprite cached) && cached != null && cached.texture != null)
             {
                 return cached;
             }
@@ -152,6 +168,7 @@ namespace XingShuRuntime.UI
             tex.name = "XINGSHU_FallbackTex_" + key;
             tex.filterMode = FilterMode.Bilinear;
             tex.wrapMode = TextureWrapMode.Clamp;
+            tex.hideFlags = HideFlags.HideAndDontSave;
 
             Color[] pixels = new Color[w * h];
             float r = radius;
@@ -217,6 +234,7 @@ namespace XingShuRuntime.UI
             Vector4 border = topOnly ? new Vector4(radius, 0f, radius, radius) : new Vector4(radius, radius, radius, radius);
             Sprite sp = Sprite.Create(tex, new Rect(0f, 0f, w, h), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect, border);
             sp.name = "XINGSHU_FallbackSprite_" + key;
+            sp.hideFlags = HideFlags.HideAndDontSave;
             _roundedFallbackSprites[key] = sp;
             return sp;
         }
@@ -241,14 +259,16 @@ namespace XingShuRuntime.UI
         {
             get
             {
-                if (_whiteSprite == null)
+                if (_whiteSprite == null || _whiteSprite.texture == null)
                 {
                     Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
                     Color[] pixels = new Color[4] { Color.white, Color.white, Color.white, Color.white };
                     tex.SetPixels(pixels);
                     tex.Apply();
+                    tex.hideFlags = HideFlags.HideAndDontSave;
                     _whiteSprite = Sprite.Create(tex, new Rect(0f, 0f, 2f, 2f), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect, Vector4.one);
                     _whiteSprite.name = "XINGSHU_White_Fallback";
+                    _whiteSprite.hideFlags = HideFlags.HideAndDontSave;
                 }
                 return _whiteSprite;
             }
@@ -270,6 +290,11 @@ namespace XingShuRuntime.UI
                 cleanName += ".png";
             }
 
+            if (border == default && XingShuNativeGameUI.TryGetMappedSprite(cleanName, out Sprite nativeSprite))
+            {
+                return nativeSprite;
+            }
+
             // 若未显式传入 border，尝试从 manifest border 映射中取
             if (border == default && _sliceBorderMap.TryGetValue(cleanName, out Vector4 defaultBorder))
             {
@@ -277,7 +302,7 @@ namespace XingShuRuntime.UI
             }
 
             string spriteKey = cleanName + "_" + border.ToString();
-            if (_sprites.TryGetValue(spriteKey, out Sprite cachedSprite) && cachedSprite != null)
+            if (_sprites.TryGetValue(spriteKey, out Sprite cachedSprite) && cachedSprite != null && cachedSprite.texture != null)
             {
                 return cachedSprite;
             }
@@ -307,6 +332,7 @@ namespace XingShuRuntime.UI
                     border
                 );
                 newSprite.name = "XINGSHU_Sprite_" + cleanName;
+                newSprite.hideFlags = HideFlags.HideAndDontSave;
                 _sprites[spriteKey] = newSprite;
                 return newSprite;
             }
@@ -370,6 +396,7 @@ namespace XingShuRuntime.UI
                 tex.name = "XINGSHU_Tex_" + cleanName;
                 tex.filterMode = FilterMode.Bilinear;
                 tex.wrapMode = TextureWrapMode.Clamp;
+                tex.hideFlags = HideFlags.HideAndDontSave;
                 _textures[cleanName] = tex;
                 LogAssetEntry(cleanName, resName, source, bytes.Length, $"{tex.width}x{tex.height}", "OK");
                 return tex;
@@ -396,6 +423,11 @@ namespace XingShuRuntime.UI
             foreach (var kv in _exactResourceMap)
             {
                 string logicalName = kv.Key;
+                if (XingShuNativeGameUI.IsNativeAssetName(logicalName) && XingShuUIAssetPayloads.GetPayload(logicalName) == null)
+                {
+                    pass++;
+                    continue;
+                }
                 Texture2D tex = GetTexture(logicalName);
                 if (tex != null && tex.width > 2 && tex.height > 2)
                 {
@@ -519,6 +551,7 @@ namespace XingShuRuntime.UI
         /// </summary>
         internal static void Cleanup()
         {
+            XingShuNativeGameUI.Cleanup();
             foreach (var kv in _sprites)
             {
                 if (kv.Value != null && kv.Value != _whiteSprite)

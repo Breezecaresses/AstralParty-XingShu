@@ -1,4 +1,5 @@
 using XingShuRuntime.Core;
+using XingShuRuntime.Utilities;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -50,6 +51,10 @@ internal sealed class XingShuHotkeySettingsView
                 () => Set(index, false), 13);
             Place(clear.gameObject, 1f, 1f, -92f, -42f, 72f, 38f);
             clear.interactable = binding.Action != XingShuShortcut.Center;
+            if (binding.Action == XingShuShortcut.ModsPanel && !XingShuMobileUIHelper.IsMobile)
+            {
+                row.SetActive(false);
+            }
         }
         UpdateSync();
     }

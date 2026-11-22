@@ -10,4 +10,8 @@ interface IInstaller {
     String readChannelLogcat() = 4;
     String launchGame(String packageName) = 5;
     String writeGameHandoff(String packageName, String payloadJson) = 6;
+    String installModPack(String packageName, String metaJson, in ParcelFileDescriptor modZip) = 7;
+    String listInstalledMods(String packageName) = 8;
+    String removeModPack(String packageName, String modId) = 9;
+    String setOfficialModules(String packageName, String moduleIdsCsv, boolean enable, boolean remove) = 10;
 }

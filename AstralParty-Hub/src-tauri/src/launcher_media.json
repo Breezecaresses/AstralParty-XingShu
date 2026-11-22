@@ -1,0 +1,9 @@
+{
+  "pathPrefix": "/xingshu-hub/assets/launcher-runtime/r8.40",
+  "payloadSizes": {
+    "STEAM_CN": 9267318,
+    "TAPTAP": 9287915,
+    "BILIBILI": 9260990,
+    "WEGAME": 9260608
+  }
+}

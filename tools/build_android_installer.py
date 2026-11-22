@@ -15,18 +15,30 @@ from android_payload import previous_hashes, validate_baseline_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+DEFAULT_CANDIDATE_URL = 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-preview8.35/candidate.__data'
+DEFAULT_VANILLA_URL = 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-preview8.35/vanilla.__data'
+
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def validate_https_url(url, label):
+    if not isinstance(url, str) or not url.startswith('https://astralparty-xingshu.lanxichaxu.cn/'):
+        raise RuntimeError(f'Invalid {label}: expected official XingShu HTTPS URL')
+    return url
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--manifest',type=Path,required=True)
     p.add_argument('--vanilla',type=Path,required=True)
+    p.add_argument('--candidate-url',default=DEFAULT_CANDIDATE_URL)
+    p.add_argument('--vanilla-url',default=DEFAULT_VANILLA_URL)
     p.add_argument('--gradle',default='gradle')
     p.add_argument('--sdk',type=Path,default=Path(os.environ.get('ANDROID_HOME','C:/Android/sdk')))
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--previous-manifest',type=Path,action='append',default=[],help='Additional intact local candidate for this exact game baseline')
     p.add_argument('--build-dir',type=Path,help='Optional empty ASCII-only build directory (Windows AIDL limitation)')
     a=p.parse_args()
+    candidate_url=validate_https_url(a.candidate_url,'--candidate-url')
+    vanilla_url=validate_https_url(a.vanilla_url,'--vanilla-url')
     m=json.loads(a.manifest.read_text('utf8'))
     patch=Path(m['candidate'])
     assert m['package']=='com.feimo.astralparty' and m['appVersion']=='3.3.0'
@@ -47,14 +59,30 @@ def main():
     if os.name=='nt' and not str(project).isascii(): raise RuntimeError('Select an ASCII-only --build-dir')
     shutil.copytree(source,project,dirs_exist_ok=True,ignore=shutil.ignore_patterns('build','.gradle','local.properties'))
     generated=project/'app/build/generated/payload'
-    assets=generated/'assets'; assets.mkdir(parents=True,exist_ok=True)
-    shutil.copy2(patch,assets/'candidate.__data'); shutil.copy2(a.vanilla,assets/'vanilla.__data')
     java=generated/'java/app/xingshu/installer/PayloadSpec.java'; java.parent.mkdir(parents=True,exist_ok=True)
     # Accept only verified payloads for this exact resource baseline.
     known=previous_hashes(m,a.previous_manifest)
     if not re.fullmatch('[a-f0-9]{64}',m.get('catalogSha256','')): raise RuntimeError('Missing audited official catalog hash')
-    constants={'RELATIVE':m['bundleRelativePath'],'VERSION':m['runtimeVersion'], 'VANILLA':m['originalSha256'],'PATCH':m['candidateSha256'],'CATALOG':m['catalogSha256']}
-    java.write_text('package app.xingshu.installer;\nfinal class PayloadSpec {\n'+''.join('static final String '+k+' = '+json.dumps(v)+';\n' for k,v in constants.items())+'static final String[] PREVIOUS = {'+','.join(json.dumps(v) for v in known)+'};\n}\n',encoding='utf8')
+    constants={
+        'RELATIVE':m['bundleRelativePath'],
+        'VERSION':m['runtimeVersion'],
+        'VANILLA':m['originalSha256'],
+        'PATCH':m['candidateSha256'],
+        'CATALOG':m['catalogSha256'],
+        'CANDIDATE_URL':candidate_url,
+        'VANILLA_URL':vanilla_url,
+    }
+    sizes={
+        'CANDIDATE_SIZE':patch.stat().st_size,
+        'VANILLA_SIZE':a.vanilla.stat().st_size,
+    }
+    java.write_text(
+        'package app.xingshu.installer;\nfinal class PayloadSpec {\n'
+        + ''.join('static final String '+k+' = '+json.dumps(v)+';\n' for k,v in constants.items())
+        + ''.join(f'static final long {k} = {v}L;\n' for k,v in sizes.items())
+        + 'static final String[] PREVIOUS = {'+','.join(json.dumps(v) for v in known)+'};\n}\n',
+        encoding='utf8',
+    )
     env=os.environ.copy(); env['ANDROID_HOME']=str(a.sdk)
     print('Build directory:',project,flush=True)
     subprocess.run([a.gradle,'--no-daemon','--console=plain','testReleaseUnitTest','assembleRelease'],cwd=project,env=env,check=True)

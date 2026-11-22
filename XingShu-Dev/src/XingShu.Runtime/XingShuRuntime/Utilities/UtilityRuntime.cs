@@ -89,7 +89,7 @@ public static class UtilityRuntime
 			Type[] types = assembly.GetTypes();
 			foreach (Type type in types)
 			{
-				if (type == typeof(UtilityRuntime))
+				if (type == typeof(UtilityRuntime) || !LauncherModules.CanLoad(type.Name))
 				{
 					continue;
 				}

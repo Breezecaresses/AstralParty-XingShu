@@ -118,6 +118,25 @@ final class MiniJson {
         return fallback;
     }
 
+    static boolean boolField(Map<String, Object> map, String key, boolean fallback) {
+        if (map == null || key == null) return fallback;
+        Object val = map.get(key);
+        if (val instanceof Boolean) return (Boolean) val;
+        if (val instanceof Number) return ((Number) val).intValue() != 0;
+        if (val instanceof String) {
+            String s = ((String) val).trim();
+            if ("true".equalsIgnoreCase(s) || "1".equals(s)) return true;
+            if ("false".equalsIgnoreCase(s) || "0".equals(s)) return false;
+        }
+        return fallback;
+    }
+
+    static List<?> listField(Map<String, Object> map, String key) {
+        if (map == null || key == null) return java.util.Collections.emptyList();
+        Object val = map.get(key);
+        return val instanceof List<?> ? (List<?>) val : java.util.Collections.emptyList();
+    }
+
     static String stringify(Object value) {
         StringBuilder sb = new StringBuilder();
         writeJson(sb, value);

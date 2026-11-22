@@ -108,7 +108,7 @@ namespace XingShuRuntime.UI
 
             // [ 游戏内加速 ] 按钮 (Managed XingShu)
             _btnManagedEngine = XingShuUIFactory.CreateButton(selectorCard, "Btn_ManagedEngine", "游戏内加速",
-                btnSelSprite, Color.white, new Color(0.08f, 0.10f, 0.06f, 1f),
+                btnSelSprite, XingShuUIAssetService.IsFallbackSprite(btnSelSprite) ? XingShuUITheme.Pink : Color.white, Color.white,
                 delegate { SwitchEngineRequested(XingShuSpeedEngineMode.ManagedXingShu); }, 13);
             RectTransform bmeRt = _btnManagedEngine.GetComponent<RectTransform>();
             bmeRt.anchorMin = new Vector2(0f, 0.5f);
@@ -121,7 +121,7 @@ namespace XingShuRuntime.UI
 
             // [ 原生时间加速 ] 按钮 (Native Hook)
             _btnNativeEngine = XingShuUIFactory.CreateButton(selectorCard, "Btn_NativeEngine", "原生时间加速",
-                btnSecSprite, Color.white, XingShuUITheme.SecondaryText,
+                btnSecSprite, XingShuUIAssetService.IsFallbackSprite(btnSecSprite) ? new Color(0.92f, 0.94f, 0.97f, 1f) : Color.white, XingShuUITheme.PrimaryText,
                 delegate { SwitchEngineRequested(XingShuSpeedEngineMode.NativeHook); }, 13);
             RectTransform bneRt = _btnNativeEngine.GetComponent<RectTransform>();
             bneRt.anchorMin = new Vector2(0f, 0.5f);
@@ -178,8 +178,8 @@ namespace XingShuRuntime.UI
             statusRt.anchorMin = new Vector2(1f, 0.5f);
             statusRt.anchorMax = new Vector2(1f, 0.5f);
             statusRt.pivot = new Vector2(1f, 0.5f);
-            statusRt.anchoredPosition = new Vector2(-88f, 0f);
-            statusRt.sizeDelta = new Vector2(320f, 26f);
+            statusRt.anchoredPosition = new Vector2(-128f, 0f);
+            statusRt.sizeDelta = new Vector2(220f, 26f);
 
             // 动态热键徽章 [F7]
             _lastObservedHotkey = XingShuHotkeys.Display(XingShuShortcut.SpeedPanel);
@@ -189,7 +189,7 @@ namespace XingShuRuntime.UI
             badgeRt.anchorMax = new Vector2(1f, 0.5f);
             badgeRt.pivot = new Vector2(1f, 0.5f);
             badgeRt.anchoredPosition = new Vector2(-24f, 0f);
-            badgeRt.sizeDelta = new Vector2(210f, 26f);
+            badgeRt.sizeDelta = new Vector2(92f, 26f);
 
             Image badgeImg = badgeGo.AddComponent<Image>();
             badgeImg.sprite = XingShuUIAssetService.GetSprite("hotkey_badge.png");
@@ -260,7 +260,7 @@ namespace XingShuRuntime.UI
                 bRt.anchorMax = new Vector2(1f, 0.5f);
                 bRt.pivot = new Vector2(1f, 0.5f);
                 bRt.anchoredPosition = Vector2.zero;
-                bRt.sizeDelta = new Vector2(64f, 32f);
+                bRt.sizeDelta = new Vector2(32f, 32f);
             }
 
             // 自身本回合原速开关 (Toggle: 原生时间加速专属，轮到自身操作时临时恢复 1.0x，回合结束后自动恢复设定倍率)
@@ -296,7 +296,7 @@ namespace XingShuRuntime.UI
                 bRt.anchorMax = new Vector2(1f, 0.5f);
                 bRt.pivot = new Vector2(1f, 0.5f);
                 bRt.anchoredPosition = Vector2.zero;
-                bRt.sizeDelta = new Vector2(64f, 32f);
+                bRt.sizeDelta = new Vector2(32f, 32f);
             }
 
             // ==========================================
@@ -486,13 +486,13 @@ namespace XingShuRuntime.UI
 
                 Sprite activeSprite = isMatching ? btnSelSprite : btnSecSprite;
                 Color activeColor = XingShuUIAssetService.IsFallbackSprite(activeSprite)
-                    ? (isMatching ? new Color(0.12f, 0.22f, 0.20f, 0.85f) : new Color(0.15f, 0.18f, 0.24f, 1f))
+                    ? (isMatching ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
                     : Color.white;
 
                 Button btn = XingShuUIFactory.CreateButton(container, "Btn_Preset_" + targetSpeed, label,
                     activeSprite,
                     activeColor,
-                    isMatching ? new Color(0.08f, 0.10f, 0.06f, 1f) : XingShuUITheme.SecondaryText,
+                    isMatching ? Color.white : XingShuUITheme.PrimaryText,
                     delegate
                     {
                         PresetClicked(targetSpeed);
@@ -561,26 +561,26 @@ namespace XingShuRuntime.UI
             {
                 _imgManagedEngine.sprite = isManaged ? btnSelSprite : btnSecSprite;
                 _imgManagedEngine.color = XingShuUIAssetService.IsFallbackSprite(_imgManagedEngine.sprite)
-                    ? (isManaged ? new Color(0.12f, 0.22f, 0.20f, 0.85f) : new Color(0.15f, 0.18f, 0.24f, 1f))
+                    ? (isManaged ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
                     : Color.white;
             }
             if (_txtManagedEngine != null)
             {
-                _txtManagedEngine.color = isManaged ? new Color(0.08f, 0.10f, 0.06f, 1f) : XingShuUITheme.SecondaryText;
-                _txtManagedEngine.fontStyle = isManaged ? FontStyle.Bold : FontStyle.Normal;
+                _txtManagedEngine.color = isManaged ? Color.white : XingShuUITheme.PrimaryText;
+                _txtManagedEngine.fontStyle = FontStyle.Bold;
             }
 
             if (_imgNativeEngine != null)
             {
                 _imgNativeEngine.sprite = !isManaged ? btnSelSprite : btnSecSprite;
                 _imgNativeEngine.color = XingShuUIAssetService.IsFallbackSprite(_imgNativeEngine.sprite)
-                    ? (!isManaged ? new Color(0.12f, 0.22f, 0.20f, 0.85f) : new Color(0.15f, 0.18f, 0.24f, 1f))
+                    ? (!isManaged ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
                     : Color.white;
             }
             if (_txtNativeEngine != null)
             {
-                _txtNativeEngine.color = !isManaged ? new Color(0.08f, 0.10f, 0.06f, 1f) : XingShuUITheme.SecondaryText;
-                _txtNativeEngine.fontStyle = !isManaged ? FontStyle.Bold : FontStyle.Normal;
+                _txtNativeEngine.color = !isManaged ? Color.white : XingShuUITheme.PrimaryText;
+                _txtNativeEngine.fontStyle = FontStyle.Bold;
             }
 
             // 2. 更新标题与说明文案
@@ -705,12 +705,12 @@ namespace XingShuRuntime.UI
                 {
                     _presetImages[i].sprite = activeSprite;
                     _presetImages[i].color = XingShuUIAssetService.IsFallbackSprite(activeSprite)
-                        ? (isMatching ? new Color(0.12f, 0.22f, 0.20f, 0.85f) : new Color(0.15f, 0.18f, 0.24f, 1f))
+                        ? (isMatching ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
                         : Color.white;
                 }
                 if (i < _presetTexts.Count && _presetTexts[i] != null)
                 {
-                    _presetTexts[i].color = isMatching ? new Color(0.08f, 0.10f, 0.06f, 1f) : XingShuUITheme.SecondaryText;
+                    _presetTexts[i].color = isMatching ? Color.white : XingShuUITheme.PrimaryText;
                     _presetTexts[i].fontStyle = FontStyle.Bold;
                 }
             }

@@ -3,9 +3,10 @@ import glob
 
 assets_dir = r'assets/vanilla-ui-r3'
 pngs = sorted(glob.glob(os.path.join(assets_dir, '*.png')))
+pngs = [filename for filename in pngs if os.path.basename(filename) not in {'slider_fill.png', 'slider_handle.png'}]
 
 print(f"Found {len(pngs)} PNG files in {assets_dir}")
-assert len(pngs) == 24, f"Expected 24 PNGs, got {len(pngs)}"
+assert len(pngs) == 22, f"Expected 22 XingShu UI PNGs, got {len(pngs)}"
 
 lines = []
 lines.append("using System;")

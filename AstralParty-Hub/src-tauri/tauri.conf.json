@@ -1,30 +1,48 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "XingShu Hub",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "com.xingshu.hub",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev -- --mode launcher",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "beforeBuildCommand": "npm run build:launcher",
+    "frontendDist": "../dist-launcher"
   },
   "app": {
     "windows": [
       {
+        "label": "splash",
+        "title": "星枢启动器",
+        "url": "index.html?window=splash",
+        "width": 260,
+        "height": 260,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true
+      },
+      {
         "label": "main",
-        "title": "星枢 Hub",
+        "title": "星枢启动器",
         "width": 1280,
         "height": 820,
         "minWidth": 900,
         "minHeight": 620,
+        "center": true,
+        "visible": false,
+        "backgroundColor": "#f6faff",
         "decorations": false,
         "dragDropEnabled": true,
         "url": "index.html"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:28848 https://124.221.176.134 https://astralparty-xingshu.lanxichaxu.cn"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://game-art.localhost https://astralparty-xingshu.lanxichaxu.cn; media-src 'self' blob: https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/catalog/video/; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'none'; connect-src 'self' ipc: http://ipc.localhost http://game-art.localhost ws://127.0.0.1:28848 https://124.221.176.134 https://astralparty-xingshu.lanxichaxu.cn"
     }
   },
   "bundle": {

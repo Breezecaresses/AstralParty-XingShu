@@ -85,7 +85,7 @@ export function characterStaticEmoteAssets(heroId: number): string[] {
   const c = gameCatalog.characters.find(ch => ch.id === heroId);
   if (!c || isPreviewCharacter(c) || !Array.isArray(c.emotes)) return [];
   return c.emotes
-    .filter(e => !e.animated && !!e.image && Boolean(gameCatalog.assets[e.image]))
+    .filter(e => !e.animated && !!e.image && (import.meta.env?.MODE === 'launcher' || Boolean(gameCatalog.assets[e.image])))
     .map(e => e.image);
 }
 

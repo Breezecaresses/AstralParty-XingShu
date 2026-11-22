@@ -5,6 +5,7 @@ pub mod domain;
 pub mod game;
 pub mod game_library;
 pub mod game_replay;
+pub mod room_auto_enter;
 pub mod extension_center;
 pub mod install;
 pub mod packages;
@@ -22,17 +23,32 @@ pub mod external_mods;
 #[cfg(feature = "web-ui")]
 pub mod dropped_mods;
 #[cfg(feature = "web-ui")]
+pub mod mod_inspector;
+mod game_art;
+#[cfg(feature = "web-ui")]
 pub mod workshop;
 #[cfg(feature = "web-ui")]
 pub mod app_update;
 #[cfg(feature = "web-ui")]
 pub mod account_login;
+#[cfg(feature = "web-ui")]
+pub mod launcher;
+#[cfg(feature = "web-ui")]
+pub mod in_game_room;
+#[cfg(feature = "web-ui")]
+mod remote_content;
+#[cfg(feature = "web-ui")]
+mod mod_resources;
+#[cfg(feature = "web-ui")]
+mod module_panel;
 
 #[cfg(feature = "web-ui")]
 mod web_host {
 use super::*;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::Manager;
+use std::time::Duration;
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 
 use application::{
@@ -49,6 +65,89 @@ use xing_shu::bridge::server::BridgeServer;
 use xing_shu::package_manager::service::XingShuPackageManager;
 use xing_shu::spectator::service::SpectatorService;
 
+struct SplashState {
+    active: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+}
+
+fn reveal_main_and_close_splash(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<SplashState>() {
+        state.active.store(false, Ordering::SeqCst);
+    }
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.show();
+        let _ = main_win.unminimize();
+        let _ = main_win.set_focus();
+        let _ = main_win.emit("xingshu:splash-finished", ());
+    }
+    if let Some(splash_win) = app.get_webview_window("splash") {
+        let _ = splash_win.close();
+    }
+}
+
+fn spawn_splash_watchdog(
+    app: tauri::AppHandle,
+    active: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    expected_gen: u64,
+) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(5500)).await;
+        if active.load(Ordering::SeqCst) && generation.load(Ordering::SeqCst) == expected_gen {
+            reveal_main_and_close_splash(&app);
+        }
+    });
+}
+
+#[tauri::command]
+fn finish_splash_and_show_main(app: tauri::AppHandle) {
+    reveal_main_and_close_splash(&app);
+}
+
+#[tauri::command]
+fn get_startup_splash_active(state: tauri::State<'_, SplashState>) -> bool {
+    state.active.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+fn replay_startup_splash(app: tauri::AppHandle, state: tauri::State<'_, SplashState>) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("splash") {
+        if state.active.load(Ordering::SeqCst) {
+            let _ = existing.set_focus();
+            return Ok(());
+        }
+        let _ = existing.close();
+    }
+
+    let next_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.active.store(true, Ordering::SeqCst);
+
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.hide();
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        "splash",
+        WebviewUrl::App("index.html?window=splash&replay=1".into()),
+    )
+    .title("星枢启动器")
+    .inner_size(260.0, 260.0)
+    .center()
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .resizable(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    spawn_splash_watchdog(app.clone(), state.active.clone(), state.generation.clone(), next_gen);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     HubLogger::init();
@@ -56,6 +155,23 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(game_art::GameArt::default())
+        .register_asynchronous_uri_scheme_protocol("game-art", game_art::respond)
+        .manage(module_panel::ModulePanelTarget::default())
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(panel) = window.app_handle().get_webview_window(module_panel::LABEL) {
+                    let _ = panel.close();
+                }
+            }
+            if window.label() == "splash" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(state) = window.app_handle().try_state::<SplashState>() {
+                    if state.active.load(Ordering::SeqCst) {
+                        reveal_main_and_close_splash(window.app_handle());
+                    }
+                }
+            }
+        })
         .setup(|app| {
             let app_handle = app.handle();
             let app_data_dir = app_handle
@@ -82,6 +198,8 @@ pub fn run() {
             let db = Database::init(&db_path).expect("Failed to initialize XingShu Hub SQLite database");
             let game_library_store = game_library::GameLibraryStore::new(db.clone())?;
             let game_replay_store = game_replay::GameReplayStore::default();
+            let room_auto_enter_store = room_auto_enter::RoomAutoEnterStore::default();
+            let in_game_room_store = in_game_room::InGameRoomStore::default();
 
             let game_service = GameService::new(db.clone());
             let player_service = PlayerService::new(db.clone());
@@ -98,8 +216,8 @@ pub fn run() {
             }
 
             // XingShu Core Subsystems: Bridge, Spectator, Package Manager
-            let offline_replay = std::env::var("XINGSHU_OFFLINE_REPLAY").is_ok()
-                || std::env::args().any(|arg| arg == "--offline-replay");
+            let offline_replay = cfg!(debug_assertions) && (std::env::var("XINGSHU_OFFLINE_REPLAY").is_ok()
+                || std::env::args().any(|arg| arg == "--offline-replay"));
             let bridge_server = if offline_replay {
                 info!("XingShu Hub starting in OFFLINE REPLAY mode (test security policy enabled)");
                 Arc::new(BridgeServer::new_test())
@@ -108,9 +226,14 @@ pub fn run() {
             };
             bridge_server.set_game_library_store(game_library_store.clone());
             bridge_server.set_game_replay_store(game_replay_store.clone());
+            bridge_server.set_room_auto_enter_store(room_auto_enter_store.clone());
+            bridge_server.set_in_game_room_store(in_game_room_store.clone());
             app.manage(game_replay_store);
-            bridge_server.start().map_err(|e| format!("Failed to start XingShu Bridge production server: {}", e))?;
+            app.manage(room_auto_enter_store);
             bridge_server.set_app_handle(app_handle.clone());
+            if let Err(error) = bridge_server.start() {
+                tracing::warn!(%error, "Local bridge unavailable; continuing launcher startup");
+            }
             let spectator_service = Arc::new(SpectatorService::new(bridge_server.clone()));
             spectator_service.set_app_handle(app_handle.clone());
             spectator_service.start_snapshot_listener();
@@ -128,6 +251,7 @@ pub fn run() {
             // Manage services in Tauri state
             app.manage(game_service);
             app.manage(extension_center::ExtensionCenter { db: db.clone() });
+            app.manage(in_game_room_store);
             app.manage(android_installer::AndroidInstaller::default());
             app.manage(app_update::AppUpdater::default());
             app.manage(account_login::AccountLogin::default());
@@ -163,18 +287,19 @@ pub fn run() {
                 info!("XingShu Hub received CLI startup route: {}", rt);
             }
 
-            let startup_eval = parse_eval_from_args(std::env::args());
+            let startup_eval = cfg!(debug_assertions).then(|| parse_eval_from_args(std::env::args())).flatten();
 
             if let Some(main_win) = app.get_webview_window("main") {
                 let title = match startup_locale.as_deref() {
-                    Some("en-US") => "XingShu Hub",
-                    _ => "星枢 Hub",
+                    Some("en-US") => "XingShu Launcher",
+                    _ => "星枢启动器",
                 };
                 let _ = main_win.set_title(title);
                 if offline_replay {
                     let _ = main_win.eval("window.__OFFLINE_REPLAY__ = true;");
                 }
                 if let Some(ref script) = startup_eval {
+                    let _ = main_win.eval("sessionStorage.setItem('xingshu.launcher.splashPlayed', '1');");
                     let _ = main_win.eval(script);
                 }
             }
@@ -182,10 +307,24 @@ pub fn run() {
             app.manage(StartupLocale::new(startup_locale));
             app.manage(StartupRoute::new(startup_route));
 
+            let splash_active = Arc::new(AtomicBool::new(true));
+            let splash_gen = Arc::new(AtomicU64::new(1));
+            app.manage(SplashState {
+                active: splash_active.clone(),
+                generation: splash_gen.clone(),
+            });
+
+            if offline_replay || startup_eval.is_some() || app.get_webview_window("splash").is_none() {
+                reveal_main_and_close_splash(&app_handle);
+            } else {
+                spawn_splash_watchdog(app_handle.clone(), splash_active, splash_gen, 1);
+            }
+
             info!("XingShu Hub state and services successfully registered.");
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+        let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             account_login::get_cloud_account,
             account_login::get_cloud_game_library,
             account_login::sync_cloud_game_library,
@@ -196,12 +335,23 @@ pub fn run() {
             account_login::start_channel_cloud_login,
             account_login::complete_qq_channel_login,
             account_login::logout_cloud_account,
+            account_login::account_room_catalog,
+            account_login::account_room_current,
+            account_login::account_room_create,
+            account_login::account_room_update,
+            account_login::account_room_kick,
+            account_login::account_room_exit,
+            account_login::account_room_lobby,
+            account_login::account_room_search,
             account_login::cloud_hand_sync::cloud_hand_sync_status,
             account_login::cloud_hand_sync::set_cloud_hand_sync,
             game_library::get_game_library,
             game_library::sync_game_library,
             game_replay::request_game_replay,
             game_replay::get_game_replay_status,
+            room_auto_enter::arm_room_auto_enter,
+            room_auto_enter::clear_room_auto_enter,
+            room_auto_enter::get_room_auto_enter_status,
             game_library::get_game_match_detail,
             game_library::request_game_match_detail,
             // Game commands
@@ -221,11 +371,16 @@ pub fn run() {
             dropped_mods::inspect_dropped_mod,
             dropped_mods::install_dropped_mod,
             dropped_mods::restore_dropped_mod,
+            dropped_mods::toggle_dropped_mod,
             dropped_mods::list_dropped_mods,
             dropped_mods::stage_dropped_mod_bytes,
+            dropped_mods::stage_dropped_mod_raw,
             workshop::workshop_list_local_state,
             workshop::workshop_download_and_install,
             workshop::workshop_restore_mod,
+            workshop::workshop_toggle_mod,
+            mod_inspector::get_encyclopedia_mod_overrides,
+            mod_inspector::get_mod_texture_preview,
             app_update::get_app_build,
             app_update::check_app_update,
             app_update::prepare_app_update,
@@ -272,9 +427,55 @@ pub fn run() {
             verify_xspkg,
             get_startup_locale,
             get_startup_route,
+            finish_splash_and_show_main,
+            get_startup_splash_active,
+            replay_startup_splash,
             check_game_process_status,
             launch_game_uri,
-        ])
+            launcher::launcher_check,
+            launcher::launcher_session,
+            launcher::launcher_install,
+            launcher::launcher_inspect_conflicts,
+            launcher::launcher_restore,
+            launcher::launcher_start,
+            launcher::launcher_mods,
+            launcher::launcher_change_mod,
+            launcher::launcher_toggle_mod,
+            launcher::launcher_install_all_official_mods,
+            launcher::launcher_uninstall_all_official_mods,
+            launcher::launcher_open_mods_dir,
+            in_game_room::in_game_room_state,
+            in_game_room::in_game_room_create,
+            in_game_room::in_game_room_modify,
+            in_game_room::in_game_room_start,
+            in_game_room::in_game_room_kick,
+            in_game_room::in_game_room_exit,
+            module_panel::open_module_panel,
+            module_panel::module_panel_set_expanded,
+            module_panel::module_panel_state,
+            module_panel::module_panel_snapshot,
+            module_panel::module_panel_toggle,
+            module_panel::module_panel_open_main,
+            module_panel::module_panel_manage,
+        ];
+        move |invoke| {
+            let label = invoke.message.webview_ref().label();
+            let panel_command = label == module_panel::LABEL && matches!(invoke.message.command(),
+                "module_panel_set_expanded"
+                    | "module_panel_state"
+                    | "module_panel_snapshot"
+                    | "module_panel_toggle"
+                    | "module_panel_open_main"
+                    | "module_panel_manage"
+            );
+            if label == "main" || (label == "splash" && invoke.message.command() == "finish_splash_and_show_main") || panel_command {
+                handler(invoke)
+            } else {
+                invoke.resolver.reject("该窗口无权执行此操作。");
+                true
+            }
+        }
+        })
         .run(tauri::generate_context!())
         .expect("error while running XingShu Hub application");
 }

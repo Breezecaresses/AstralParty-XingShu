@@ -721,6 +721,12 @@ namespace XingShu.Bridge
                 case "GAME_LIBRARY_REQUEST":
                 case "GAME_LIBRARY_MATCH_REQUEST":
                 case "GAME_REPLAY_REQUEST":
+                case "ROOM_AUTO_ENTER":
+                case "ROOM_IN_GAME_CREATE":
+                case "ROOM_IN_GAME_MODIFY":
+                case "ROOM_IN_GAME_START":
+                case "ROOM_IN_GAME_KICK":
+                case "ROOM_IN_GAME_EXIT":
                 case BridgeProtocol.TypeWatchTarget:
                     Log(string.Format("[XingShuBridgeClient] 收到 Hub 指令 {0}: reqId='{1}'", env.messageType, env.requestId));
                     // Receiving a command is not evidence of joining. Unity executes it on Update.

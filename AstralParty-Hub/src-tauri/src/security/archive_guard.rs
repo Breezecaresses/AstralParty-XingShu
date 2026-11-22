@@ -2,6 +2,7 @@ use std::fs::File;
 use std::path::Path;
 use zip::ZipArchive;
 use crate::domain::error::{HubError, HubResult};
+use crate::security::path_guard::PathGuard;
 
 pub struct ArchiveLimits {
     pub max_file_count: usize,
@@ -18,6 +19,13 @@ impl Default for ArchiveLimits {
             max_single_file_uncompressed_bytes: 250 * 1024 * 1024, // 250 MB
             max_compression_ratio: 50.0,
         }
+    }
+}
+
+pub fn decode_zip_entry_name(raw: &[u8]) -> String {
+    match std::str::from_utf8(raw) {
+        Ok(s) => s.to_string(),
+        Err(_) => String::from_utf8_lossy(raw).into_owned(),
     }
 }
 
@@ -51,11 +59,21 @@ impl ArchiveGuard {
 
             let size = entry.size();
             let compressed_size = entry.compressed_size();
+            let name = decode_zip_entry_name(entry.name_raw());
+            let trimmed = name.trim_matches(['/', '\\']);
+            if !trimmed.is_empty() && !entry.is_dir() {
+                PathGuard::sanitize_relative_path(&name)?;
+            } else if entry.is_dir() && (name.contains("..") || name.starts_with("\\\\") || name.contains(':')) {
+                return Err(HubError::security_violation("Path escape components are strictly prohibited."));
+            }
+            if entry.is_symlink() {
+                return Err(HubError::security_violation("安装包包含不受支持的符号链接。"));
+            }
 
             if size > limits.max_single_file_uncompressed_bytes {
                 return Err(HubError::security_violation(format!(
                     "Archive file '{}' exceeds maximum allowed single file size ({} bytes)",
-                    entry.name(),
+                    name,
                     size
                 )));
             }

@@ -1,258 +1,353 @@
-export type RoomMode = 'PVE' | 'PVP' | 'COOP_EVENT' | 'SELF_HOSTED';
-export type HostTarget = 'OFFICIAL' | 'SELF_HOSTED';
-export type ThinkTime = '快' | '中' | '慢';
-export type RoomPrivacy = 'PUBLIC' | 'FRIENDS' | 'PASSWORD';
-export type RoomPreviewStatus = 'IDLE' | 'RECRUITING' | 'READY_FULL';
+export interface RoomLabelOption {
+  id: number;
+  label: string;
+  enLabel: string;
+}
 
-export const OFFICIAL_DIFFICULTIES = ['普通', '困难', '噩梦', '疯狂', '极限'] as const;
-export const THINK_TIME_OPTIONS: ThinkTime[] = ['快', '中', '慢'];
-export const ROOM_TAG_OPTIONS = ['休闲', '速刷', '冲刺', '教学', '娱乐'] as const;
-
-export const ZERO_YIELD_NOTICE_ZH =
-  '0 收益（服务器自托管托管模式 / 娱乐演练：不结算官方经验、星币、角色好感或任务进度）';
-export const ZERO_YIELD_NOTICE_EN =
-  '0 Yield (Self-Hosted Server / Sandbox Mode: no official EXP, Star Coins, Bond, or Mission progress)';
-
-export interface RoomMapOption {
+export interface OfficialModeSpec {
   id: number;
   name: string;
   enName: string;
-  mode: RoomMode;
-  difficulties: string[];
-  officialAvailable: boolean;
+  kind: 'pve' | 'pvp';
+  seasonal?: boolean;
+  officialOpen?: boolean;
+  openNote?: string;
+  hasDifficulty: boolean;
+  hasUpgrade: boolean;
+  defaultUpgrade: number;
+  labels: RoomLabelOption[];
 }
 
-export interface SquadSlot {
-  seat: 1 | 2 | 3 | 4;
-  occupied: boolean;
-  isHost: boolean;
-  isSelf?: boolean;
-  playerName: string;
-  uid: string;
-  characterName: string;
-  characterTitle: string;
-  ready: boolean;
+export interface OfficialMapSpec {
+  id: number;
+  modeId: number;
+  name: string;
+  enName: string;
+  hasStory: boolean;
 }
 
-export interface RoomConfigDraft {
-  hostTarget: HostTarget;
-  mode: RoomMode;
+export interface OfficialRoomDraft {
+  modeId: number;
   mapId: number;
-  difficulty: string;
-  thinkTime: ThinkTime;
-  roomTag: string;
-  maxPlayers: 2 | 3 | 4;
-  privacy: RoomPrivacy;
-  password: string;
+  difficulty: number;
+  upgradePlan: number;
+  timePlan: number;
+  speedType: number;
+  roomLabel: number;
+  skipStory: boolean;
   roomName: string;
-  note: string;
+  password: string;
 }
 
-export interface RoomPreviewSnapshot {
-  roomCode: string;
-  status: RoomPreviewStatus;
-  config: RoomConfigDraft;
-  slots: SquadSlot[];
-  updatedAtLabel: string;
+export interface OfficialRoomPlayer {
+  playerId: string;
+  name: string;
+  slot: number;
+  level: number;
+  ready: boolean;
+  isHost: boolean;
+  offline: boolean;
 }
 
-export const ROOM_MAPS: RoomMapOption[] = [
-  // PVE 合作（官方现役，按官方 4/5 档难度映射）
-  { id: 82007, name: '星趴·梦想号', enName: 'Astral Express: Dream', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂', '极限'], officialAvailable: true },
-  { id: 82008, name: '御魂庆典', enName: 'Mitama Festival', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂', '极限'], officialAvailable: true },
-  { id: 82010, name: '水乡古镇', enName: 'Water Town', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂', '极限'], officialAvailable: true },
-  { id: 82013, name: '龙宫游乐园', enName: 'Dragon Palace', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂'], officialAvailable: true },
-  { id: 82014, name: '幽魂暗巷', enName: 'Phantom Alley', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂'], officialAvailable: true },
-  { id: 82015, name: '园林中庭', enName: 'Garden Courtyard', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂'], officialAvailable: true },
-  { id: 82016, name: '异变图书馆', enName: 'Anomaly Library', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂'], officialAvailable: true },
-  { id: 82017, name: '森秋幻境', enName: 'Autumn Forest', mode: 'PVE', difficulties: ['普通', '困难', '噩梦', '疯狂'], officialAvailable: true },
-  // PVP 对战（官方现役）
-  { id: 81003, name: '游乐园', enName: 'Amusement Park', mode: 'PVP', difficulties: [], officialAvailable: true },
-  { id: 81005, name: '樱花小镇', enName: 'Sakura Town', mode: 'PVP', difficulties: [], officialAvailable: true },
-  { id: 81004, name: '十字路口站', enName: 'Crossroad Station', mode: 'PVP', difficulties: [], officialAvailable: true },
-  { id: 81006, name: '魅影都市', enName: 'Phantom City', mode: 'PVP', difficulties: [], officialAvailable: true },
-  { id: 81007, name: '梦想号-上层甲板', enName: 'Dream Upper Deck', mode: 'PVP', difficulties: [], officialAvailable: true },
-  { id: 81011, name: '丛林冒险', enName: 'Jungle Adventure', mode: 'PVP', difficulties: [], officialAvailable: true },
-  // 合作活动（游戏内暂未开放 / 绝版限时，归类为 0 收益自托管）
-  { id: 82009, name: '礼物广场', enName: 'Gift Plaza', mode: 'COOP_EVENT', difficulties: [], officialAvailable: false },
-  { id: 82012, name: '魔法学院', enName: 'Magic Academy', mode: 'COOP_EVENT', difficulties: [], officialAvailable: false },
-  { id: 83001, name: '海选赛运动场', enName: 'Qualifier Stadium', mode: 'COOP_EVENT', difficulties: [], officialAvailable: false },
-  { id: 83002, name: '淘汰赛运动场', enName: 'Knockout Stadium', mode: 'COOP_EVENT', difficulties: [], officialAvailable: false },
-  { id: 83003, name: '决赛大赛场', enName: 'Finals Arena', mode: 'COOP_EVENT', difficulties: [], officialAvailable: false },
-  // 星枢自托管模式（自定义 / 绝版复刻演练，0 收益）
-  { id: 99001, name: '星枢自定义沙盒场', enName: 'XingShu Custom Sandbox', mode: 'SELF_HOSTED', difficulties: ['普通', '困难', '噩梦', '疯狂', '极限'], officialAvailable: false },
-  { id: 99002, name: '绝版活动复刻演练', enName: 'Retired Event Replay', mode: 'SELF_HOSTED', difficulties: ['普通', '困难', '噩梦', '疯狂'], officialAvailable: false },
+export interface ActiveOfficialRoom {
+  roomId: string;
+  name: string;
+  mode: number;
+  modeName: string;
+  mapId: number;
+  mapName: string;
+  difficulty: number;
+  difficultyName: string;
+  timePlan: number;
+  timePlanName: string;
+  speedType: number;
+  speedName: string;
+  upgradePlan: number;
+  upgradeName: string;
+  roomLabel: number;
+  roomLabelName: string;
+  skipStory: boolean;
+  hasPwd: boolean;
+  pwd?: string;
+  masterId: string;
+  playerCount: number;
+  maxPlayers: number;
+  status: string;
+  handedOff: boolean;
+  message: string;
+  ttlSecondsRemaining: number;
+  canUpdate: boolean;
+  canKick: boolean;
+  players: OfficialRoomPlayer[];
+}
+
+export interface LobbyRoomSummary {
+  roomId: string;
+  name: string;
+  mode: number;
+  modeName: string;
+  mapId: number;
+  mapName: string;
+  masterId: string;
+  playerCount: number;
+  maxPlayers: number;
+  hasPwd: boolean;
+  timePlanName: string;
+  speedName: string;
+  difficultyName: string;
+  roomLabelName: string;
+}
+
+export const OFFICIAL_MODES: OfficialModeSpec[] = [
+  {
+    id: 4,
+    name: '合作挑战',
+    enName: 'Co-op Challenge',
+    kind: 'pve',
+    seasonal: false,
+    officialOpen: true,
+    hasDifficulty: true,
+    hasUpgrade: false,
+    defaultUpgrade: 4,
+    labels: [
+      { id: 0, label: '无标签', enLabel: 'No Tag' },
+      { id: 1, label: '完成任务', enLabel: 'Quests' },
+      { id: 2, label: '快速通关', enLabel: 'Speedrun' },
+      { id: 3, label: '新手局', enLabel: 'Casual' },
+      { id: 4, label: '高端局', enLabel: 'Veteran' },
+    ],
+  },
+  {
+    id: 1,
+    name: '标准模式',
+    enName: 'Standard PvP',
+    kind: 'pvp',
+    seasonal: false,
+    officialOpen: true,
+    hasDifficulty: false,
+    hasUpgrade: true,
+    defaultUpgrade: 1,
+    labels: [
+      { id: 0, label: '无标签', enLabel: 'No Tag' },
+      { id: 1, label: '新手局', enLabel: 'Casual' },
+      { id: 2, label: '高端局', enLabel: 'Veteran' },
+    ],
+  },
+  {
+    id: 3,
+    name: '激战模式',
+    enName: 'Fierce Battle',
+    kind: 'pvp',
+    seasonal: true,
+    openNote: '官方限时活动，仅活动开放期内可建房',
+    hasDifficulty: false,
+    hasUpgrade: true,
+    defaultUpgrade: 1,
+    labels: [
+      { id: 0, label: '无标签', enLabel: 'No Tag' },
+      { id: 1, label: '新手局', enLabel: 'Casual' },
+      { id: 2, label: '高端局', enLabel: 'Veteran' },
+    ],
+  },
+  {
+    id: 7,
+    name: '礼物大作战',
+    enName: 'Gift Battle',
+    kind: 'pvp',
+    seasonal: true,
+    openNote: '官方限时活动，仅活动开放期内可建房',
+    hasDifficulty: false,
+    hasUpgrade: false,
+    defaultUpgrade: 1,
+    labels: [
+      { id: 0, label: '无标签', enLabel: 'No Tag' },
+      { id: 1, label: '新手局', enLabel: 'Casual' },
+      { id: 2, label: '高端局', enLabel: 'Veteran' },
+    ],
+  },
+  {
+    id: 11,
+    name: '幸运星争夺战',
+    enName: 'Lucky Star',
+    kind: 'pvp',
+    seasonal: true,
+    openNote: '官方限时活动，仅活动开放期内可建房',
+    hasDifficulty: false,
+    hasUpgrade: true,
+    defaultUpgrade: 6,
+    labels: [
+      { id: 0, label: '无标签', enLabel: 'No Tag' },
+      { id: 1, label: '新手局', enLabel: 'Casual' },
+      { id: 2, label: '高端局', enLabel: 'Veteran' },
+    ],
+  },
+  {
+    id: 12,
+    name: '畸变组件',
+    enName: 'Anomaly Trial',
+    kind: 'pve',
+    seasonal: true,
+    openNote: '官方限时活动，仅活动开放期内可建房',
+    hasDifficulty: true,
+    hasUpgrade: false,
+    defaultUpgrade: 4,
+    labels: [
+      { id: 0, label: '无标签', enLabel: 'No Tag' },
+      { id: 1, label: '完成任务', enLabel: 'Quests' },
+      { id: 2, label: '快速通关', enLabel: 'Speedrun' },
+      { id: 3, label: '新手局', enLabel: 'Casual' },
+      { id: 4, label: '高端局', enLabel: 'Veteran' },
+    ],
+  },
 ];
 
-export const SAMPLE_CHARACTERS = [
-  { name: '帕露南', title: '商业之主' },
-  { name: '姬梦枫', title: '苍蓝之星' },
-  { name: '米米', title: '爆破专家' },
-  { name: '恋', title: '命运骰手' },
-  { name: '南希露', title: '暗影游侠' },
-  { name: '美咲', title: '疾风剑士' },
+export const OFFICIAL_MAPS: OfficialMapSpec[] = [
+  // 模式 4 合作挑战（含线上实测存在的 82017 森秋幻境）
+  { id: 82017, modeId: 4, name: '森秋幻境', enName: 'Autumn Forest', hasStory: false },
+  { id: 82016, modeId: 4, name: '异变图书馆', enName: 'Anomaly Library', hasStory: false },
+  { id: 82015, modeId: 4, name: '园林中庭', enName: 'Garden Courtyard', hasStory: true },
+  { id: 82014, modeId: 4, name: '幽魂暗巷', enName: 'Phantom Alley', hasStory: false },
+  { id: 82013, modeId: 4, name: '龙宫游乐园', enName: 'Dragon Palace', hasStory: true },
+  { id: 82012, modeId: 4, name: '魔法学院', enName: 'Magic Academy', hasStory: false },
+  { id: 82010, modeId: 4, name: '水乡古镇', enName: 'Water Town', hasStory: false },
+  { id: 82008, modeId: 4, name: '御魂庆典', enName: 'Mitama Festival', hasStory: false },
+  { id: 82007, modeId: 4, name: '星趴·梦想号', enName: 'Astral Express: Dream', hasStory: false },
+  // 模式 1 标准模式
+  { id: 81003, modeId: 1, name: '游乐园', enName: 'Amusement Park', hasStory: false },
+  { id: 81005, modeId: 1, name: '樱花小镇', enName: 'Sakura Town', hasStory: false },
+  { id: 81004, modeId: 1, name: '十字路口站', enName: 'Crossroad Station', hasStory: false },
+  { id: 81006, modeId: 1, name: '魅影都市', enName: 'Phantom City', hasStory: false },
+  { id: 81011, modeId: 1, name: '丛林冒险', enName: 'Jungle Adventure', hasStory: false },
+  // 模式 3 激战模式
+  { id: 81003, modeId: 3, name: '游乐园', enName: 'Amusement Park', hasStory: false },
+  { id: 81005, modeId: 3, name: '樱花小镇', enName: 'Sakura Town', hasStory: false },
+  { id: 81004, modeId: 3, name: '十字路口站', enName: 'Crossroad Station', hasStory: false },
+  { id: 81006, modeId: 3, name: '魅影都市', enName: 'Phantom City', hasStory: false },
+  { id: 81011, modeId: 3, name: '丛林冒险', enName: 'Jungle Adventure', hasStory: false },
+  // 模式 7 礼物大作战
+  { id: 82009, modeId: 7, name: '礼物广场', enName: 'Gift Plaza', hasStory: false },
+  // 模式 11 幸运星争夺战
+  { id: 81007, modeId: 11, name: '梦想号-上层甲板', enName: 'Dream Upper Deck', hasStory: false },
+  // 模式 12 畸变组件
+  { id: 83001, modeId: 12, name: '海选赛运动场', enName: 'Qualifier Stadium', hasStory: false },
+  { id: 83002, modeId: 12, name: '淘汰赛运动场', enName: 'Knockout Stadium', hasStory: false },
+  { id: 83003, modeId: 12, name: '决赛大赛场', enName: 'Finals Arena', hasStory: false },
 ];
 
-export const ROOM_TITLE_PRESETS = [
-  '日常刷本速车 · 来不抢输出',
-  '萌新友好教学 · 欢迎上麦',
-  '高难冲层车 · 自备满配芯片',
-  '自托管 0收益娱乐局 · 拒绝压力怪',
-];
+export const DIFFICULTY_OPTIONS = [
+  { id: 0, label: '普通', enLabel: 'Normal' },
+  { id: 1, label: '困难', enLabel: 'Hard' },
+  { id: 2, label: '噩梦', enLabel: 'Nightmare' },
+  { id: 3, label: '疯狂', enLabel: 'Insane' },
+] as const;
 
-export function createDefaultDraft(): RoomConfigDraft {
+export const THINK_TIME_OPTIONS = [
+  { id: 1, label: '短', enLabel: 'Fast' },
+  { id: 2, label: '中', enLabel: 'Medium' },
+  { id: 3, label: '长', enLabel: 'Slow' },
+] as const;
+
+export const SPEED_OPTIONS = [
+  { id: 1, label: '普通', enLabel: 'Normal' },
+  { id: 2, label: '快速', enLabel: 'Fast' },
+] as const;
+
+export const UPGRADE_PLAN_OPTIONS = [
+  { id: 1, label: '简单 (15/30/50)', enLabel: 'Simple (15/30/50)' },
+  { id: 2, label: '普通 (20/40/60)', enLabel: 'Normal (20/40/60)' },
+  { id: 3, label: '困难 (20/40/70)', enLabel: 'Hard (20/40/70)' },
+] as const;
+
+export function createDefaultOfficialDraft(): OfficialRoomDraft {
   return {
-    hostTarget: 'OFFICIAL',
-    mode: 'PVE',
-    mapId: 82007,
-    difficulty: '噩梦',
-    thinkTime: '中',
-    roomTag: '速刷',
-    maxPlayers: 4,
-    privacy: 'PASSWORD',
-    password: '2580',
-    roomName: '日常刷本速车 · 来不抢输出',
-    note: '可语音可打字，缺一辅助位',
+    modeId: 4,
+    mapId: 82016,
+    difficulty: 2,
+    upgradePlan: 1,
+    timePlan: 2,
+    speedType: 2,
+    roomLabel: 0,
+    skipStory: false,
+    roomName: '',
+    password: '',
   };
 }
 
-export function getMapById(mapId: number): RoomMapOption {
-  return ROOM_MAPS.find((m) => m.id === mapId) ?? ROOM_MAPS[0];
+export function getModeSpec(modeId: number): OfficialModeSpec {
+  return OFFICIAL_MODES.find((m) => m.id === modeId) ?? OFFICIAL_MODES[0];
 }
 
-export function isSelfHostedZeroYield(config: Pick<RoomConfigDraft, 'hostTarget' | 'mapId' | 'mode'>): boolean {
-  const map = getMapById(config.mapId);
-  return config.hostTarget === 'SELF_HOSTED' || !map.officialAvailable || config.mode === 'COOP_EVENT' || config.mode === 'SELF_HOSTED';
+export function getMapsForMode(modeId: number): OfficialMapSpec[] {
+  return OFFICIAL_MAPS.filter((m) => m.modeId === modeId);
 }
 
-export function sanitizeNumericPassword(raw: string): string {
-  return raw.replace(/\D+/g, '').slice(0, 6);
+export function getMapForMode(modeId: number, mapId: number): OfficialMapSpec {
+  const maps = getMapsForMode(modeId);
+  return maps.find((m) => m.id === mapId) ?? maps[0] ?? OFFICIAL_MAPS[0];
 }
 
-export function effectivePrivacy(config: Pick<RoomConfigDraft, 'privacy' | 'password'>): RoomPrivacy {
-  if (config.privacy === 'PASSWORD' && sanitizeNumericPassword(config.password).length === 0) {
-    return 'PUBLIC';
-  }
-  return config.privacy;
+export function sanitizeRoomPassword(raw: string): string {
+  return raw.replace(/[\r\n\t]+/g, '').trim().slice(0, 12);
 }
 
-export function buildPaKaiFangCommand(draft: RoomConfigDraft): string {
-  const map = getMapById(draft.mapId);
-  const modeToken =
-    draft.mode === 'COOP_EVENT'
-      ? '活动'
-      : draft.mode === 'SELF_HOSTED'
-        ? '自托管'
-        : draft.mode;
-  const parts = ['趴开房', modeToken, map.name];
-  if (draft.difficulty && map.difficulties.length > 0) {
-    parts.push(draft.difficulty);
-  }
-  parts.push(`思考:${draft.thinkTime}`);
-  if (draft.roomTag.trim()) {
-    parts.push(`标签:${draft.roomTag.trim()}`);
-  }
-  parts.push(`${draft.maxPlayers}人`);
-  const cleanPwd = sanitizeNumericPassword(draft.password);
-  const privacy = effectivePrivacy(draft);
-  if (privacy === 'FRIENDS') {
-    parts.push('仅好友');
-  } else if (privacy === 'PASSWORD') {
-    parts.push(`密码:${cleanPwd}`);
-  } else {
-    parts.push('公开');
-  }
-  if (isSelfHostedZeroYield(draft)) {
-    parts.push('自托管0收益');
-  }
-  if (draft.roomName.trim()) {
-    parts.push(draft.roomName.trim());
-  }
-  return parts.join(' ');
-}
-
-export function buildSlotsForStatus(status: RoomPreviewStatus, maxPlayers: 2 | 3 | 4): SquadSlot[] {
-  const base: SquadSlot[] = [
-    {
-      seat: 1,
-      occupied: status !== 'IDLE',
-      isHost: status !== 'IDLE',
-      isSelf: status !== 'IDLE',
-      playerName: '星枢旅人',
-      uid: '10482910',
-      characterName: '帕露南',
-      characterTitle: '商业之主',
-      ready: status !== 'IDLE',
-    },
-    {
-      seat: 2,
-      occupied: status === 'RECRUITING' || status === 'READY_FULL',
-      isHost: false,
-      playerName: '枫糖布丁',
-      uid: '10938421',
-      characterName: '姬梦枫',
-      characterTitle: '苍蓝之星',
-      ready: true,
-    },
-    {
-      seat: 3,
-      occupied: status === 'READY_FULL',
-      isHost: false,
-      playerName: '夜风星愿',
-      uid: '11209344',
-      characterName: '米米',
-      characterTitle: '爆破专家',
-      ready: status === 'READY_FULL',
-    },
-    {
-      seat: 4,
-      occupied: status === 'READY_FULL' && maxPlayers >= 4,
-      isHost: false,
-      playerName: '晚安星海',
-      uid: '11890452',
-      characterName: '恋',
-      characterTitle: '命运骰手',
-      ready: status === 'READY_FULL',
-    },
-  ];
-
-  return base.map((slot) => {
-    if (slot.seat > maxPlayers) {
-      return {
-        ...slot,
-        occupied: false,
-        isHost: false,
-        isSelf: false,
-        playerName: '',
-        uid: '',
-        characterName: '',
-        characterTitle: '',
-        ready: false,
-      };
-    }
-    if (!slot.occupied) {
-      return {
-        ...slot,
-        isHost: false,
-        isSelf: false,
-        playerName: '',
-        uid: '',
-        characterName: '',
-        characterTitle: '',
-        ready: false,
-      };
-    }
-    return slot;
-  });
-}
-
-export function createInitialRoomSnapshot(): RoomPreviewSnapshot {
-  const config = createDefaultDraft();
+export function applyModeSelection(prev: OfficialRoomDraft, modeId: number): OfficialRoomDraft {
+  const spec = getModeSpec(modeId);
+  const maps = getMapsForMode(spec.id);
+  const firstMap = maps[0];
+  const validLabel = spec.labels.some((l) => l.id === prev.roomLabel) ? prev.roomLabel : 0;
   return {
-    roomCode: '849206',
-    status: 'RECRUITING',
-    config,
-    slots: buildSlotsForStatus('RECRUITING', config.maxPlayers),
-    updatedAtLabel: '刚刚 · 模板预览态',
+    ...prev,
+    modeId: spec.id,
+    mapId: firstMap ? firstMap.id : prev.mapId,
+    upgradePlan: spec.hasUpgrade ? prev.upgradePlan : spec.defaultUpgrade,
+    roomLabel: validLabel,
+    skipStory: Boolean(firstMap?.hasStory && prev.skipStory),
   };
+}
+
+export function buildCreateRoomPayload(
+  draft: OfficialRoomDraft,
+  confirmSessionSwitch = false,
+): Record<string, unknown> {
+  const mode = getModeSpec(draft.modeId);
+  const map = getMapForMode(mode.id, draft.mapId);
+  const payload: Record<string, unknown> = {
+    mode: mode.id,
+    mapId: map.id,
+    timePlan: draft.timePlan,
+    speedType: draft.speedType,
+    roomLabel: draft.roomLabel,
+    pwd: sanitizeRoomPassword(draft.password),
+  };
+  if (mode.hasDifficulty) {
+    payload.difficulty = Math.max(0, Math.min(3, Math.trunc(draft.difficulty)));
+  } else if (mode.hasUpgrade) {
+    payload.upgradePlan = draft.upgradePlan;
+  }
+  if (map.hasStory) {
+    payload.skipStory = Boolean(draft.skipStory);
+  }
+  const cleanName = draft.roomName.trim().slice(0, 36);
+  if (cleanName) {
+    payload.name = cleanName;
+  }
+  if (confirmSessionSwitch) {
+    payload.confirm_session_switch = true;
+  }
+  return payload;
+}
+
+export function buildInviteCopyText(room: ActiveOfficialRoom, zh: boolean): string {
+  const parts = [room.modeName || `模式#${room.mode}`, room.mapName || `地图#${room.mapId}`];
+  if (room.difficultyName) parts.push(room.difficultyName);
+  if (room.upgradeName) parts.push(room.upgradeName);
+  if (room.speedName) parts.push(`${room.speedName}局`);
+  if (room.timePlanName) parts.push(zh ? `思考${room.timePlanName}` : `Think:${room.timePlanName}`);
+  if (room.roomLabelName && room.roomLabelName !== '无标签') parts.push(`[${room.roomLabelName}]`);
+  const pwdPart = room.hasPwd
+    ? (room.pwd ? (zh ? `｜密码 ${room.pwd}` : ` | Pass ${room.pwd}`) : (zh ? '｜私密房间' : ' | Locked'))
+    : (zh ? '｜公开房间' : ' | Public');
+  return zh
+    ? `【星枢 · 趴开房】房号 #${room.roomId}｜${parts.join(' · ')}${pwdPart}｜当前 ${room.playerCount}/${room.maxPlayers} 人｜QQ 可发「趴加入 ${room.roomId}」查看`
+    : `[XingShu Room] #${room.roomId} | ${parts.join(' · ')}${pwdPart} | ${room.playerCount}/${room.maxPlayers} players`;
 }

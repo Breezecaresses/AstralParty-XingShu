@@ -6,7 +6,9 @@ use crate::{
         installation::GameInstallation,
     },
     extension_center::{game_root, get_game, ExtensionCenter},
+    mod_resources::{self, SwitchFile, target_key},
     security::{hash::compute_file_sha256 as hash, path_guard::PathGuard},
+    workshop::WorkshopLocalItemState,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -54,6 +56,7 @@ struct ModFile {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Receipt {
+    #[serde(alias = "item_id")]
     item_id: String,
     phase: String,
 }
@@ -137,7 +140,7 @@ fn read_receipt(root: &Path, item: &ModItem) -> HubResult<Option<Receipt>> {
     let data = fs::read(&path).map_err(|e| HubError::storage_error(e.to_string()))?;
     let r: Receipt =
         serde_json::from_slice(&data).map_err(|e| HubError::storage_error(e.to_string()))?;
-    if r.item_id != item.id || !["prepared", "installed", "restored"].contains(&r.phase.as_str()) {
+    if r.item_id != item.id || !["prepared", "installed", "disabled", "restored"].contains(&r.phase.as_str()) {
         return Err(HubError::security_violation("模组收据无效。"));
     }
     Ok(Some(r))
@@ -336,6 +339,8 @@ fn report(
             "已启用 · 显示待实测"
         } else if owned {
             "文件已变化，停止操作"
+        } else if phase == Some("disabled") {
+            "已停用"
         } else if !ok {
             "此渠道/游戏版本尚未适配"
         } else if installed {
@@ -364,9 +369,8 @@ fn report(
                 && baseline
                 && payload_ready
                 && !item.files.is_empty()
-                && phase != Some("prepared")
-                && !owned,
-            can_restore: matches!(phase, Some("installed" | "prepared")),
+                && !matches!(phase, Some("installed" | "prepared" | "disabled")),
+            can_restore: matches!(phase, Some("installed" | "prepared" | "disabled")),
         });
     }
     Ok(ModReport{game_path:root.display().to_string(),library_path:lib.map(|p|p.display().to_string()),compatible:ok,
@@ -400,6 +404,9 @@ fn restore(root: &Path, item: &ModItem) -> HubResult<()> {
         .ok_or_else(|| HubError::storage_error("没有本条目的安装前备份。"))?;
     if receipt.phase == "restored" {
         return Ok(());
+    }
+    if receipt.phase == "disabled" {
+        return save_receipt(root, item, "restored");
     }
     let dir = state_dir(root, item)?;
     // Preflight the entire transaction before changing even one target.
@@ -447,6 +454,70 @@ pub(crate) fn restore_item_by_id(root: &Path, item_id: &str) -> HubResult<()> {
         .ok_or_else(|| HubError::invalid_manifest("未知内置模组条目。"))?;
     restore(root, item)
 }
+
+fn local_state(item: &ModItem, phase: String) -> WorkshopLocalItemState {
+    WorkshopLocalItemState {
+        mod_id: item.id.clone(),
+        name: item.name.clone(),
+        source: "library".into(),
+        install_kind: "bundle_mod".into(),
+        phase,
+        linked_drop_id: None,
+        transaction_id: None,
+        downloaded_path: None,
+        can_restore: true,
+    }
+}
+
+pub(crate) fn list_managed_library(root: &Path) -> HubResult<Vec<WorkshopLocalItemState>> {
+    Ok(catalog()?.items.iter().filter_map(|item| {
+        read_receipt(root, item).ok().flatten()
+            .filter(|receipt| receipt.phase != "restored")
+            .map(|receipt| local_state(item, receipt.phase))
+    }).collect())
+}
+
+pub(crate) fn toggle_managed_library(
+    game: &GameInstallation,
+    root: &Path,
+    item_id: &str,
+    enabled: bool,
+) -> HubResult<WorkshopLocalItemState> {
+    let c = catalog()?;
+    let item = c.items.iter().find(|item| item.id == item_id)
+        .ok_or_else(|| HubError::invalid_manifest("未找到可启停的本地模组库条目。"))?;
+    let receipt = read_receipt(root, item)?
+        .ok_or_else(|| HubError::storage_error("没有此模组的安装记录。"))?;
+    let phase = if enabled { "installed" } else { "disabled" };
+    if receipt.phase == phase {
+        return Ok(local_state(item, receipt.phase));
+    }
+    if !matches!(receipt.phase.as_str(), "installed" | "disabled") {
+        return Err(HubError::invalid_manifest("请先还原上次未完成的模组操作。"));
+    }
+    if enabled {
+        if !compatible(root, game, &c)? {
+            return Err(HubError::invalid_manifest("此条目尚未适配所选游戏版本。"));
+        }
+        let owners = crate::dropped_mods::collect_active_target_owners(root, item_id)?;
+        if item.files.iter().any(|file| owners.contains_key(&target_key(&file.target))) {
+            return Err(HubError::security_violation("此资源由其他模组使用，请先停用冲突项。"));
+        }
+    }
+    let dir = state_dir(root, item)?;
+    let files = item.files.iter().enumerate().map(|(i, file)| {
+        Ok(SwitchFile {
+            target: target(root, file)?,
+            baseline: confined(&dir, &format!("baseline/{i}.bundle"))?,
+            payload: confined(&dir, &format!("payload/{i}.bundle"))?,
+            baseline_sha256: file.original_sha256.clone(),
+            mod_sha256: file.sha256.clone(),
+        })
+    }).collect::<HubResult<Vec<_>>>()?;
+    mod_resources::set_enabled(&files, enabled)?;
+    save_receipt(root, item, phase)?;
+    Ok(local_state(item, phase.into()))
+}
 fn install(
     game: &GameInstallation,
     root: &Path,
@@ -461,9 +532,14 @@ fn install(
     if read_receipt(root, item)?.is_some_and(|r| r.phase != "restored") {
         return Err(HubError::invalid_manifest("此条目已有安装记录，请先还原。"));
     }
+    let owners = crate::dropped_mods::collect_active_target_owners(root, &item.id)?;
     let mut unique = HashSet::new();
     for f in &item.files {
-        if !unique.insert(&f.target) {
+        let key = target_key(&f.target);
+        if owners.contains_key(&key) {
+            return Err(HubError::security_violation("此资源由其他模组使用，请先停用冲突项。"));
+        }
+        if !unique.insert(key) {
             return Err(HubError::invalid_manifest("重复的模组目标。"));
         }
         if hash(target(root, f)?)? != f.original_sha256 {
@@ -484,8 +560,8 @@ fn install(
     // Shared targets are owned by exactly one receipt, even when two payloads happen to match.
     for other in &c.items {
         if other.id != item.id
-            && other.files.iter().any(|f| unique.contains(&f.target))
-            && read_receipt(root, other)?.is_some_and(|r| r.phase != "restored")
+            && other.files.iter().any(|f| unique.contains(&target_key(&f.target)))
+            && read_receipt(root, other)?.is_some_and(|r| matches!(r.phase.as_str(), "installed" | "prepared"))
         {
             return Err(HubError::invalid_manifest(format!(
                 "目标由“{}”管理，请先还原该模组。",

@@ -193,7 +193,7 @@ final class LocalAdbInstaller implements Closeable {
         return operation("inspect", pkg);
     }
 
-    String apply(String packageName, boolean restore, String conflictHash) throws Exception {
+    String apply(String packageName, boolean restore, String conflictHash, java.io.File candidateFile, java.io.File vanillaFile) throws Exception {
         String pkg = GamePackageCatalog.requireValidPackageName(packageName);
         // Preflight before sending payloads; the engine repeats every gate before touching the target.
         String preflight = inspect(pkg);
@@ -203,10 +203,17 @@ final class LocalAdbInstaller implements Closeable {
         if (preflight.contains("同位置覆盖冲突") && conflictHash == null) {
             return "检测到同位置覆盖冲突，请先确认备份整理。\n" + preflight;
         }
+        if (!restore && (candidateFile == null || !candidateFile.isFile())) {
+            throw new IOException("缺少星枢核心运行包，请先下载完成。");
+        }
         shell("mkdir -p " + quote(LocalInstallerMain.STAGING), 20000);
         try {
-            push("vanilla.__data");
-            if (!restore) push("candidate.__data");
+            if (vanillaFile != null && vanillaFile.isFile()) {
+                pushFile(vanillaFile, "vanilla.__data");
+            }
+            if (!restore) {
+                pushFile(candidateFile, "candidate.__data");
+            }
             String op = restore ? "restore" : (conflictHash == null ? "install" : "install-conflict:" + conflictHash);
             return operation(op, pkg);
         } finally {
@@ -217,11 +224,54 @@ final class LocalAdbInstaller implements Closeable {
         }
     }
 
+    String installModPack(String packageName, String metaJson, java.io.File modZipFile) throws Exception {
+        String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+        if (modZipFile == null || !modZipFile.isFile()) {
+            throw new IOException("缺少待安装的 Mod 压缩包。");
+        }
+        String b64 = Base64.getEncoder().encodeToString(metaJson.getBytes(StandardCharsets.UTF_8));
+        shell("mkdir -p " + quote(LocalInstallerMain.STAGING), 20000);
+        try {
+            pushFile(modZipFile, "mod.zip");
+            return operation("install-mod", pkg, b64);
+        } finally {
+            try {
+                shell("rm -f " + quote(LocalInstallerMain.STAGING + "/mod.zip"), 20000);
+            } catch (Exception ignored) { }
+        }
+    }
+
+    String listInstalledMods(String packageName) throws Exception {
+        String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+        return operation("list-mods", pkg);
+    }
+
+    String removeModPack(String packageName, String modId) throws Exception {
+        String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+        if (modId == null || !modId.matches("[A-Za-z0-9._-]{1,120}")) {
+            throw new IllegalArgumentException("模组标识无效");
+        }
+        return operation("remove-mod", pkg, modId);
+    }
+
+    String setOfficialModules(String packageName, String moduleIdsCsv, boolean enable, boolean remove) throws Exception {
+        String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+        if (moduleIdsCsv == null || !moduleIdsCsv.matches("[a-z0-9,-]{1,512}")) {
+            throw new IllegalArgumentException("官方模块参数无效");
+        }
+        String mode = remove ? "remove" : (enable ? "enable" : "disable");
+        return operation("set-official-modules", pkg, mode, moduleIdsCsv);
+    }
+
     private String operation(String operation, String packageName) throws Exception {
-        return operation(operation, packageName, null);
+        return operation(operation, packageName, null, null);
     }
 
     private String operation(String operation, String packageName, String extraArg) throws Exception {
+        return operation(operation, packageName, extraArg, null);
+    }
+
+    private String operation(String operation, String packageName, String extraArg, String extraArg2) throws Exception {
         String cmd = "CLASSPATH=" + quote(context.getApplicationInfo().sourceDir)
             + " /system/bin/app_process / app.xingshu.installer.LocalInstallerMain " + quote(operation);
         if (packageName != null && !packageName.isEmpty()) {
@@ -229,6 +279,9 @@ final class LocalAdbInstaller implements Closeable {
         }
         if (extraArg != null && !extraArg.isEmpty()) {
             cmd += " " + quote(extraArg);
+        }
+        if (extraArg2 != null && !extraArg2.isEmpty()) {
+            cmd += " " + quote(extraArg2);
         }
         String output = shell(cmd, 180000);
         String marker = "XINGSHU_RESULT:";
@@ -258,20 +311,20 @@ final class LocalAdbInstaller implements Closeable {
         }
     }
 
-    private void push(String asset) throws Exception {
+    private void pushFile(java.io.File localFile, String remoteName) throws Exception {
         ScheduledFuture<?> deadline = timer.schedule(() -> {
             try { manager.disconnect(); } catch (Exception ignored) { }
-        }, 90000, TimeUnit.MILLISECONDS);
-        try (AdbStream stream = manager.openStream("sync:"); InputStream assetIn = context.getAssets().open(asset)) {
+        }, 120000, TimeUnit.MILLISECONDS);
+        try (AdbStream stream = manager.openStream("sync:"); InputStream fileIn = new java.io.FileInputStream(localFile)) {
             OutputStream out = stream.openOutputStream();
             DataInputStream reply = new DataInputStream(stream.openInputStream());
-            byte[] path = (LocalInstallerMain.STAGING + "/" + asset + ",33152").getBytes(StandardCharsets.UTF_8);
+            byte[] path = (LocalInstallerMain.STAGING + "/" + remoteName + ",33152").getBytes(StandardCharsets.UTF_8);
             packet(out, "SEND", path.length);
             out.write(path);
             out.flush();
             byte[] data = new byte[4096];
             int n;
-            while ((n = assetIn.read(data)) != -1) {
+            while ((n = fileIn.read(data)) != -1) {
                 packet(out, "DATA", n);
                 out.write(data, 0, n);
                 out.flush();

@@ -83,8 +83,8 @@ namespace XingShuRuntime.UI
             else
             {
                 _stagedBasePath = "";
-                _stagedModImgPath = "../modimg";
-                _stagedModOutPath = "../outimg";
+                _stagedModImgPath = XingShuMobileUIHelper.IsMobile ? "modimg" : "../modimg";
+                _stagedModOutPath = XingShuMobileUIHelper.IsMobile ? "outimg" : "../outimg";
                 _lastObservedLoadMod = true;
                 _lastObservedAutoDump = true;
                 _lastObservedHotkey = XingShuHotkeys.Display(XingShuShortcut.ModsPanel);
@@ -272,7 +272,7 @@ namespace XingShuRuntime.UI
                 lRt.anchorMax = Vector2.one;
                 lRt.pivot = new Vector2(0f, 0.5f);
                 lRt.offsetMin = Vector2.zero;
-                lRt.offsetMax = new Vector2(-70f, 0f);
+                lRt.offsetMax = new Vector2(-46f, 0f);
             }
             Transform bgT = toggle.transform.Find("Background");
             if (bgT != null)
@@ -282,7 +282,7 @@ namespace XingShuRuntime.UI
                 bRt.anchorMax = new Vector2(1f, 0.5f);
                 bRt.pivot = new Vector2(1f, 0.5f);
                 bRt.anchoredPosition = Vector2.zero;
-                bRt.sizeDelta = new Vector2(56f, 26f);
+                bRt.sizeDelta = new Vector2(32f, 32f);
             }
         }
 
@@ -828,7 +828,8 @@ namespace XingShuRuntime.UI
             }
             if (_basePathResolvedText != null)
             {
-                _basePathResolvedText.text = $"当前生效前缀: {effBase}" + (customBase ? " (自定义输入)" : " (留空默认 Application.dataPath)");
+                string defaultLabel = XingShuMobileUIHelper.IsMobile ? " (留空默认 persistentDataPath)" : " (留空默认 Application.dataPath)";
+                _basePathResolvedText.text = $"当前生效前缀: {effBase}" + (customBase ? " (自定义输入)" : defaultLabel);
             }
 
             // 2. MODIMG

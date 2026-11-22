@@ -388,6 +388,42 @@ internal static class XingShuConfigKeys
 
 	internal const string AutoSettlementScreenshotLastPath = "XINGSHU_AUTO_SETTLEMENT_SCREENSHOT_LAST_PATH";
 
+	// 选人界面右侧地图名称提示 (SelectRoleMapNameHint)
+	internal const string SelectRoleMapNameEnabled = "XINGSHU_SELECT_ROLE_MAP_NAME";
+
+	internal const bool SelectRoleMapNameEnabledDefault = true;
+
+	internal const string SelectRoleMapNamePosX = "XINGSHU_SELECT_ROLE_MAP_POS_X";
+	internal const float SelectRoleMapNamePosXDefault = 0.98f;
+	internal const string SelectRoleMapNamePosY = "XINGSHU_SELECT_ROLE_MAP_POS_Y";
+	internal const float SelectRoleMapNamePosYDefault = 0.56f;
+	internal const string SelectRoleMapNameScale = "XINGSHU_SELECT_ROLE_MAP_SCALE";
+	internal const float SelectRoleMapNameScaleDefault = 1.0f;
+	internal const float SelectRoleMapNameScaleMin = 0.60f;
+	internal const float SelectRoleMapNameScaleMax = 1.80f;
+	internal const string SelectRoleMapNameLocked = "XINGSHU_SELECT_ROLE_MAP_LOCKED";
+	internal const bool SelectRoleMapNameLockedDefault = false;
+
+	// 战斗卡牌打出点数提示 (BattleCardPointHint)
+	internal const string BattleCardPointHintEnabled = "XINGSHU_BATTLE_CARD_POINT_HINT";
+
+	internal const bool BattleCardPointHintEnabledDefault = true;
+
+	internal const string BattleCardPointAtkX = "XINGSHU_BATTLE_CARD_ATK_X";
+	internal const float BattleCardPointAtkXDefault = 0.03f;
+	internal const string BattleCardPointAtkY = "XINGSHU_BATTLE_CARD_ATK_Y";
+	internal const float BattleCardPointAtkYDefault = 0.16f;
+	internal const string BattleCardPointDefX = "XINGSHU_BATTLE_CARD_DEF_X";
+	internal const float BattleCardPointDefXDefault = 0.97f;
+	internal const string BattleCardPointDefY = "XINGSHU_BATTLE_CARD_DEF_Y";
+	internal const float BattleCardPointDefYDefault = 0.16f;
+	internal const string BattleCardPointScale = "XINGSHU_BATTLE_CARD_SCALE";
+	internal const float BattleCardPointScaleDefault = 1.0f;
+	internal const float BattleCardPointScaleMin = 0.60f;
+	internal const float BattleCardPointScaleMax = 1.80f;
+	internal const string BattleCardPointLocked = "XINGSHU_BATTLE_CARD_LOCKED";
+	internal const bool BattleCardPointLockedDefault = false;
+
 	// 自定义显示统计项掩码 (8项: 击杀/死亡/输出/承伤/治疗/累计金币/转账/移动步数，默认全选 255)
 	internal const string StatsWidgetMetrics = "XINGSHU_STATS_WIDGET_METRICS";
 

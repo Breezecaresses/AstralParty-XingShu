@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, type WorkshopLocalItemState } from '../../shared/api/tauri';
-import { isTauriRuntime, openExternalUrl, webApiBaseUrl } from '../../shared/runtime';
+import { isTauriRuntime, openExternalUrl } from '../../shared/runtime';
 import type { GameInstallation } from '../../shared/types';
 import {
   WORKSHOP_CATEGORIES,
@@ -132,25 +132,7 @@ export function WorkshopPanel({
     onBusy?.(true);
     setNotice({ kind: 'info', text: `正在下载并校验「${item.name}」…` });
     try {
-      const result = await api.workshopDownloadAndInstall({
-        installationId,
-        apiBase: webApiBaseUrl(),
-        modId: item.id,
-        name: item.name,
-        installKind: item.installKind,
-        gameVersion: item.gameVersion,
-        platforms: item.platforms,
-        downloadUrl: item.downloadUrl,
-        sha256: item.sha256,
-        sizeBytes: item.sizeBytes,
-        files: (item.files || []).map((f) => ({
-          target: f.target,
-          sha256: f.sha256,
-          originalSha256: f.originalSha256,
-          size: f.size,
-          payloadUrl: f.payloadUrl,
-        })),
-      });
+      const result = await api.workshopDownloadAndInstall({ installationId, modId: item.id });
       setNotice({ kind: 'success', text: result.message });
       await loadLocalStates();
       onInstalled?.();

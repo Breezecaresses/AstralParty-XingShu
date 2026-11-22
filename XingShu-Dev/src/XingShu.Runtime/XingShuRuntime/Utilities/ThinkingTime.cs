@@ -9,7 +9,7 @@ namespace XingShuRuntime.Utilities
     {
         private const string Key = "XINGSHU_THINKING_TIME_X10";
         private static readonly DecisionProgressOwner Progress = new DecisionProgressOwner();
-        public static bool Enabled => XingShuConfigService.GetBool(Key, true);
+        public static bool Enabled => LauncherModules.CanLoad(nameof(ThinkingTime)) && XingShuConfigService.GetBool(Key, true);
 
         public static void Install(GameObject host)
         {

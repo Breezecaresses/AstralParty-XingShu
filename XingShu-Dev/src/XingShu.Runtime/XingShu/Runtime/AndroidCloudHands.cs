@@ -60,6 +60,9 @@ namespace XingShu.Runtime
         private static float _localBridgeProbeUntil = 45f, _nextBridgeProbe;
         private static volatile int _bridgeProbeInFlight;
         private static volatile string _pendingBridgeJson;
+        private static float _localRoomProbeUntil = 60f, _nextRoomProbe;
+        private static volatile int _roomProbeInFlight;
+        private static volatile string _pendingRoomBridgeJson;
         private static CloudHandDiagnosticState _handDiagnostic = CloudHandDiagnosticState.None;
         private static CloudHandDiagnosticState _lastLoggedDiagnostic = CloudHandDiagnosticState.None;
         private static long _lastDiagnosticRoom;
@@ -85,8 +88,11 @@ namespace XingShu.Runtime
 
         internal static void OnAppFocusChanged(bool hasFocus)
         {
-            if (!hasFocus || _session != null) return;
+            if (!hasFocus) return;
             _nextIntentCheck = 0f;
+            _nextRoomProbe = 0f;
+            _localRoomProbeUntil = Math.Max(_localRoomProbeUntil, Now + 60f);
+            if (_session != null) return;
             _nextBridgeProbe = 0f;
             _localBridgeProbeUntil = Math.Max(_localBridgeProbeUntil, Now + 45f);
         }
@@ -373,10 +379,27 @@ namespace XingShu.Runtime
                 }
                 catch { }
             }
+            string roomBridgeJson = _pendingRoomBridgeJson;
+            if (!string.IsNullOrEmpty(roomBridgeJson))
+            {
+                _pendingRoomBridgeJson = null;
+                try
+                {
+                    var parsedRoom = BridgeJson.Parse(roomBridgeJson) as Dictionary<string, object>;
+                    if (parsedRoom != null) NativeRoomAutoEnter.EnqueueFromAndroidJson(parsedRoom);
+                }
+                catch { }
+            }
+            if (uid > 0 && now < _localRoomProbeUntil && now >= _nextRoomProbe &&
+                !(SimpleSingletonProvider<GameLogicManager>.hasInstance && (SimpleSingletonProvider<GameLogicManager>.inst?.room?.IsInRoom ?? false)))
+            {
+                _nextRoomProbe = now + 2f;
+                ProbeLocalLoopback("/room-handoff", isRoom: true);
+            }
             if (_session == null && _appHandoff == null && _requestId == null && uid > 0 && now < _localBridgeProbeUntil && now >= _nextBridgeProbe)
             {
                 _nextBridgeProbe = now + 2f;
-                ProbeLocalHandoffBridge();
+                ProbeLocalLoopback("/handoff", isRoom: false);
             }
             if (_appHandoff != null && now < _appHandoffDeadline && uid > 0)
             {
@@ -516,6 +539,17 @@ namespace XingShu.Runtime
                 using (var activity = unity.GetStatic<AndroidJavaObject>("currentActivity"))
                 using (var intent = activity.Call<AndroidJavaObject>("getIntent"))
                 {
+                    string roomHandoff = intent.Call<string>("getStringExtra", "xingshu_room_handoff");
+                    if (!string.IsNullOrEmpty(roomHandoff))
+                    {
+                        try
+                        {
+                            var parsedRoom = BridgeJson.Parse(roomHandoff) as Dictionary<string, object>;
+                            if (parsedRoom != null) NativeRoomAutoEnter.EnqueueFromAndroidJson(parsedRoom);
+                        }
+                        catch { }
+                        try { intent.Call<AndroidJavaObject>("putExtra", "xingshu_room_handoff", "")?.Dispose(); } catch { }
+                    }
                     string handoff = intent.Call<string>("getStringExtra", "xingshu_session_handoff");
                     if (string.IsNullOrEmpty(handoff)) return;
                     string uid = intent.Call<string>("getStringExtra", "xingshu_account_uid");
@@ -545,9 +579,16 @@ namespace XingShu.Runtime
             return true;
         }
 
-        private static void ProbeLocalHandoffBridge()
+        private static void ProbeLocalLoopback(string path, bool isRoom)
         {
-            if (Interlocked.CompareExchange(ref _bridgeProbeInFlight, 1, 0) != 0) return;
+            if (isRoom)
+            {
+                if (Interlocked.CompareExchange(ref _roomProbeInFlight, 1, 0) != 0) return;
+            }
+            else
+            {
+                if (Interlocked.CompareExchange(ref _bridgeProbeInFlight, 1, 0) != 0) return;
+            }
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 try
@@ -560,7 +601,7 @@ namespace XingShu.Runtime
                         using (var stream = client.GetStream())
                         {
                             try { stream.ReadTimeout = 800; stream.WriteTimeout = 800; } catch { }
-                            byte[] req = Encoding.ASCII.GetBytes("GET /handoff HTTP/1.1\r\nHost: 127.0.0.1:47821\r\nConnection: close\r\n\r\n");
+                            byte[] req = Encoding.ASCII.GetBytes("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1:47821\r\nConnection: close\r\n\r\n");
                             stream.Write(req, 0, req.Length);
                             stream.Flush();
                             using (var ms = new MemoryStream())
@@ -580,7 +621,10 @@ namespace XingShu.Runtime
                                 {
                                     string body = raw.Substring(sep + 4).Trim();
                                     if (body.Length > 0 && body.Length <= 4096)
-                                        _pendingBridgeJson = body;
+                                    {
+                                        if (isRoom) _pendingRoomBridgeJson = body;
+                                        else _pendingBridgeJson = body;
+                                    }
                                 }
                             }
                         }
@@ -589,7 +633,8 @@ namespace XingShu.Runtime
                 catch { }
                 finally
                 {
-                    Interlocked.Exchange(ref _bridgeProbeInFlight, 0);
+                    if (isRoom) Interlocked.Exchange(ref _roomProbeInFlight, 0);
+                    else Interlocked.Exchange(ref _bridgeProbeInFlight, 0);
                 }
             });
         }

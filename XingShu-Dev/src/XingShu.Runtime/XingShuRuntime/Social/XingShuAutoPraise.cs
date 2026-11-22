@@ -254,9 +254,10 @@ namespace XingShuRuntime.Social
                 avatar.Image.SetSize(size, size);
                 if (Mathf.Abs(avatar.Mask.width - size) > .1f) avatar.Mask.DrawEllipse(size, size, Color.white);
                 bool lit = isSelf ? _selfEasterEggLit : _selection.IsSelected(avatar.Player);
-                avatar.Image.texture = NativePraiseAssets.Get(lit);
-                avatar.Button.visible = true;
-                avatar.Button.touchable = !modalOpen;
+                NTexture icon = NativePraiseAssets.Get(lit);
+                avatar.Image.texture = icon;
+                avatar.Button.visible = icon != null;
+                avatar.Button.touchable = icon != null && !modalOpen;
                 avatar.Button.alpha = (eligible || isSelf) ? 1f : .8f;
                 avatar.Button.tooltips = isSelf ? "点击给自己点赞（小彩蛋，不会在结算时生效）" :
                     !eligible ? "人机不参与点赞" :

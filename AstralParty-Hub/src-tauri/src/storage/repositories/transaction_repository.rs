@@ -125,7 +125,29 @@ impl TransactionRepository {
         })
     }
 
+    pub fn rollback_scope(&self, id: &str) -> HubResult<Option<(String, String, bool)>> {
+        use rusqlite::OptionalExtension;
+        self.db.with_conn(|conn| {
+            conn.query_row(
+                "SELECT current.game_installation_id, current.state, EXISTS (
+                    SELECT 1 FROM install_transactions newer
+                    WHERE newer.game_installation_id = current.game_installation_id
+                      AND newer.package_id = current.package_id
+                      AND newer.started_at > current.started_at
+                      AND newer.state = 'COMPLETED'
+                )
+                FROM install_transactions current
+                WHERE current.id = ?1 AND current.game_installation_id IS NOT NULL",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| HubError::storage_error(e.to_string()))
+        })
+    }
+
     pub fn list_recent(&self, limit: usize) -> HubResult<Vec<InstallTransaction>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.db.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(

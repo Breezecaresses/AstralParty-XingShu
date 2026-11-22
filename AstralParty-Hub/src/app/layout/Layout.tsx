@@ -1,170 +1,241 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Sidebar } from './Sidebar';
 import { api } from '../../shared/api/tauri';
 import type { DiagnosticReport } from '../../shared/types';
-import { ShieldCheck, AlertTriangle, Menu, FolderUp } from 'lucide-react';
-import { useTranslation, LanguageSwitcher } from '../../i18n';
+import { FolderUp } from 'lucide-react';
+import { useTranslation } from '../../i18n';
 import { UpdatePromptController } from '../../components/UpdatePromptModal';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { isTauriRuntime } from '../../shared/runtime';
-import { DesktopWindowBar } from './DesktopWindowBar';
+import { isLauncherPreview, isTauriRuntime } from '../../shared/runtime';
+import { LauncherNav } from '../../pages/launcher/LauncherNav';
+import { LauncherStartupSplash } from '../../pages/launcher/LauncherStartupSplash';
+import { PCL_THEMES, REPLAY_STARTUP_EVENT, useLauncherTheme } from '../../pages/launcher/launcherTheme';
+import { ModrinthWorkshopLayout } from '../../pages/workshop-web/ModrinthWorkshopLayout';
+import { PlatformGlobalModals } from '../../components/platform/PlatformGlobalModals';
+import '../../pages/launcher/launcher-shell.css';
+import '../../pages/launcher/launcher.css';
 import { enqueueDroppedModPaths } from '../../shared/modDropBridge';
+import updateBuild from '../../../src-tauri/src/update_build.json';
 
-export const Layout: React.FC = () => {
+const SPLASH_PLAYED_KEY = 'xingshu.launcher.splashPlayed';
+type StartupStage = 'splash' | 'entering' | 'ready';
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+}
+
+function shouldPlayInitialSplash(enabled: boolean): boolean {
+  if (!enabled || prefersReducedMotion()) return false;
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(SPLASH_PLAYED_KEY) === '1') {
+      return false;
+    }
+  } catch {
+    // Ignore storage access errors.
+  }
+  return true;
+}
+
+function markSplashPlayed(): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(SPLASH_PLAYED_KEY, '1');
+    }
+  } catch {
+    // Ignore storage access errors.
+  }
+}
+
+export const DesktopLayout: React.FC = () => {
   const [report, setReport] = useState<DiagnosticReport | null>(null);
-  const { locale, t } = useTranslation();
-  const shellRef = useRef<HTMLDivElement>(null);
+  const { locale } = useTranslation();
   const contentRef = useRef<HTMLElement>(null);
-  const [isScrolled, setIsScrolled] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dragOverWindow, setDragOverWindow] = useState(false);
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
 
+  const { theme, startupAnimEnabled } = useLauncherTheme();
+  const activeThemePreset = PCL_THEMES.find((item) => item.id === theme) ?? PCL_THEMES[0];
+  const isFlushLauncherPage = pathname === '/dashboard' || pathname === '/extensions/launcher';
+
+  const [startupStage, setStartupStage] = useState<StartupStage>('splash');
+  const [splashMounted, setSplashMounted] = useState<boolean>(false);
+  const [splashRunId, setSplashRunId] = useState<number>(1);
+  const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startupAnimEnabledRef = useRef(startupAnimEnabled);
+  startupAnimEnabledRef.current = startupAnimEnabled;
+
+  const runEntranceTransition = useCallback((forceEntrance = false) => {
+    markSplashPlayed();
+    if ((!forceEntrance && !startupAnimEnabledRef.current) || prefersReducedMotion()) {
+      setStartupStage('ready');
+      return;
+    }
+    setStartupStage('entering');
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current);
+    enterTimerRef.current = setTimeout(() => {
+      enterTimerRef.current = null;
+      setStartupStage('ready');
+    }, 740);
+  }, []);
+
   useEffect(() => {
-    setMobileNavOpen(false);
     const el = contentRef.current;
     if (el) {
       el.scrollTo(0, 0);
-      setIsScrolled(false);
-      shellRef.current?.style.setProperty('--page-progress', '0');
     }
   }, [pathname]);
 
   useEffect(() => {
-    if (!mobileNavOpen) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMobileNavOpen(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mobileNavOpen]);
+    if (typeof window === 'undefined') return;
 
-  useEffect(() => {
-    const scroller = contentRef.current;
-    if (!scroller) return;
-    let scrollQueued = false;
-    const syncScroll = () => {
-      scrollQueued = false;
-      const top = scroller.scrollTop;
-      const max = scroller.scrollHeight - scroller.clientHeight;
-      const progress = max > 0 ? Math.min(1, Math.max(0, top / max)) : 0;
-      setIsScrolled(top > 12);
-      shellRef.current?.style.setProperty('--page-progress', progress.toFixed(4));
-    };
-    const onScroll = () => {
-      if (!scrollQueued) {
-        scrollQueued = true;
-        requestAnimationFrame(syncScroll);
-      }
-    };
-    syncScroll();
-    scroller.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll, { passive: true });
-    return () => {
-      scroller.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onScroll);
-    };
-  }, []);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let failsafeTimer: ReturnType<typeof setTimeout> | undefined;
 
-  useEffect(() => {
-    const shell = shellRef.current;
-    if (!shell) return;
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const fine = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
-    if (reduced || !fine) return;
-
-    let aimX = 0;
-    let aimY = 0;
-    let curX = 0;
-    let curY = 0;
-    let auroraFrame = 0;
-    let spotFrame = 0;
-    let lastEvent: PointerEvent | null = null;
-
-    const spotlightSelector =
-      '.panel, .card, .stat-card, .library-summary, .library-links a, .library-tile, .library-record, .extension-summary > div, .mode-card, .field-effect';
-
-    const driftAurora = () => {
-      curX += (aimX - curX) * 0.085;
-      curY += (aimY - curY) * 0.085;
-      shell.style.setProperty('--aurora-x', curX.toFixed(3));
-      shell.style.setProperty('--aurora-y', curY.toFixed(3));
-      auroraFrame =
-        Math.abs(aimX - curX) + Math.abs(aimY - curY) > 0.002
-          ? requestAnimationFrame(driftAurora)
-          : 0;
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      const rect = shell.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        aimX = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
-        aimY = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
-        if (!auroraFrame) {
-          auroraFrame = requestAnimationFrame(driftAurora);
+    if (!startupAnimEnabledRef.current || prefersReducedMotion()) {
+      invoke('finish_splash_and_show_main').catch(() => {});
+      setSplashMounted(false);
+      setStartupStage('ready');
+    } else {
+      failsafeTimer = setTimeout(() => {
+        if (!disposed) {
+          setSplashMounted(false);
+          setStartupStage('ready');
         }
-      }
+      }, 6000);
 
-      lastEvent = event;
-      if (spotFrame) return;
-      spotFrame = requestAnimationFrame(() => {
-        spotFrame = 0;
-        if (!lastEvent || !(lastEvent.target instanceof Element)) return;
-        const surface = lastEvent.target.closest<HTMLElement>(spotlightSelector);
-        if (!surface) return;
-        const surfaceRect = surface.getBoundingClientRect();
-        surface.style.setProperty('--spot-x', `${Math.round(lastEvent.clientX - surfaceRect.left)}px`);
-        surface.style.setProperty('--spot-y', `${Math.round(lastEvent.clientY - surfaceRect.top)}px`);
-      });
+      listen('xingshu:splash-finished', () => {
+        if (disposed) return;
+        if (failsafeTimer) {
+          clearTimeout(failsafeTimer);
+          failsafeTimer = undefined;
+        }
+        setSplashMounted(false);
+        runEntranceTransition(true);
+      })
+        .then((fn) => {
+          if (disposed) fn();
+          else unlisten = fn;
+        })
+        .catch(() => {});
+
+      invoke<boolean>('get_startup_splash_active')
+        .then((active) => {
+          if (disposed) return;
+          if (!active) {
+            if (failsafeTimer) {
+              clearTimeout(failsafeTimer);
+              failsafeTimer = undefined;
+            }
+            runEntranceTransition(false);
+          }
+        })
+        .catch(() => {
+          if (disposed) return;
+          if (failsafeTimer) {
+            clearTimeout(failsafeTimer);
+            failsafeTimer = undefined;
+          }
+          if (shouldPlayInitialSplash(startupAnimEnabledRef.current)) {
+            setStartupStage('splash');
+            setSplashMounted(true);
+          } else {
+            setStartupStage('ready');
+          }
+        });
+    }
+
+    const handleReplay = () => {
+      if (enterTimerRef.current) {
+        clearTimeout(enterTimerRef.current);
+        enterTimerRef.current = null;
+      }
+      if (prefersReducedMotion()) {
+        setSplashMounted(false);
+        setStartupStage('ready');
+        return;
+      }
+      setStartupStage('splash');
+      setSplashMounted(true);
+      setSplashRunId((prev) => prev + 1);
     };
 
-    shell.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener(REPLAY_STARTUP_EVENT, handleReplay);
     return () => {
-      shell.removeEventListener('pointermove', onPointerMove);
-      if (auroraFrame) cancelAnimationFrame(auroraFrame);
-      if (spotFrame) cancelAnimationFrame(spotFrame);
+      disposed = true;
+      if (failsafeTimer) clearTimeout(failsafeTimer);
+      unlisten?.();
+      window.removeEventListener(REPLAY_STARTUP_EVENT, handleReplay);
+    };
+  }, [runEntranceTransition]);
+
+  useEffect(() => {
+    return () => {
+      if (enterTimerRef.current) {
+        clearTimeout(enterTimerRef.current);
+        enterTimerRef.current = null;
+      }
     };
   }, []);
 
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      setReport(null);
-      return;
+  const handleSplashReveal = useCallback(() => {
+    runEntranceTransition(true);
+  }, [runEntranceTransition]);
+
+  const handleSplashComplete = useCallback(() => {
+    setSplashMounted(false);
+  }, []);
+
+  const handleSplashSkip = useCallback(() => {
+    markSplashPlayed();
+    if (enterTimerRef.current) {
+      clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
     }
-    const refresh = () => api.getDiagnosticReport()
-      .then(setReport)
-      .catch(() => setReport(null));
+    setSplashMounted(false);
+    setStartupStage('ready');
+  }, []);
+
+  useEffect(() => {
+    const refresh = () =>
+      api
+        .getDiagnosticReport()
+        .then(setReport)
+        .catch(() => setReport(null));
     void refresh();
     const timer = setInterval(() => void refresh(), 10000);
     return () => clearInterval(timer);
   }, []);
 
-  const appTitle = locale === 'zh-CN' ? '星枢 Hub' : 'XingShu Hub';
-  const webMode = !isTauriRuntime();
+  const appTitle = locale === 'zh-CN' ? '星枢启动器' : 'XingShu Launcher';
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
-      document.title = webMode ? `${appTitle} Web` : appTitle;
+      document.title = appTitle;
     }
-    if (!isTauriRuntime()) return;
     try {
       const appWin = getCurrentWebviewWindow();
       appWin.setTitle(appTitle).catch((err) => {
         console.warn('Failed to set window title via Tauri:', err);
       });
     } catch {
-      // Ignored in non-Tauri environment
+      // Ignored outside Tauri webview
     }
-  }, [appTitle, webMode]);
+  }, [appTitle]);
 
   useEffect(() => {
-    if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const preventNativeDrop = (event: DragEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener('dragover', preventNativeDrop);
+    window.addEventListener('drop', preventNativeDrop);
     try {
       const appWin = getCurrentWebviewWindow();
       appWin
@@ -179,8 +250,8 @@ export const Layout: React.FC = () => {
             setDragOverWindow(false);
             if (payload.paths?.length) {
               enqueueDroppedModPaths(payload.paths);
-              if (pathnameRef.current !== '/extensions/mods') {
-                navigate('/extensions/mods');
+              if (pathnameRef.current !== '/extensions/launcher' && pathnameRef.current !== '/extensions/mods') {
+                navigate('/extensions/launcher?section=inspect');
               }
             }
           }
@@ -196,6 +267,8 @@ export const Layout: React.FC = () => {
     return () => {
       disposed = true;
       setDragOverWindow(false);
+      window.removeEventListener('dragover', preventNativeDrop);
+      window.removeEventListener('drop', preventNativeDrop);
       unlisten?.();
     };
   }, [navigate]);
@@ -207,95 +280,82 @@ export const Layout: React.FC = () => {
       ? 'warning'
       : 'degraded';
 
-  const statusLabel =
-    report?.overall_status === 'HEALTHY'
-      ? t('common.healthy')
-      : report?.overall_status === 'WARNING'
-      ? t('common.warning')
-      : report?.overall_status === 'DEGRADED'
-      ? t('common.degraded')
-      : t('common.initializing');
   return (
-    <div className={webMode ? 'web-app-frame' : 'desktop-app-frame'}>
-      {!webMode && <DesktopWindowBar title={appTitle} english={locale !== 'zh-CN'} />}
-    <div className="app-container" ref={shellRef}>
-      <div className="xingshu-aurora-stage" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-        <i />
-        <i />
-        <div className="xingshu-stage-grain" />
-      </div>
-      <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
-      <div
-        className={`mobile-sidebar-backdrop ${mobileNavOpen ? 'is-open' : ''}`}
-        aria-hidden="true"
-        onClick={() => setMobileNavOpen(false)}
-      />
-      <div className="main-wrapper">
-        <header className={`top-bar ${isScrolled ? 'is-scrolled' : ''}`}>
-          <div className="top-bar-title">
-            <button
-              type="button"
-              className="mobile-nav-btn"
-              aria-label={locale === 'zh-CN' ? '打开导航菜单' : 'Open navigation menu'}
-              aria-expanded={mobileNavOpen}
-              onClick={() => setMobileNavOpen((prev) => !prev)}
-            >
-              <Menu size={18} />
-            </button>
-            <span className="top-bar-subtitle" style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>
-              {webMode
-                ? (locale === 'zh-CN' ? '网页版 · 回放分析与公开资料查询' : 'Web Edition · Cloud Replay & Lookup')
-                : (report?.snapshot.primary_game ? report.snapshot.primary_game.install_path : t('common.scanningGameDir'))}
-            </span>
-          </div>
+    <div
+      className={`desktop-app-frame launcher-frame launcher-stage-${startupStage}${isFlushLauncherPage ? ' launcher-is-home' : ''}`}
+      data-pcl-theme={theme}
+    >
+      <div className="launcher-window-stage">
+        <LauncherNav />
+        <div className="app-container">
+          <div className="main-wrapper">
+            {!isLauncherPreview && <UpdatePromptController />}
 
-          <div className="top-bar-status">
-            <LanguageSwitcher />
-            <div className={`status-pill ${webMode ? 'healthy' : statusClass}`}>
-              <span className="pulse-dot" />
-              <span>{webMode ? (locale === 'zh-CN' ? '网页版在线' : 'Web Ready') : statusLabel}</span>
-            </div>
-            {!webMode && report?.snapshot.running_processes && report.snapshot.running_processes.length > 0 ? (
-              <div className="status-pill warning" title={t('common.gameActive')}>
-                <AlertTriangle size={13} />
-                <span>{t('common.gameActive')} ({report.snapshot.running_processes.length})</span>
+            <main className="content-area" ref={contentRef}>
+              <div className="aurora-route-stage" key={pathname}>
+                <Outlet />
               </div>
-            ) : !webMode && report ? (
-              <div className="status-pill ok" title={t('common.safeToModify')}>
-                <ShieldCheck size={13} />
-                <span>{t('common.safeToModify')}</span>
-              </div>
-            ) : null}
-          </div>
-        </header>
-
-        {!webMode && <UpdatePromptController />}
-
-        <main className="content-area" ref={contentRef}>
-          <div className="aurora-route-stage" key={pathname}>
-            <Outlet />
-          </div>
-        </main>
-      </div>
-    </div>
-      {!webMode && <footer className="desktop-status-bar">
-        <span><i className={`desktop-status-dot ${statusClass}`} />{report?.snapshot.primary_game
-          ? (locale === 'zh-CN' ? '游戏目录已连接' : 'Game directory connected')
-          : (locale === 'zh-CN' ? '等待选择游戏目录' : 'Select a game directory')}</span>
-        <span>{locale === 'zh-CN' ? '星枢工作台' : 'XingShu Workspace'} · v0.1.6</span>
-      </footer>}
-      {!webMode && dragOverWindow && (
-        <div className="global-mod-drop-overlay" aria-live="polite">
-          <div className="global-mod-drop-card">
-            <FolderUp size={34} />
-            <strong>{locale === 'zh-CN' ? '松开鼠标以检测并安装模组' : 'Drop mod package or folder to inspect'}</strong>
-            <span>{locale === 'zh-CN' ? '支持 .zip、.xspkg、.apmm、.bundle 或解压后的模组文件夹' : 'Supports .zip, .xspkg, .apmm, .bundle, or extracted mod folders'}</span>
+            </main>
           </div>
         </div>
+        <footer className="desktop-status-bar">
+          <span>
+            <i className={`desktop-status-dot ${statusClass}`} />
+            {report?.snapshot.primary_game
+              ? locale === 'zh-CN'
+                ? '游戏目录已连接'
+                : 'Game directory connected'
+              : locale === 'zh-CN'
+              ? '等待选择游戏目录'
+              : 'Select a game directory'}
+          </span>
+          <span className="desktop-status-meta">
+            <span className="desktop-status-theme">
+              <i style={{ background: activeThemePreset.swatchPrimary }} aria-hidden="true" />
+              {locale === 'zh-CN' ? activeThemePreset.nameZh : activeThemePreset.nameEn}
+            </span>
+            <span className="desktop-status-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="desktop-status-version">
+              {isLauncherPreview ? (locale === 'zh-CN' ? '本地预览' : 'Local preview') : `v${updateBuild.version}`}
+            </span>
+          </span>
+        </footer>
+        {dragOverWindow && (
+          <div className="global-mod-drop-overlay" aria-live="polite">
+            <div className="global-mod-drop-card">
+              <FolderUp size={34} />
+              <strong>
+                {locale === 'zh-CN' ? '松开鼠标以检测并安装模组' : 'Drop mod package or folder to inspect'}
+              </strong>
+              <span>
+                {locale === 'zh-CN'
+                  ? '支持 .zip、.xspkg、.apmm、.bundle 或解压后的模组文件夹'
+                  : 'Supports .zip, .xspkg, .apmm, .bundle, or extracted mod folders'}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+      {splashMounted && (
+        <LauncherStartupSplash
+          key={splashRunId}
+          active={splashMounted}
+          mode="overlay"
+          onReveal={handleSplashReveal}
+          onComplete={handleSplashComplete}
+          onSkip={handleSplashSkip}
+        />
       )}
+      <PlatformGlobalModals />
     </div>
   );
+};
+
+export const Layout: React.FC = () => {
+  if (!isTauriRuntime()) {
+    return <ModrinthWorkshopLayout />;
+  }
+  return <DesktopLayout />;
 };

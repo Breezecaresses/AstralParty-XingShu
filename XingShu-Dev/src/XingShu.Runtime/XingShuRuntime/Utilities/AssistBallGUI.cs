@@ -12,6 +12,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.Networking;
 using UnityEngine.UI;
 using XingShuRuntime.Core;
+using XingShuRuntime.Features;
 using XingShuRuntime.UI;
 
 namespace XingShuRuntime.Utilities;
@@ -325,6 +326,10 @@ internal sealed class AssistBallGUI : MonoBehaviour
 
 	private Texture2D _texBall;
 
+	private Texture2D _customOrbTex;
+
+	private Sprite _customOrbSprite;
+
 	private Vector2 _scrollPosActions = Vector2.zero;
 
 	private Vector2 _scrollPosSettings = Vector2.zero;
@@ -366,6 +371,22 @@ internal sealed class AssistBallGUI : MonoBehaviour
 	private float _lastVisualUpdate;
 
 	private bool _hasLoggedFallback;
+
+	private bool _usingNativeBallUI;
+
+	private Text _nativeSpeedBadgeText;
+
+	private UnityEngine.UI.Image _nativeRingImg;
+
+	private Toggle _quickSpeedToggle;
+
+	private Text _quickSpeedValueText;
+
+	private Toggle _quickKnockbackToggle;
+
+	private Toggle _quickHandCardToggle;
+
+	private bool _suppressQuickToggle;
 
 	public static AssistBallGUI Instance { get; private set; }
 
@@ -494,12 +515,9 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		LoadConfig();
 		InitFallbackTextures();
 		InitBallRect();
+		XingShuNativeGameUI.EnsureLoaded(null);
 		InitUGUI();
 		SyncLayout(force: true);
-		if (!_isUGUIMode && XingShuMobileUIHelper.IsMobile)
-		{
-			StartCoroutine(LoadStreamingUI());
-		}
 	}
 
 	private void OnDestroy()
@@ -550,6 +568,12 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		}
 		DestroyTexture(ref _texWhite);
 		DestroyTexture(ref _texBall);
+		if (_customOrbSprite != null)
+		{
+			UnityEngine.Object.Destroy(_customOrbSprite);
+			_customOrbSprite = null;
+		}
+		DestroyTexture(ref _customOrbTex);
 	}
 
 	private static void DestroyTexture(ref Texture2D tex)
@@ -684,130 +708,25 @@ internal sealed class AssistBallGUI : MonoBehaviour
 	private void InitUGUI()
 	{
 		_isUGUIMode = false;
+		_usingNativeBallUI = false;
 		try
 		{
-			LogAssist("正在初始化 uGUI 现代化界面系统...");
+			LogAssist("正在初始化游戏原生 FairyGUI 风格程序化悬浮球与快捷气泡...");
 			EnsureEventSystem();
-			if (_uiBundle == null)
-			{
-				_uiBundle = LoadModernAssetBundle();
-			}
-			if (_uiBundle == null)
-			{
-				LogAssist("[渲染降级] 未找到可用的 Modern UI AssetBundle，当前将自动降级至轻量 IMGUI 模式。");
-				return;
-			}
-			GameObject gameObject = _uiBundle.LoadAsset<GameObject>("XingShuAssistBall") ?? _uiBundle.LoadAsset<GameObject>("Assets/XINGSHU_Prefabs/XingShuAssistBall.prefab") ?? _uiBundle.LoadAsset<GameObject>("assets/xingshu_prefabs/xingshuassistball.prefab");
-			GameObject gameObject2 = _uiBundle.LoadAsset<GameObject>("XingShuAssistMenu") ?? _uiBundle.LoadAsset<GameObject>("Assets/XINGSHU_Prefabs/XingShuAssistMenu.prefab") ?? _uiBundle.LoadAsset<GameObject>("assets/xingshu_prefabs/xingshuassistmenu.prefab");
-			if (gameObject == null || gameObject2 == null)
-			{
-				try
-				{
-					GameObject[] array = _uiBundle.LoadAllAssets<GameObject>();
-					LogAssist("精确检索 Prefab 未命中，触发 LoadAllAssets<GameObject> 扫描，共包含 " + ((array != null) ? array.Length : 0) + " 个 GameObject");
-					if (array != null)
-					{
-						GameObject[] array2 = array;
-						foreach (GameObject gameObject3 in array2)
-						{
-							if (!(gameObject3 == null))
-							{
-								if (gameObject == null && gameObject3.name.IndexOf("XingShuAssistBall", StringComparison.OrdinalIgnoreCase) >= 0)
-								{
-									gameObject = gameObject3;
-									LogAssist("已从 LoadAllAssets 成功锁定 ballPrefab: " + gameObject3.name);
-								}
-								if (gameObject2 == null && gameObject3.name.IndexOf("XingShuAssistMenu", StringComparison.OrdinalIgnoreCase) >= 0)
-								{
-									gameObject2 = gameObject3;
-									LogAssist("已从 LoadAllAssets 成功锁定 menuPrefab: " + gameObject3.name);
-								}
-							}
-						}
-					}
-				}
-				catch (Exception ex)
-				{
-					LogAssist("LoadAllAssets 扫描异常: " + ex.Message);
-				}
-			}
-			LogAssist("Prefab 匹配状态: ballPrefab=" + ((gameObject != null) ? gameObject.name : "null") + ", menuPrefab=" + ((gameObject2 != null) ? gameObject2.name : "null"));
-			if (gameObject == null || gameObject2 == null)
-			{
-				LogAssist("[渲染降级] AssetBundle 内未找到必需的 Prefabs (XingShuAssistBall / XingShuAssistMenu)，降级至 IMGUI 模式。");
-				return;
-			}
-			_ballRootObj = UnityEngine.Object.Instantiate(gameObject);
-			_ballRootObj.name = "XINGSHU_ModernAssistBall";
-			UnityEngine.Object.DontDestroyOnLoad(_ballRootObj);
-			LogAssist("成功实例化 XingShuAssistBall Prefab");
-			_menuRootObj = UnityEngine.Object.Instantiate(gameObject2);
-			_menuRootObj.name = "XINGSHU_ModernAssistMenu";
-			UnityEngine.Object.DontDestroyOnLoad(_menuRootObj);
-			LogAssist("成功实例化 XingShuAssistMenu Prefab");
-			Canvas[] array3 = new Canvas[2]
-			{
-				_ballRootObj.GetComponent<Canvas>(),
-				_menuRootObj.GetComponent<Canvas>()
-			};
-			foreach (Canvas canvas in array3)
-			{
-				if (canvas != null)
-				{
-					canvas.pixelPerfect = true;
-					if (XingShuMobileUIHelper.IsMobile) canvas.sortingOrder = 31020;
-				}
-			}
-			ApplyCanvasScale(_ballRootObj);
-			ApplyCanvasScale(_menuRootObj);
-			BindBallReferences();
-			BindMenuReferences();
-			LogAssist("已完成 uGUI 组件与交互事件绑定");
-			try
-			{
-				Font font = XingShuRuntime.UI.XingShuUITheme.GetMainFont();
-				Text[] componentsInChildren = _ballRootObj.GetComponentsInChildren<Text>(includeInactive: true);
-				foreach (Text text in componentsInChildren)
-				{
-					if (font != null)
-					{
-						text.font = font;
-					}
-					text.alignByGeometry = false;
-				}
-				componentsInChildren = _menuRootObj.GetComponentsInChildren<Text>(includeInactive: true);
-				foreach (Text text2 in componentsInChildren)
-				{
-					if (font != null)
-					{
-						text2.font = font;
-					}
-					if (text2.transform.parent != null && text2.transform.parent.name == "CloseButton")
-					{
-						text2.alignByGeometry = true;
-					}
-					else
-					{
-						text2.alignByGeometry = false;
-					}
-				}
-				LogAssist("已应用游戏设置字体与缺字回退");
-			}
-			catch (Exception ex2)
-			{
-				LogAssist("系统字体替换跳过: " + ex2.Message);
-			}
+			XingShuNativeGameUI.EnsureLoaded(null);
+			BuildProgrammaticNativeBallUI();
 			ApplyBallVisibility();
 			ApplyMenuVisibility();
-			UpdateSettingsUI();
-			RefreshActionList();
+			SyncNativeQuickMenuState();
 			_isUGUIMode = true;
-			LogAssist("[渲染生效] ★★★ Modern UI Pack 5.5.25 uGUI 悬浮球与扩展菜单初始化成功！当前正在运行原生 uGUI 模式 ★★★");
+			_usingNativeBallUI = true;
+			LogAssist("[渲染生效] ★★★ 游戏原生 Setting/Common UI 悬浮球与快捷气泡已就绪（双端统一 UGUI，无需 IMGUI 降级）★★★");
 		}
 		catch (Exception ex3)
 		{
 			_isUGUIMode = false;
-			LogAssist("[初始化异常] 初始化 uGUI 界面时发生未捕获异常: " + ex3.Message + "\n" + ex3.StackTrace);
+			_usingNativeBallUI = false;
+			LogAssist("[初始化异常] 初始化原生程序化 UI 时发生未捕获异常: " + ex3.Message + "\n" + ex3.StackTrace);
 			if (_ballRootObj != null)
 			{
 				UnityEngine.Object.Destroy(_ballRootObj);
@@ -818,7 +737,433 @@ internal sealed class AssistBallGUI : MonoBehaviour
 				UnityEngine.Object.Destroy(_menuRootObj);
 				_menuRootObj = null;
 			}
-			LogAssist("[渲染降级] 发生异常已自动安全清理对象，平滑回退至 IMGUI 模式。");
+			LogAssist("[渲染降级] 发生异常已安全清理对象，临时回退至 IMGUI 保底。");
+		}
+	}
+
+	private void BuildProgrammaticNativeBallUI()
+	{
+		Sprite circleFb = XingShuUIAssetService.GetRoundedFallbackSprite(32);
+
+		// 1. 悬浮球 Canvas (Top-Right anchored ball with StarBuff icon & speed pill)
+		_ballRootObj = new GameObject("XINGSHU_NativeAssistBall", typeof(RectTransform));
+		UnityEngine.Object.DontDestroyOnLoad(_ballRootObj);
+		Canvas ballCanvas = _ballRootObj.AddComponent<Canvas>();
+		ballCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+		ballCanvas.sortingOrder = 31020;
+		ballCanvas.pixelPerfect = true;
+		CanvasScaler ballScaler = _ballRootObj.AddComponent<CanvasScaler>();
+		ballScaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
+		ballScaler.scaleFactor = EffectiveScale;
+		_ballRootObj.AddComponent<GraphicRaycaster>();
+		_ballCg = _ballRootObj.AddComponent<CanvasGroup>();
+		_ballCg.alpha = _ballAlpha;
+
+		GameObject ballBtnGo = XingShuUIFactory.CreateUIObject("BallButton", _ballRootObj);
+		_ballButtonRt = ballBtnGo.GetComponent<RectTransform>();
+		_ballButtonRt.anchorMin = _ballButtonRt.anchorMax = Vector2.one;
+		_ballButtonRt.pivot = new Vector2(0.5f, 0.5f);
+		_ballButtonRt.anchoredPosition = _ballPos;
+		_ballButtonRt.sizeDelta = new Vector2(_ballSize, _ballSize);
+
+		_nativeRingImg = ballBtnGo.AddComponent<UnityEngine.UI.Image>();
+		_nativeRingImg.sprite = circleFb;
+		_nativeRingImg.type = UnityEngine.UI.Image.Type.Simple;
+		_nativeRingImg.preserveAspect = true;
+		_nativeRingImg.color = new Color(1f, 0.749f, 0f, 1f);
+		XingShuUIFactory.AddShadow(ballBtnGo, new Color(0f, 0f, 0f, 0.45f), new Vector2(0f, -3f));
+
+		_ballBtn = ballBtnGo.AddComponent<Button>();
+		_ballBtn.targetGraphic = _nativeRingImg;
+		_ballBtn.navigation = new Navigation { mode = Navigation.Mode.None };
+
+		AssistBallPointer pointer = ballBtnGo.AddComponent<AssistBallPointer>();
+		pointer.Owner = this;
+		pointer.BindEvents();
+
+		GameObject innerDisc = XingShuUIFactory.CreateUIObject("InnerDisc", ballBtnGo);
+		RectTransform innerRt = innerDisc.GetComponent<RectTransform>();
+		innerRt.anchorMin = Vector2.zero;
+		innerRt.anchorMax = Vector2.one;
+		innerRt.offsetMin = new Vector2(3.5f, 3.5f);
+		innerRt.offsetMax = new Vector2(-3.5f, -3.5f);
+		UnityEngine.UI.Image innerImg = innerDisc.AddComponent<UnityEngine.UI.Image>();
+		innerImg.sprite = circleFb;
+		innerImg.color = new Color(0.118f, 0.125f, 0.169f, 0.96f);
+		innerImg.raycastTarget = false;
+		XingShuUIFactory.AddOutline(innerDisc, new Color(1f, 0.145f, 0.510f, 0.85f), new Vector2(1.2f, -1.2f));
+
+		GameObject starGo = XingShuUIFactory.CreateUIObject("StarIcon", ballBtnGo);
+		RectTransform starRt = starGo.GetComponent<RectTransform>();
+		starRt.anchorMin = new Vector2(0.06f, 0.06f);
+		starRt.anchorMax = new Vector2(0.94f, 0.94f);
+		starRt.offsetMin = Vector2.zero;
+		starRt.offsetMax = Vector2.zero;
+		UnityEngine.UI.Image starImg = starGo.AddComponent<UnityEngine.UI.Image>();
+		starImg.sprite = GetOrCreateCustomOrbSprite();
+		starImg.preserveAspect = true;
+		starImg.raycastTarget = false;
+		starImg.color = Color.white;
+
+		// 右下角实时倍率胶囊角标
+		GameObject badgeGo = XingShuUIFactory.CreateUIObject("SpeedBadge", ballBtnGo);
+		RectTransform badgeRt = badgeGo.GetComponent<RectTransform>();
+		badgeRt.anchorMin = badgeRt.anchorMax = new Vector2(1f, 0f);
+		badgeRt.pivot = new Vector2(1f, 0f);
+		badgeRt.anchoredPosition = new Vector2(5f, -4f);
+		badgeRt.sizeDelta = new Vector2(44f, 19f);
+		UnityEngine.UI.Image badgeImg = badgeGo.AddComponent<UnityEngine.UI.Image>();
+		badgeImg.sprite = XingShuUIAssetService.GetRoundedFallbackSprite(10);
+		badgeImg.type = UnityEngine.UI.Image.Type.Sliced;
+		badgeImg.color = XingShuUITheme.Pink;
+		badgeImg.raycastTarget = false;
+		XingShuUIFactory.AddOutline(badgeGo, new Color(0.08f, 0.06f, 0.10f, 1f), new Vector2(1f, -1f));
+		_nativeSpeedBadgeText = XingShuUIFactory.CreateText(badgeGo, "BadgeText", "星枢", 11, Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
+		XingShuDetailLayout.Fill(_nativeSpeedBadgeText.rectTransform, 2f, 0f, 2f, 0f);
+		XingShuUIFactory.AddOutline(_nativeSpeedBadgeText.gameObject, new Color(0.25f, 0.02f, 0.12f, 1f), new Vector2(1f, -1f));
+
+		// 2. 快捷控制气泡 Canvas（半透明磨砂暗底 + 半透卡片，透出背后游戏画面）
+		_menuRootObj = new GameObject("XINGSHU_NativeAssistMenu", typeof(RectTransform));
+		UnityEngine.Object.DontDestroyOnLoad(_menuRootObj);
+		Canvas menuCanvas = _menuRootObj.AddComponent<Canvas>();
+		menuCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+		menuCanvas.sortingOrder = 31021;
+		menuCanvas.pixelPerfect = true;
+		CanvasScaler menuScaler = _menuRootObj.AddComponent<CanvasScaler>();
+		menuScaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
+		menuScaler.scaleFactor = EffectiveScale;
+		_menuRootObj.AddComponent<GraphicRaycaster>();
+		_menuCg = _menuRootObj.AddComponent<CanvasGroup>();
+
+		bool hasSpeed = LauncherModules.CanLoad("GameSpeedControllerGUI");
+		bool hasKnockback = LauncherModules.CanLoad("MonsterKillProbability");
+		bool hasHand = LauncherModules.CanLoad("HandCardDisplayManager");
+		int quickCount = (hasSpeed ? 1 : 0) + (hasKnockback ? 1 : 0) + (hasHand ? 1 : 0);
+
+		bool isMobile = XingShuMobileUIHelper.IsMobile;
+		float bubbleW = isMobile ? 380f : 336f;
+		float bubbleH = quickCount == 0
+			? (isMobile ? 216f : 198f)
+			: quickCount == 1
+				? (isMobile ? 228f : 210f)
+				: quickCount == 2
+					? (isMobile ? 282f : 260f)
+					: (isMobile ? 336f : 310f);
+
+		GameObject windowGo = XingShuUIFactory.CreateUIObject("WindowPanel", _menuRootObj);
+		_windowPanelRt = windowGo.GetComponent<RectTransform>();
+		_windowPanelRt.anchorMin = _windowPanelRt.anchorMax = Vector2.one;
+		_windowPanelRt.pivot = Vector2.one;
+		_windowPanelRt.sizeDelta = new Vector2(bubbleW, bubbleH);
+
+		Color translucentPanelColor = new Color(1f, 1f, 1f, 0.76f);
+		Color translucentFallbackColor = new Color(0.11f, 0.13f, 0.19f, 0.76f);
+		UnityEngine.UI.Image panelBg = windowGo.AddComponent<UnityEngine.UI.Image>();
+		Sprite darkFrame = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedDarkFrame) ?? XingShuUIAssetService.GetRoundedFallbackSprite(18);
+		panelBg.sprite = darkFrame;
+		panelBg.type = UnityEngine.UI.Image.Type.Sliced;
+		panelBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedDarkFrame) != null ? translucentPanelColor : translucentFallbackColor;
+		XingShuNativeGameUI.Bind(panelBg, XingShuNativeSprite.RoundedDarkFrame, UnityEngine.UI.Image.Type.Sliced, false, translucentPanelColor);
+		XingShuUIFactory.AddShadow(windowGo, new Color(0f, 0f, 0f, 0.30f), new Vector2(0f, -8f));
+
+		GameObject clipGo = XingShuUIFactory.CreateUIObject("Clip", windowGo);
+		XingShuDetailLayout.Fill(clipGo.GetComponent<RectTransform>(), 4f, 4f, 4f, 4f);
+		clipGo.AddComponent<RectMask2D>();
+		UnityEngine.UI.Image patternBg = XingShuUIFactory.CreateImage(clipGo, "DarkPattern", XingShuUIAssetService.WhiteSprite, new Color(1f, 1f, 1f, 0.01f));
+		XingShuDetailLayout.Fill(patternBg.rectTransform);
+		patternBg.raycastTarget = false;
+		XingShuNativeGameUI.Bind(patternBg, XingShuNativeSprite.DarkPattern, UnityEngine.UI.Image.Type.Tiled, false, new Color(1f, 1f, 1f, 0.34f));
+		GameObject quickStripes = XingShuUIFactory.CreateNativeDiagonalStripes(clipGo, 0.56f, 200f, 92f);
+		foreach (UnityEngine.UI.Image stripeImg in quickStripes.GetComponentsInChildren<UnityEngine.UI.Image>(true))
+		{
+			Color sc = stripeImg.color;
+			stripeImg.color = new Color(sc.r, sc.g, sc.b, 0.36f);
+		}
+
+		// 顶部栏
+		GameObject headerGo = XingShuUIFactory.CreateUIObject("Header", windowGo);
+		RectTransform hdrRt = headerGo.GetComponent<RectTransform>();
+		hdrRt.anchorMin = new Vector2(0f, 1f);
+		hdrRt.anchorMax = new Vector2(1f, 1f);
+		hdrRt.pivot = new Vector2(0.5f, 1f);
+		hdrRt.anchoredPosition = Vector2.zero;
+		hdrRt.sizeDelta = new Vector2(0f, 50f);
+
+		Text hdrTitle = XingShuUIFactory.CreateText(headerGo, "Title", "星枢快捷控制", isMobile ? 19 : 17, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
+		XingShuDetailLayout.Fill(hdrTitle.rectTransform, 16f, 4f, 54f, 4f);
+		XingShuUIFactory.AddOutline(hdrTitle.gameObject, new Color(0.08f, 0.08f, 0.12f, 0.95f), new Vector2(1.5f, -1.5f));
+
+		_closeBtn = XingShuUIFactory.CreateButton(headerGo, "CloseButton", "×", XingShuUIAssetService.GetSprite("close_normal.png"),
+			Color.white, Color.white, () => SetMenuOpen(false), isMobile ? 22 : 18);
+		RectTransform closeRt = _closeBtn.GetComponent<RectTransform>();
+		closeRt.anchorMin = closeRt.anchorMax = new Vector2(1f, 0.5f);
+		closeRt.pivot = new Vector2(1f, 0.5f);
+		closeRt.anchoredPosition = new Vector2(-12f, 0f);
+		closeRt.sizeDelta = Vector2.one * (isMobile ? 32f : 28f);
+
+		// 中部快捷开关容器
+		GameObject quickBody = XingShuUIFactory.CreateUIObject("QuickBody", windowGo);
+		XingShuDetailLayout.Fill(quickBody.GetComponent<RectTransform>(), 14f, 54f, 14f, 70f);
+		VerticalLayoutGroup qVlg = quickBody.AddComponent<VerticalLayoutGroup>();
+		qVlg.spacing = isMobile ? 10f : 8f;
+		qVlg.childControlWidth = true;
+		qVlg.childControlHeight = true;
+		qVlg.childForceExpandWidth = true;
+		qVlg.childForceExpandHeight = false;
+
+		if (hasSpeed)
+		{
+			BuildQuickToggleRow(quickBody, "QuickSpeedRow", "全局变速", isMobile, ReadSpeedEnabled(), out _quickSpeedToggle, out _quickSpeedValueText, SetSpeedFromQuickToggle);
+		}
+		if (hasKnockback)
+		{
+			BuildQuickToggleRow(quickBody, "QuickKnockbackRow", "击飞预测", isMobile, MonsterKillProbability.IsEnabled, out _quickKnockbackToggle, out _, val =>
+			{
+				if (_suppressQuickToggle) return;
+				MonsterKillProbability.IsEnabled = val;
+			});
+		}
+		if (hasHand)
+		{
+			BuildQuickToggleRow(quickBody, "QuickHandRow", "手牌同步", isMobile, HandCardDisplayManager.IsEnabled, out _quickHandCardToggle, out _, val =>
+			{
+				if (_suppressQuickToggle) return;
+				HandCardDisplayManager.IsEnabled = val;
+				if (val && XingShu.Spectator.SpectatorStateStore.IsInSpectatorSession())
+				{
+					HandCardDisplayManager.RefreshAllWidgets();
+				}
+			});
+		}
+		if (quickCount == 0)
+		{
+			GameObject emptyRow = XingShuUIFactory.CreateUIObject("QuickEmptyNotice", quickBody);
+			LayoutElement emptyLe = emptyRow.AddComponent<LayoutElement>();
+			emptyLe.minHeight = isMobile ? 64f : 56f;
+			emptyLe.preferredHeight = isMobile ? 64f : 56f;
+			Sprite emptySp = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) ?? XingShuUIAssetService.GetRoundedFallbackSprite(12);
+			UnityEngine.UI.Image emptyBg = emptyRow.AddComponent<UnityEngine.UI.Image>();
+			emptyBg.sprite = emptySp;
+			emptyBg.type = UnityEngine.UI.Image.Type.Sliced;
+			Color emptyTint = new Color(1f, 1f, 1f, 0.86f);
+			emptyBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) != null ? emptyTint : new Color(0.96f, 0.97f, 0.99f, 0.86f);
+			XingShuNativeGameUI.Bind(emptyBg, XingShuNativeSprite.RoundedLightCard, UnityEngine.UI.Image.Type.Sliced, false, emptyTint);
+			Text emptyTxt = XingShuUIFactory.CreateText(emptyRow, "Text", "当前仅加载星枢核心插件\n可在启动器「模组」页按需安装功能模块", isMobile ? 13 : 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleCenter);
+			XingShuDetailLayout.Fill(emptyTxt.rectTransform, 10f, 6f, 10f, 6f);
+		}
+
+		// 底部全宽「打开完整功能中心」按钮
+		Button openCenterBtn = XingShuUIFactory.CreateButton(windowGo, "OpenFullCenterBtn", "打开完整功能中心",
+			XingShuUIAssetService.GetSprite("button_primary.png"), Color.white, Color.white,
+			() =>
+			{
+				SetMenuOpen(false);
+				XingShuRuntime.UI.XingShuUICenter.Open();
+			}, isMobile ? 17 : 15);
+		RectTransform ocbRt = openCenterBtn.GetComponent<RectTransform>();
+		ocbRt.anchorMin = new Vector2(0f, 0f);
+		ocbRt.anchorMax = new Vector2(1f, 0f);
+		ocbRt.pivot = new Vector2(0.5f, 0f);
+		ocbRt.anchoredPosition = new Vector2(0f, 14f);
+		ocbRt.sizeDelta = new Vector2(-28f, isMobile ? 46f : 42f);
+		XingShuNativeGameUI.Bind(openCenterBtn.GetComponent<UnityEngine.UI.Image>(), XingShuNativeSprite.BtnLarge, UnityEngine.UI.Image.Type.Sliced, false, Color.white);
+		Text ocbTxt = openCenterBtn.GetComponentInChildren<Text>();
+		if (ocbTxt != null) XingShuUIFactory.AddOutline(ocbTxt.gameObject, new Color(0.32f, 0.04f, 0.16f, 1f), new Vector2(1.4f, -1.4f));
+
+		// 隐藏但可用的 Toast 横幅
+		_toastBannerObj = XingShuUIFactory.CreateUIObject("ToastBanner", _menuRootObj);
+		RectTransform tbRt = _toastBannerObj.GetComponent<RectTransform>();
+		tbRt.anchorMin = tbRt.anchorMax = new Vector2(0.5f, 1f);
+		tbRt.pivot = new Vector2(0.5f, 1f);
+		tbRt.anchoredPosition = new Vector2(0f, -20f);
+		tbRt.sizeDelta = new Vector2(280f, 34f);
+		UnityEngine.UI.Image tbImg = _toastBannerObj.AddComponent<UnityEngine.UI.Image>();
+		tbImg.sprite = XingShuUIAssetService.GetRoundedFallbackSprite(10);
+		tbImg.type = UnityEngine.UI.Image.Type.Sliced;
+		tbImg.color = new Color(0.11f, 0.12f, 0.16f, 0.94f);
+		_toastCg = _toastBannerObj.AddComponent<CanvasGroup>();
+		_toastText = XingShuUIFactory.CreateText(_toastBannerObj, "ToastText", "", 13, Color.white, TextAnchor.MiddleCenter);
+		XingShuDetailLayout.Fill(_toastText.rectTransform, 10f, 2f, 10f, 2f);
+		_toastBannerObj.SetActive(false);
+
+		ResizeMenu();
+	}
+
+	private static void BuildQuickToggleRow(
+		GameObject parent,
+		string name,
+		string title,
+		bool isMobile,
+		bool initialValue,
+		out Toggle toggleOut,
+		out Text valueLabelOut,
+		Action<bool> onChanged)
+	{
+		GameObject row = XingShuUIFactory.CreateUIObject(name, parent);
+		LayoutElement le = row.AddComponent<LayoutElement>();
+		float rowH = isMobile ? 54f : 48f;
+		le.minHeight = rowH;
+		le.preferredHeight = rowH;
+		le.flexibleHeight = 0f;
+
+		Sprite cardSp = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) ?? XingShuUIAssetService.GetRoundedFallbackSprite(12);
+		UnityEngine.UI.Image rowBg = row.AddComponent<UnityEngine.UI.Image>();
+		rowBg.sprite = cardSp;
+		rowBg.type = UnityEngine.UI.Image.Type.Sliced;
+		Color quickRowTint = new Color(1f, 1f, 1f, 0.86f);
+		rowBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) != null ? quickRowTint : new Color(0.96f, 0.97f, 0.99f, 0.86f);
+		XingShuNativeGameUI.Bind(rowBg, XingShuNativeSprite.RoundedLightCard, UnityEngine.UI.Image.Type.Sliced, false, quickRowTint);
+
+		toggleOut = XingShuUIFactory.CreateToggleRow(row, name + "_Toggle", title, initialValue, onChanged);
+		RectTransform tRt = toggleOut.GetComponent<RectTransform>();
+		tRt.anchorMin = Vector2.zero;
+		tRt.anchorMax = Vector2.one;
+		tRt.offsetMin = Vector2.zero;
+		tRt.offsetMax = Vector2.zero;
+		Text lbl = toggleOut.transform.Find("Label")?.GetComponent<Text>();
+		if (lbl != null)
+		{
+			lbl.fontSize = isMobile ? 16 : 14;
+			lbl.fontStyle = FontStyle.Bold;
+			lbl.color = XingShuUITheme.PrimaryText;
+			lbl.rectTransform.offsetMin = new Vector2(16f, 0f);
+			lbl.rectTransform.offsetMax = new Vector2(-118f, 0f);
+		}
+		Transform bgT = toggleOut.transform.Find("Background");
+		if (bgT != null)
+		{
+			RectTransform bgRt = bgT.GetComponent<RectTransform>();
+			bgRt.anchoredPosition = new Vector2(-14f, 0f);
+			bgRt.sizeDelta = new Vector2(32f, 32f);
+		}
+
+		valueLabelOut = XingShuUIFactory.CreateText(row, "ValueText", "", isMobile ? 13 : 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+		RectTransform vRt = valueLabelOut.rectTransform;
+		vRt.anchorMin = vRt.anchorMax = new Vector2(1f, 0.5f);
+		vRt.pivot = new Vector2(1f, 0.5f);
+		vRt.anchoredPosition = new Vector2(-54f, 0f);
+		vRt.sizeDelta = new Vector2(76f, 24f);
+	}
+
+	private Sprite GetOrCreateCustomOrbSprite()
+	{
+		if (_customOrbSprite != null) return _customOrbSprite;
+		const int sz = 192;
+		float half = (sz - 1) * 0.5f;
+		float outerR = sz * 0.46f;
+		Color32[] px = new Color32[sz * sz];
+		for (int y = 0; y < sz; y++)
+		{
+			float ny = (y - half) / outerR;
+			for (int x = 0; x < sz; x++)
+			{
+				float nx = (x - half) / outerR;
+				float d = Mathf.Sqrt(nx * nx + ny * ny);
+				float edge = (1f - d) * outerR;
+				if (edge <= -0.8f)
+				{
+					px[y * sz + x] = new Color32(0, 0, 0, 0);
+					continue;
+				}
+				float alpha = Mathf.Clamp01(edge + 0.8f);
+				// Deep indigo -> twilight violet gradient background
+				float grad = Mathf.Clamp01(0.5f + 0.45f * (nx - ny));
+				Color bg = Color.Lerp(new Color(0.11f, 0.16f, 0.34f, 1f), new Color(0.24f, 0.14f, 0.38f, 1f), grad);
+				// Subtle diagonal nebula highlight
+				float glow = Mathf.Exp(-d * d * 2.2f) * 0.24f;
+				bg = Color.Lerp(bg, new Color(0.32f, 0.58f, 0.96f, 1f), glow);
+				// Thin cyan-to-rose specular rim
+				if (d > 0.86f)
+				{
+					Color rim = Color.Lerp(new Color(0.38f, 0.86f, 1f, 1f), new Color(1f, 0.36f, 0.68f, 1f), Mathf.Clamp01(0.5f + 0.5f * nx));
+					float rimMix = Mathf.Clamp01((d - 0.86f) / 0.10f) * 0.85f;
+					bg = Color.Lerp(bg, rim, rimMix);
+				}
+				// Sharp 4-point Astral Star emblem in pure white
+				float ax = Mathf.Abs(nx);
+				float ay = Mathf.Abs(ny);
+				float starDist = Mathf.Pow(ax + 0.0001f, 0.62f) + Mathf.Pow(ay + 0.0001f, 0.62f);
+				float starMask = Mathf.Clamp01((Mathf.Pow(0.62f, 0.62f) - starDist) * 26f + 0.5f);
+				// Soft inner core highlight
+				float core = Mathf.Clamp01(1f - d * 4.5f) * 0.35f;
+				// Four tiny diagonal gold sparkle dots at 45 degrees
+				float d45 = Mathf.Sqrt((ax - 0.33f) * (ax - 0.33f) + (ay - 0.33f) * (ay - 0.33f));
+				float spark = Mathf.Clamp01((0.055f - d45) * 42f + 0.5f);
+				Color col = bg + new Color(core * 0.5f, core * 0.8f, core, 0f);
+				col = Color.Lerp(col, new Color(1f, 0.86f, 0.42f, 1f), spark);
+				col = Color.Lerp(col, Color.white, starMask);
+				col.a = alpha;
+				px[y * sz + x] = col;
+			}
+		}
+		_customOrbTex = new Texture2D(sz, sz, TextureFormat.RGBA32, false);
+		_customOrbTex.name = "XINGSHU_CustomOrbTex";
+		_customOrbTex.filterMode = FilterMode.Bilinear;
+		_customOrbTex.wrapMode = TextureWrapMode.Clamp;
+		_customOrbTex.hideFlags = HideFlags.HideAndDontSave;
+		_customOrbTex.SetPixels32(px);
+		_customOrbTex.Apply(false, true);
+		_customOrbSprite = Sprite.Create(_customOrbTex, new Rect(0f, 0f, sz, sz), new Vector2(0.5f, 0.5f), 100f);
+		_customOrbSprite.name = "XINGSHU_CustomOrbSprite";
+		_customOrbSprite.hideFlags = HideFlags.HideAndDontSave;
+		return _customOrbSprite;
+	}
+
+	private static bool ReadSpeedEnabled()
+	{
+		return XingShuSpeedEngineCoordinator.CurrentEngine == XingShuSpeedEngineMode.NativeHook
+			? XingShuConfigService.GetBool(XingShuConfigKeys.NativeSpeedEnabled, XingShuConfigKeys.NativeSpeedEnabledDefault)
+			: GameSpeedControllerGUI.IsSpeedEnabled;
+	}
+
+	private static float ReadConfiguredSpeed()
+	{
+		return XingShuSpeedEngineCoordinator.CurrentEngine == XingShuSpeedEngineMode.NativeHook
+			? XingShuConfigService.GetFloat(XingShuConfigKeys.NativeSpeedValue, XingShuConfigKeys.NativeSpeedValueDefault, XingShuConfigKeys.NativeSpeedValueMin, XingShuConfigKeys.NativeSpeedValueMax)
+			: GameSpeedControllerGUI.CurrentTimeScale;
+	}
+
+	private void SetSpeedFromQuickToggle(bool enabled)
+	{
+		if (_suppressQuickToggle) return;
+		if (XingShuSpeedEngineCoordinator.CurrentEngine == XingShuSpeedEngineMode.NativeHook)
+		{
+			XingShuSpeedEngineCoordinator.SetNativeEnabled(enabled);
+		}
+		else
+		{
+			GameSpeedControllerGUI.SetEnabled(enabled);
+		}
+		SyncNativeQuickMenuState();
+	}
+
+	private void SyncNativeQuickMenuState()
+	{
+		bool speedEnabled = ReadSpeedEnabled();
+		float speedVal = ReadConfiguredSpeed();
+		if (_nativeSpeedBadgeText != null)
+		{
+			string nextBadge = speedEnabled ? $"{speedVal:F1}x" : "星枢";
+			if (_nativeSpeedBadgeText.text != nextBadge) _nativeSpeedBadgeText.text = nextBadge;
+		}
+		if (_menuOpen && _usingNativeBallUI)
+		{
+			_suppressQuickToggle = true;
+			try
+			{
+				if (_quickSpeedToggle != null && _quickSpeedToggle.isOn != speedEnabled)
+					XingShuUIFactory.SetToggleRowStateWithoutNotify(_quickSpeedToggle, speedEnabled);
+				if (_quickSpeedValueText != null)
+					_quickSpeedValueText.text = speedEnabled ? $"{speedVal:F2}x" : "已关闭";
+				if (_quickKnockbackToggle != null && _quickKnockbackToggle.isOn != MonsterKillProbability.IsEnabled)
+					XingShuUIFactory.SetToggleRowStateWithoutNotify(_quickKnockbackToggle, MonsterKillProbability.IsEnabled);
+				if (_quickHandCardToggle != null && _quickHandCardToggle.isOn != HandCardDisplayManager.IsEnabled)
+					XingShuUIFactory.SetToggleRowStateWithoutNotify(_quickHandCardToggle, HandCardDisplayManager.IsEnabled);
+			}
+			finally
+			{
+				_suppressQuickToggle = false;
+			}
 		}
 	}
 
@@ -1781,6 +2126,7 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		_menuOpen = open;
 		if (_menuOpen)
 		{
+			SyncNativeQuickMenuState();
 			UpdateMenuPosition();
 		}
 		ApplyMenuVisibility();
@@ -1822,6 +2168,7 @@ internal sealed class AssistBallGUI : MonoBehaviour
 
 	private void Update()
 	{
+		XingShuRuntime.UI.XingShuNativeGameUI.TickEnsureLoaded();
 		SyncLayout();
 		UpdateFallbackDock();
 
@@ -1834,20 +2181,36 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		// UGUI 路径动态入口视觉与 Tooltip 刷新
 		if (_isUGUIMode && _ballButtonRt != null)
 		{
-			UnityEngine.UI.Image ballImg = _ballButtonRt.GetComponent<UnityEngine.UI.Image>();
-			if (ballImg != null)
+			if (_usingNativeBallUI)
 			{
-				if (XingShuRuntime.UI.XingShuUICenter.IsOpen)
+				if (_nativeRingImg != null)
 				{
-					ballImg.sprite = XingShuRuntime.UI.XingShuUIAssetService.GetSprite("floating_entry_active.png");
+					bool highlight = _menuOpen || XingShuRuntime.UI.XingShuUICenter.IsOpen || (_isHoveringUGUI && !_isDragging);
+					_nativeRingImg.color = highlight ? XingShuUITheme.Pink : XingShuUITheme.Yellow;
 				}
-				else if (_isHoveringUGUI && !_isDragging)
+				if (Time.unscaledTime - _lastVisualUpdate >= 0.2f)
 				{
-					ballImg.sprite = XingShuRuntime.UI.XingShuUIAssetService.GetSprite("floating_entry_hover.png");
+					_lastVisualUpdate = Time.unscaledTime;
+					SyncNativeQuickMenuState();
 				}
-				else
+			}
+			else
+			{
+				UnityEngine.UI.Image ballImg = _ballButtonRt.GetComponent<UnityEngine.UI.Image>();
+				if (ballImg != null)
 				{
-					ballImg.sprite = XingShuRuntime.UI.XingShuUIAssetService.GetSprite("floating_entry_idle.png");
+					if (XingShuRuntime.UI.XingShuUICenter.IsOpen)
+					{
+						ballImg.sprite = XingShuRuntime.UI.XingShuUIAssetService.GetSprite("floating_entry_active.png");
+					}
+					else if (_isHoveringUGUI && !_isDragging)
+					{
+						ballImg.sprite = XingShuRuntime.UI.XingShuUIAssetService.GetSprite("floating_entry_hover.png");
+					}
+					else
+					{
+						ballImg.sprite = XingShuRuntime.UI.XingShuUIAssetService.GetSprite("floating_entry_idle.png");
+					}
 				}
 			}
 
@@ -2006,8 +2369,19 @@ internal sealed class AssistBallGUI : MonoBehaviour
 			CancelPointer();
 			if (wasClick)
 			{
-				// 左键主入口: 打开/关闭新功能中心 (Primary Left Click -> Function Center)
-				XingShuRuntime.UI.XingShuUICenter.Toggle();
+				// 左键点击悬浮球：若功能中心已开则收起；原生模式下先切换快捷控制气泡
+				if (XingShuRuntime.UI.XingShuUICenter.IsOpen)
+				{
+					XingShuRuntime.UI.XingShuUICenter.Close();
+				}
+				else if (_usingNativeBallUI)
+				{
+					ToggleMenu();
+				}
+				else
+				{
+					XingShuRuntime.UI.XingShuUICenter.Toggle();
+				}
 			}
 			else
 			{
@@ -3091,6 +3465,20 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		if (!(_windowPanelRt == null))
 		{
 			bool isMobile = XingShuMobileUIHelper.IsMobile;
+			if (_usingNativeBallUI)
+			{
+				int rows = 1;
+				Transform qb = _windowPanelRt.Find("QuickBody");
+				if (qb != null && qb.childCount > 0) rows = qb.childCount;
+				float rowH = isMobile ? 54f : 48f;
+				float gap = isMobile ? 10f : 8f;
+				float nw = isMobile ? 380f : 336f;
+				float nh = 54f + 70f + rows * rowH + Mathf.Max(0, rows - 1) * gap + 14f;
+				Rect nRect = XingShuMobileUIHelper.FitRect(new Rect(0f, 0f, nw, nh), LayoutBounds);
+				_windowPanelRt.sizeDelta = nRect.size;
+				UpdateMenuPosition();
+				return;
+			}
 			float height = ((_currentTab != 1) ? Mathf.Clamp(104f + (float)Mathf.Max(1, _cachedActionCount) * (isMobile ? 68f : 58f), isMobile ? 260f : 220f, isMobile ? 480f : 340f) : (isMobile ? 460f : 405f));
 			Rect rect = XingShuMobileUIHelper.FitRect(new Rect(0f, 0f, isMobile ? 390f : 300f, height), LayoutBounds);
 			_windowPanelRt.sizeDelta = rect.size;

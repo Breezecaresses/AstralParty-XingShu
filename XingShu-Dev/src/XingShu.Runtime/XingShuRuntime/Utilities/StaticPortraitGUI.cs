@@ -130,7 +130,10 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 		}
 		try
 		{
-			AssistBall.RegisterAction("static_portrait", "静态立绘配置", Toggle, 30, "自定义基础前缀与 MODIMG/MODOUT 路径", "\ud83d\uddbc\ufe0f", () => IsEnabled);
+			if (XingShuMobileUIHelper.IsMobile)
+			{
+				AssistBall.RegisterAction("static_portrait", "静态立绘配置", Toggle, 30, "自定义基础前缀与 MODIMG/MODOUT 路径", "\ud83d\uddbc\ufe0f", () => IsEnabled);
+			}
 		}
 		catch (Exception ex)
 		{
@@ -140,6 +143,7 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 
 	public static void Toggle()
 	{
+		if (!XingShuMobileUIHelper.IsMobile) return;
 		if (UseModernView)
 		{
 			try
@@ -167,6 +171,11 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 
 	private void Awake()
 	{
+		if (XingShuMobileUIHelper.IsMobile)
+		{
+			_defaultModImg = "modimg";
+			_defaultModOut = "outimg";
+		}
 		XingShuOverlayInput.Register(this, () => _showUI, () => XingShuOverlayInput.ScaledRect(_windowRect, XingShuMobileUIHelper.ScaleFactor));
 		Instance = this;
 		LoadConfig();
@@ -184,13 +193,29 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 	{
 		try
 		{
+			if (XingShuMobileUIHelper.IsMobile)
+			{
+				_defaultModImg = "modimg";
+				_defaultModOut = "outimg";
+			}
 			_enableLoadMod = XingShuConfigService.GetBool(XingShuConfigKeys.StaticPortraitEnableLoad, XingShuConfigKeys.StaticPortraitEnableLoadDefault);
 			_enableAutoDump = XingShuConfigService.GetBool(XingShuConfigKeys.StaticPortraitEnableDump, XingShuConfigKeys.StaticPortraitEnableDumpDefault);
 			_basePath = XingShuConfigService.GetString(XingShuConfigKeys.StaticPortraitBasePath, XingShuConfigKeys.StaticPortraitBasePathDefault);
 			string @string = XingShuConfigService.GetString(XingShuConfigKeys.StaticPortraitModImg, XingShuConfigKeys.StaticPortraitModImgDefault);
-			_modImgPath = (string.IsNullOrEmpty(@string) ? _defaultModImg : @string);
+			string trimmedImg = string.IsNullOrEmpty(@string) ? "" : @string.Trim();
+			if (XingShuMobileUIHelper.IsMobile && (trimmedImg == "../modimg" || trimmedImg == "..\\modimg"))
+			{
+				trimmedImg = "";
+			}
+			_modImgPath = (string.IsNullOrEmpty(trimmedImg) ? _defaultModImg : trimmedImg);
 			string string2 = XingShuConfigService.GetString(XingShuConfigKeys.StaticPortraitModOut, XingShuConfigKeys.StaticPortraitModOutDefault);
-			_modOutPath = (string.IsNullOrEmpty(string2) ? _defaultModOut : string2);
+			string trimmedOut = string.IsNullOrEmpty(string2) ? "" : string2.Trim();
+			if (XingShuMobileUIHelper.IsMobile && (trimmedOut == "../outimg" || trimmedOut == "..\\outimg"))
+			{
+				trimmedOut = "";
+			}
+			_modOutPath = (string.IsNullOrEmpty(trimmedOut) ? _defaultModOut : trimmedOut);
+			ModImgTextureLoader.InvalidateCache();
 		}
 		catch (Exception ex)
 		{
@@ -208,6 +233,7 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 			XingShuConfigService.SetString(XingShuConfigKeys.StaticPortraitModImg, (_modImgPath ?? "").Trim());
 			XingShuConfigService.SetString(XingShuConfigKeys.StaticPortraitModOut, (_modOutPath ?? "").Trim());
 			XingShuConfigService.Save();
+			ModImgTextureLoader.InvalidateCache();
 			_statusMsg = "<color=#34d399>✓ 配置已保存，实时生效！</color>";
 			_statusMsgTimer = Time.unscaledTime + 3f;
 		}
@@ -220,7 +246,7 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 
 	private void Update()
 	{
-		if (XingShuHotkeys.TryConsume(XingShuShortcut.ModsPanel, "StaticPortraitGUI"))
+		if (XingShuMobileUIHelper.IsMobile && XingShuHotkeys.TryConsume(XingShuShortcut.ModsPanel, "StaticPortraitGUI"))
 		{
 			if (UseModernView)
 			{
@@ -275,7 +301,14 @@ internal sealed class StaticPortraitGUI : MonoBehaviour
 			string text = "";
 			try
 			{
-				text = Application.dataPath ?? "";
+				if (XingShuMobileUIHelper.IsMobile)
+				{
+					text = Application.persistentDataPath ?? "";
+				}
+				if (string.IsNullOrEmpty(text))
+				{
+					text = Application.dataPath ?? "";
+				}
 			}
 			catch
 			{

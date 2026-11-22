@@ -2,7 +2,7 @@ import {useEffect, useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {LogIn, LogOut, RefreshCw, X, ShieldCheck, Link2, Sparkles} from 'lucide-react';
-import {Link} from 'react-router-dom';
+import {Link, useSearchParams} from 'react-router-dom';
 import {deriveQqAuthorizedBanner, type CloudAccount} from './cloudLoginStatus';
 
 type Account = CloudAccount;
@@ -18,6 +18,8 @@ const readable = (error: unknown) => {
 };
 
 export function CloudLoginCard({isZh}: {isZh: boolean}) {
+  const [searchParams] = useSearchParams();
+  const preferredPlatform = searchParams.get('platform');
   const [account, setAccount] = useState<Account | null>(null);
   const [grant, setGrant] = useState<Grant | null>(null);
   const [polling, setPolling] = useState(false);
@@ -72,7 +74,8 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
       const list = ch.channels ?? [];
       setAccount(result.account ?? null);
       setChannels(list);
-      setQqChannelKey(prev => (prev && list.some(item => channelKey(item) === prev)) ? prev : (list[0] ? channelKey(list[0]) : ''));
+      const preferred = list.find(item => item.platform === preferredPlatform) ?? list[0];
+      setQqChannelKey(prev => list.some(item => channelKey(item) === prev) ? prev : preferred ? channelKey(preferred) : '');
       if (hands) setCloudHands(hands);
       setLoaded(true);
     } catch (error) { setNotice(readable(error), 'error'); }
@@ -171,7 +174,7 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
         {grant && <button className="btn btn-secondary" onClick={() => setVisible(true)}>{isZh ? '查看登录进度' : 'View login'}</button>}
         {account ? <button className="btn btn-secondary" disabled={busy} onClick={logout}><LogOut size={15}/>{isZh ? '退出登录' : 'Sign out'}</button> :
           <button className="btn btn-primary" disabled={busy} onClick={start}><LogIn size={16}/>{busy ? (isZh ? '连接中…' : 'Connecting…') : (isZh ? '登录账号' : 'Sign in')}</button>}
-        {account&&<Link className="btn btn-secondary" to="/player/profile" onClick={()=>localStorage.setItem('library.account',`PHONE_CN:${account.uid}`)}>{isZh ? '查看游戏资料' : 'Game profile'}</Link>}
+        {account && import.meta.env.MODE !== 'launcher' && <Link className="btn btn-secondary" to="/player/profile" onClick={()=>localStorage.setItem('library.account',`PHONE_CN:${account.uid}`)}>{isZh ? '查看游戏资料' : 'Game profile'}</Link>}
         <button className="btn btn-secondary" disabled={busy} onClick={refresh} aria-label={isZh ? '刷新登录状态' : 'Refresh login'}><RefreshCw size={15}/></button>
       </div>
       {account && (

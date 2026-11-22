@@ -30,7 +30,7 @@ namespace XingShuRuntime.UI
         private Text _reconnectCountText;
         private Text _antiCheatStatusText;
 
-        // Card 4: 原生快捷通信卡片
+        // Card 4: 原生快捷通信卡片 & 选人地图提示
         private Toggle _autoThanksToggle;
         private Toggle _autoPraiseToggle;
         private Slider _praiseScaleSlider, _praiseOffsetXSlider, _praiseOffsetYSlider;
@@ -39,6 +39,10 @@ namespace XingShuRuntime.UI
         private Text _dailyShopStatus;
         private Toggle _settlementScreenshotToggle;
         private Text _settlementScreenshotPathText;
+        private Toggle _selectRoleMapToggle;
+        private Toggle _selectRoleMapLockToggle;
+        private Slider _selectRoleMapScaleSlider, _selectRoleMapXSlider, _selectRoleMapYSlider;
+        private Text _selectRoleMapScaleText, _selectRoleMapXText, _selectRoleMapYText;
 
         // 缓存观测值 (0 GC / 仅状态变化时更新 UI)
         private float _lastSyncTime;
@@ -71,15 +75,15 @@ namespace XingShuRuntime.UI
             Sprite cfhSprite = XingShuUIAssetService.GetSprite("card_feature_header.png");
 
             // ==========================================
-            // 1. 顶部主功能与状态卡片 (Card 1: 120px, y: 0)
+            // 1. 顶部主功能与状态卡片 (Card 1: 112px)
             // ==========================================
             GameObject card1 = XingShuUIFactory.CreateUIObject("Card_HeaderStatus", _root);
             RectTransform c1Rt = card1.GetComponent<RectTransform>();
             c1Rt.anchorMin = new Vector2(0f, 1f);
             c1Rt.anchorMax = new Vector2(1f, 1f);
             c1Rt.pivot = new Vector2(0.5f, 1f);
-            c1Rt.anchoredPosition = new Vector2(0f, 0f);
-            c1Rt.sizeDelta = new Vector2(0f, 110f);
+            c1Rt.anchoredPosition = Vector2.zero;
+            c1Rt.sizeDelta = new Vector2(0f, 112f);
 
             Image c1Bg = card1.AddComponent<Image>();
             c1Bg.sprite = cfhSprite;
@@ -354,52 +358,43 @@ namespace XingShuRuntime.UI
             rpRt.anchorMin = rpRt.anchorMax = rpRt.pivot = new Vector2(1f, 1f);
             rpRt.anchoredPosition = new Vector2(-20f, -238f); rpRt.sizeDelta = new Vector2(88f, 28f);
 
-            Text socialDesc = XingShuUIFactory.CreateText(_root, "SocialDesc", "• 怪物索敌已接入：在“击飞预测”页调整地图索敌显示（最大10格推演）。", 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            RectTransform sdRt = socialDesc.rectTransform;
-            sdRt.anchorMin = new Vector2(0f, 1f);
-            sdRt.anchorMax = new Vector2(1f, 1f);
-            sdRt.pivot = new Vector2(0f, 1f);
-            sdRt.anchoredPosition = new Vector2(20f, -542f);
-            sdRt.sizeDelta = new Vector2(700f, 20f);
-
-            // All automation cards share a scroll surface on phones and smaller windows.
+            // All automation cards share a scrollable surface cleanly without stray labels.
             GameObject shopCard = XingShuUIFactory.CreateUIObject("Card_DailyStarCoinShop", _root);
-            shopCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 150f);
+            shopCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 148f);
             Image shopBg = shopCard.AddComponent<Image>();
             shopBg.sprite = cardBaseSprite;
             shopBg.type = Image.Type.Sliced;
             shopBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-            Text shopTitle = XingShuUIFactory.CreateText(shopCard, "Title", "每日星币商店", 20, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            PlaceShopText(shopTitle, -12f, 28f);
-            Text shopDesc = XingShuUIFactory.CreateText(shopCard, "Description", "每天登录后处理官方随机货架：先领免费商品，再买完剩余星币商品。\n默认关闭，按游戏账号保存；星币不足时保留未购商品，不兑换其他货币。", 13, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            PlaceShopText(shopDesc, -48f, 42f);
-            _dailyShopStatus = XingShuUIFactory.CreateText(shopCard, "Status", DailyStarCoinShop.Status, 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            PlaceShopText(_dailyShopStatus, -103f, 34f);
+            Text shopTitle = XingShuUIFactory.CreateText(shopCard, "Title", "每日星币商店", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            PlaceShopText(shopTitle, -12f, 26f);
+            Text shopDesc = XingShuUIFactory.CreateText(shopCard, "Description", "每天登录后处理官方随机货架：先领免费商品，再买完剩余星币商品。\n默认关闭，按游戏账号保存；星币不足时保留未购商品，不兑换其他货币。", 12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
+            PlaceShopText(shopDesc, -44f, 40f);
+            _dailyShopStatus = XingShuUIFactory.CreateText(shopCard, "Status", DailyStarCoinShop.Status, 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
+            PlaceShopText(_dailyShopStatus, -98f, 34f);
             _dailyShopToggle = XingShuUIFactory.CreateToggle(shopCard, "DailyShopToggle", "自动购买", DailyStarCoinShop.IsEnabled,
                 value => { if (!_suppressCallbacks) DailyStarCoinShop.SetEnabled(value); });
             var shopToggleRt = _dailyShopToggle.GetComponent<RectTransform>();
             shopToggleRt.anchorMin = shopToggleRt.anchorMax = new Vector2(1f, 1f);
             shopToggleRt.pivot = new Vector2(1f, 1f);
-            shopToggleRt.anchoredPosition = new Vector2(-20f, -12f);
+            shopToggleRt.anchoredPosition = new Vector2(-20f, -10f);
             shopToggleRt.sizeDelta = new Vector2(165f, 34f);
-            shopCard.transform.SetAsFirstSibling();
 
             GameObject screenshotCard = XingShuUIFactory.CreateUIObject("Card_AutoSettlementScreenshot", _root);
-            screenshotCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 148f);
+            screenshotCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 146f);
             Image shotBg = screenshotCard.AddComponent<Image>();
             shotBg.sprite = cardBaseSprite;
             shotBg.type = Image.Type.Sliced;
             shotBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-            Text shotTitle = XingShuUIFactory.CreateText(screenshotCard, "Title", "自动结算战绩截图", 20, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            PlaceShopText(shotTitle, -12f, 28f);
-            Text shotDesc = XingShuUIFactory.CreateText(screenshotCard, "Description", "对局结算战绩界面稳定后自动保存 PNG 截图，每局仅保存一次。", 13, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            PlaceShopText(shotDesc, -48f, 26f);
-            _settlementScreenshotPathText = XingShuUIFactory.CreateText(screenshotCard, "Status", FormatScreenshotPathSummary(), 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            Text shotTitle = XingShuUIFactory.CreateText(screenshotCard, "Title", "自动结算战绩截图", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            PlaceShopText(shotTitle, -12f, 26f);
+            Text shotDesc = XingShuUIFactory.CreateText(screenshotCard, "Description", "对局结算战绩界面稳定后自动保存 PNG 截图，每局仅保存一次。", 12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
+            PlaceShopText(shotDesc, -44f, 24f);
+            _settlementScreenshotPathText = XingShuUIFactory.CreateText(screenshotCard, "Status", FormatScreenshotPathSummary(), 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
             var spRt = _settlementScreenshotPathText.rectTransform;
             spRt.anchorMin = new Vector2(0f, 1f);
             spRt.anchorMax = new Vector2(1f, 1f);
             spRt.pivot = new Vector2(0f, 1f);
-            spRt.anchoredPosition = new Vector2(20f, -86f);
+            spRt.anchoredPosition = new Vector2(20f, -84f);
 #if !XINGSHU_ANDROID_PREVIEW
             spRt.sizeDelta = new Vector2(-190f, 46f);
             Button openFolderBtn = XingShuUIFactory.CreateButton(
@@ -414,7 +409,7 @@ namespace XingShuRuntime.UI
             var ofRt = openFolderBtn.GetComponent<RectTransform>();
             ofRt.anchorMin = ofRt.anchorMax = new Vector2(1f, 1f);
             ofRt.pivot = new Vector2(1f, 1f);
-            ofRt.anchoredPosition = new Vector2(-20f, -92f);
+            ofRt.anchoredPosition = new Vector2(-20f, -90f);
             ofRt.sizeDelta = new Vector2(140f, 34f);
 #else
             spRt.sizeDelta = new Vector2(-40f, 46f);
@@ -424,16 +419,83 @@ namespace XingShuRuntime.UI
             var shotToggleRt = _settlementScreenshotToggle.GetComponent<RectTransform>();
             shotToggleRt.anchorMin = shotToggleRt.anchorMax = new Vector2(1f, 1f);
             shotToggleRt.pivot = new Vector2(1f, 1f);
-            shotToggleRt.anchoredPosition = new Vector2(-20f, -12f);
+            shotToggleRt.anchoredPosition = new Vector2(-20f, -10f);
             shotToggleRt.sizeDelta = new Vector2(165f, 34f);
-            screenshotCard.transform.SetSiblingIndex(1);
+
+            GameObject mapHintCard = XingShuUIFactory.CreateUIObject("Card_SelectRoleMapName", _root);
+            mapHintCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 276f);
+            Image mhBg = mapHintCard.AddComponent<Image>();
+            mhBg.sprite = cardBaseSprite;
+            mhBg.type = Image.Type.Sliced;
+            mhBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
+            Text mhTitle = XingShuUIFactory.CreateText(mapHintCard, "Title", "选人地图提示", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            PlaceShopText(mhTitle, -12f, 26f);
+            Text mhDesc = XingShuUIFactory.CreateText(mapHintCard, "Description", "选人界面显示地图名称、模式与 PvE 难度；未锁定时可直接拖动", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            PlaceShopText(mhDesc, -38f, 20f);
+            _selectRoleMapToggle = XingShuUIFactory.CreateToggle(mapHintCard, "SelectRoleMapToggle", "显示地图", SelectRoleMapNameHint.IsEnabled,
+                value => { if (!_suppressCallbacks) SelectRoleMapNameHint.SetEnabled(value); });
+            var mhRt = _selectRoleMapToggle.GetComponent<RectTransform>();
+            mhRt.anchorMin = mhRt.anchorMax = new Vector2(1f, 1f);
+            mhRt.pivot = new Vector2(1f, 1f);
+            mhRt.anchoredPosition = new Vector2(-20f, -10f);
+            mhRt.sizeDelta = new Vector2(165f, 34f);
+
+            _selectRoleMapLockToggle = XingShuUIFactory.CreateToggle(mapHintCard, "SelectRoleMapLockToggle", "锁定位置（禁止拖动）", SelectRoleMapNameHint.Locked,
+                value => { if (!_suppressCallbacks) SelectRoleMapNameHint.SetLocked(value); });
+            var mhlRt = _selectRoleMapLockToggle.GetComponent<RectTransform>();
+            mhlRt.anchorMin = mhlRt.anchorMax = new Vector2(0f, 1f);
+            mhlRt.pivot = new Vector2(0f, 1f);
+            mhlRt.anchoredPosition = new Vector2(20f, -64f);
+            mhlRt.sizeDelta = new Vector2(240f, 32f);
+
+            Button resetMapBtn = XingShuUIFactory.CreateButton(mapHintCard, "ResetSelectRoleMapLayout", "恢复默认",
+                XingShuUIAssetService.GetSprite("button_secondary.png"), XingShuUITheme.Card, XingShuUITheme.PrimaryText,
+                () => { SelectRoleMapNameHint.ResetLayout(); SyncSelectRoleMapControls(); }, 12);
+            var rmRt = resetMapBtn.GetComponent<RectTransform>();
+            rmRt.anchorMin = rmRt.anchorMax = new Vector2(1f, 1f);
+            rmRt.pivot = new Vector2(1f, 1f);
+            rmRt.anchoredPosition = new Vector2(-20f, -64f);
+            rmRt.sizeDelta = new Vector2(104f, 30f);
+
+            AddPercentSliderRow(mapHintCard, "MapScale", "显示大小（60%–180%）", 104f,
+                XingShuConfigKeys.SelectRoleMapNameScaleMin, XingShuConfigKeys.SelectRoleMapNameScaleMax,
+                SelectRoleMapNameHint.Scale,
+                v => { SelectRoleMapNameHint.SetScale(Mathf.Round(v * 20f) / 20f); SyncSelectRoleMapControls(); },
+                out _selectRoleMapScaleSlider, out _selectRoleMapScaleText);
+
+            AddPercentSliderRow(mapHintCard, "MapPosX", "水平位置 X（左 → 右）", 158f,
+                0f, 1f, SelectRoleMapNameHint.PosX,
+                v => { SelectRoleMapNameHint.SetPosition(v, SelectRoleMapNameHint.PosY); SyncSelectRoleMapControls(); },
+                out _selectRoleMapXSlider, out _selectRoleMapXText);
+
+            AddPercentSliderRow(mapHintCard, "MapPosY", "垂直位置 Y（上 → 下）", 212f,
+                0f, 1f, SelectRoleMapNameHint.PosY,
+                v => { SelectRoleMapNameHint.SetPosition(SelectRoleMapNameHint.PosX, v); SyncSelectRoleMapControls(); },
+                out _selectRoleMapYSlider, out _selectRoleMapYText);
+
+            // Clean priority ordering in scrollable automation list:
+            // MapHint -> DailyShop -> SettlementScreenshot -> HeaderStatus -> Dashboard -> AutoThanks -> AutoPraise -> Mechanism
+            mapHintCard.transform.SetAsFirstSibling();
+            shopCard.transform.SetSiblingIndex(1);
+            screenshotCard.transform.SetSiblingIndex(2);
+            card3.transform.SetAsLastSibling();
+
+            bool guardInstalled = XingShuRuntime.Core.LauncherModules.CanLoad("AutoResetActionTimeGUI");
+            card1.SetActive(guardInstalled);
+            card2.SetActive(guardInstalled);
+            card3.SetActive(guardInstalled);
+            cardThanks.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("XingShuAutoThanks"));
+            cardPraise.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("XingShuAutoPraise"));
+            shopCard.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("DailyStarCoinShop"));
+            screenshotCard.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("SettlementScreenshot"));
+            mapHintCard.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("SelectRoleMapNameHint"));
 
             var cards = new System.Collections.Generic.List<RectTransform>();
             foreach (Transform child in _root.transform) cards.Add(child.GetComponent<RectTransform>());
             XingShuUIFactory.CreateVerticalScrollView(_root, "AutomationScroll", out GameObject content);
             var layout = content.GetComponent<VerticalLayoutGroup>();
             layout.spacing = 12f;
-            layout.padding = new RectOffset(0, 10, 0, 24);
+            layout.padding = new RectOffset(0, 12, 4, 28);
             foreach (var card in cards)
             {
                 float height = card.sizeDelta.y;
@@ -510,12 +572,15 @@ namespace XingShuRuntime.UI
             _dailyShopToggle.interactable = DailyStarCoinShop.CanConfigure;
             if (_dailyShopStatus.text != DailyStarCoinShop.Status) _dailyShopStatus.text = DailyStarCoinShop.Status;
             if (_settlementScreenshotToggle != null) _settlementScreenshotToggle.isOn = XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled;
+            if (_selectRoleMapToggle != null) _selectRoleMapToggle.isOn = SelectRoleMapNameHint.IsEnabled;
+            if (_selectRoleMapLockToggle != null) _selectRoleMapLockToggle.isOn = SelectRoleMapNameHint.Locked;
             if (_settlementScreenshotPathText != null)
             {
                 string summary = FormatScreenshotPathSummary();
                 if (_settlementScreenshotPathText.text != summary) _settlementScreenshotPathText.text = summary;
             }
             _suppressCallbacks = false;
+            SyncSelectRoleMapControls();
 
             bool enabled = AutoResetActionTimeGUI.IsEnabled;
             bool isBattle = AutoResetActionTimeGUI.IsInBattle;
@@ -645,6 +710,62 @@ namespace XingShuRuntime.UI
             }
 
             SyncPraiseScale();
+        }
+
+        private void AddPercentSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial,
+            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
+        {
+            GameObject pair = XingShuUIFactory.CreateUIObject("MetricPair_" + id, card);
+            var pRt = pair.GetComponent<RectTransform>();
+            pRt.anchorMin = new Vector2(0f, 1f);
+            pRt.anchorMax = new Vector2(1f, 1f);
+            pRt.pivot = new Vector2(0.5f, 1f);
+            pRt.anchoredPosition = new Vector2(0f, -topY);
+            pRt.sizeDelta = new Vector2(-40f, 22f);
+            var hlg = pair.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 8f;
+            hlg.childControlWidth = true;
+            hlg.childControlHeight = true;
+            hlg.childForceExpandWidth = false;
+            hlg.childForceExpandHeight = true;
+
+            Text lbl = XingShuUIFactory.CreateText(pair, id + "Label", labelText, 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            var lblLe = lbl.gameObject.AddComponent<LayoutElement>();
+            lblLe.flexibleWidth = 1f;
+            lblLe.minWidth = 140f;
+
+            valueText = XingShuUIFactory.CreateText(pair, id + "Value", $"{Mathf.RoundToInt(initial * 100f)}%", 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            var valLe = valueText.gameObject.AddComponent<LayoutElement>();
+            valLe.minWidth = 60f;
+            valLe.preferredWidth = 72f;
+            valLe.flexibleWidth = 0f;
+
+            slider = XingShuUIFactory.CreateSlider(card, id + "Slider", min, max, initial,
+                v => { if (!_suppressCallbacks) onChanged(v); });
+            var sRt = slider.GetComponent<RectTransform>();
+            sRt.anchorMin = new Vector2(0f, 1f); sRt.anchorMax = new Vector2(1f, 1f); sRt.pivot = new Vector2(0.5f, 1f);
+            sRt.anchoredPosition = new Vector2(0f, -(topY + 24f)); sRt.sizeDelta = new Vector2(-40f, 26f);
+        }
+
+        private void SyncSelectRoleMapControls()
+        {
+            float scale = SelectRoleMapNameHint.Scale;
+            float px = SelectRoleMapNameHint.PosX;
+            float py = SelectRoleMapNameHint.PosY;
+            bool locked = SelectRoleMapNameHint.Locked;
+            _suppressCallbacks = true;
+            if (_selectRoleMapScaleSlider != null && Mathf.Abs(_selectRoleMapScaleSlider.value - scale) > 0.005f)
+                _selectRoleMapScaleSlider.value = scale;
+            if (_selectRoleMapXSlider != null && Mathf.Abs(_selectRoleMapXSlider.value - px) > 0.005f)
+                _selectRoleMapXSlider.value = px;
+            if (_selectRoleMapYSlider != null && Mathf.Abs(_selectRoleMapYSlider.value - py) > 0.005f)
+                _selectRoleMapYSlider.value = py;
+            if (_selectRoleMapLockToggle != null && _selectRoleMapLockToggle.isOn != locked)
+                _selectRoleMapLockToggle.isOn = locked;
+            _suppressCallbacks = false;
+            if (_selectRoleMapScaleText != null) _selectRoleMapScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
+            if (_selectRoleMapXText != null) _selectRoleMapXText.text = $"{Mathf.RoundToInt(px * 100f)}%";
+            if (_selectRoleMapYText != null) _selectRoleMapYText.text = $"{Mathf.RoundToInt(py * 100f)}%";
         }
 
         private void AddPraiseOffsetRow(GameObject card, string id, string label, float top, float min, float max, float initial,

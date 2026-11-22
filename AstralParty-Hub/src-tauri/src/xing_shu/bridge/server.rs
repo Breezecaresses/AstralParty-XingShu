@@ -624,6 +624,9 @@ pub struct BridgeServer {
     session_events_tx: tokio::sync::broadcast::Sender<SessionEvent>,
     game_library: Arc<Mutex<Option<crate::game_library::GameLibraryStore>>>,
     game_replay: Arc<Mutex<Option<crate::game_replay::GameReplayStore>>>,
+    room_auto_enter: Arc<Mutex<Option<crate::room_auto_enter::RoomAutoEnterStore>>>,
+    #[cfg(feature = "web-ui")]
+    in_game_room: Arc<Mutex<Option<crate::in_game_room::InGameRoomStore>>>,
 }
 
 impl Default for BridgeServer {
@@ -660,6 +663,9 @@ impl BridgeServer {
             session_events_tx,
             game_library: Arc::new(Mutex::new(None)),
             game_replay: Arc::new(Mutex::new(None)),
+            room_auto_enter: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "web-ui")]
+            in_game_room: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -672,6 +678,13 @@ impl BridgeServer {
     }
     pub fn set_game_replay_store(&self, store: crate::game_replay::GameReplayStore) {
         *self.game_replay.lock().unwrap()=Some(store);
+    }
+    pub fn set_room_auto_enter_store(&self, store: crate::room_auto_enter::RoomAutoEnterStore) {
+        *self.room_auto_enter.lock().unwrap() = Some(store);
+    }
+    #[cfg(feature = "web-ui")]
+    pub fn set_in_game_room_store(&self, store: crate::in_game_room::InGameRoomStore) {
+        *self.in_game_room.lock().unwrap() = Some(store);
     }
 
     pub fn connection_manager(&self) -> &super::connection::ConnectionManager {
@@ -1057,7 +1070,7 @@ impl BridgeServer {
         // If TCP port is squatted or unavailable, fail closed immediately WITHOUT starting Named Pipe!
         if let Err(e) = self.start_tcp_sync(DEFAULT_TCP_ADDR) {
             let err_msg = format!("Failed to start production TCP listener on {}: {}", DEFAULT_TCP_ADDR, e);
-            error!("{}", err_msg);
+            self.log_sys_event("SERVER_ERROR", err_msg.clone());
             return Err(err_msg);
         }
 
@@ -1882,6 +1895,10 @@ impl BridgeServer {
         writer_handle.abort();
         self.connection_manager.remove(&connection_id);
         self.session_manager.remove(&connection_id);
+        #[cfg(feature = "web-ui")]
+        if let Some(store) = self.in_game_room.lock().unwrap().as_ref() {
+            store.remove_connection(&connection_id);
+        }
         self.emit_session_disconnected(&connection_id);
 
         let is_empty = self.session_manager.is_empty();
@@ -2052,6 +2069,38 @@ impl BridgeServer {
         }
 
         match envelope.message_type.as_str() {
+            #[cfg(feature = "web-ui")]
+            "RUNTIME_ROOM_SNAPSHOT" => {
+                if self.connection_manager.get_generation(connection_id) != Some(generation) { return; }
+                let Some(session) = self.get_runtime_session(connection_id) else { return; };
+                if session.generation != generation || session.platform_id != platform_id { return; }
+                if let Ok(snap) = serde_json::from_value::<crate::in_game_room::RuntimeRoomSnapshot>(envelope.payload) {
+                    if let Some(store) = self.in_game_room.lock().unwrap().as_ref() {
+                        store.update_snapshot(connection_id, generation, snap);
+                    }
+                }
+            }
+            #[cfg(feature = "web-ui")]
+            "ROOM_IN_GAME_RESULT" => {
+                if self.connection_manager.get_generation(connection_id) != Some(generation) { return; }
+                let Some(session) = self.get_runtime_session(connection_id) else { return; };
+                if session.generation != generation || session.platform_id != platform_id { return; }
+                if let Ok(result) = serde_json::from_value::<crate::in_game_room::RoomCommandResult>(envelope.payload) {
+                    if let Some(store) = self.in_game_room.lock().unwrap().as_ref() {
+                        store.record_result(result);
+                    }
+                }
+            }
+            "ROOM_AUTO_ENTER_RESULT" => {
+                if self.connection_manager.get_generation(connection_id) != Some(generation) { return; }
+                let Some(session) = self.get_runtime_session(connection_id) else { return; };
+                if session.generation != generation || session.platform_id != platform_id { return; }
+                if let Ok(result) = serde_json::from_value::<crate::room_auto_enter::RoomAutoEnterResult>(envelope.payload) {
+                    if let Some(store) = self.room_auto_enter.lock().unwrap().as_ref() {
+                        store.accept(&session, result);
+                    }
+                }
+            }
             "GAME_REPLAY_STATUS" => {
                 if self.connection_manager.get_generation(connection_id)!=Some(generation){return;}
                 let Some(session)=self.get_runtime_session(connection_id) else{return;};
@@ -2245,6 +2294,17 @@ impl BridgeServer {
                                     connection_id, updated.platform_id, session.player_id, effective_player_id, updated.role
                                 );
                                 self.emit_session_changed(&updated);
+                                if updated.match_context.as_ref().is_some_and(|c| c.match_state == "LOBBY") {
+                                    if let Some(store) = self.room_auto_enter.lock().unwrap().as_ref().cloned() {
+                                        let app = self.app_handle.lock().unwrap().clone();
+                                        crate::room_auto_enter::maybe_dispatch_for_session(app, self.connection_manager.clone(), &store, &updated);
+                                    }
+                                }
+                            }
+                        } else if session.match_context.as_ref().is_some_and(|c| c.match_state == "LOBBY") {
+                            if let Some(store) = self.room_auto_enter.lock().unwrap().as_ref().cloned() {
+                                let app = self.app_handle.lock().unwrap().clone();
+                                crate::room_auto_enter::maybe_dispatch_for_session(app, self.connection_manager.clone(), &store, &session);
                             }
                         }
                     }
@@ -2349,6 +2409,15 @@ impl BridgeServer {
                     "RUNTIME_MATCH_CONTEXT updated for conn={}, platform={}: internalRoomId={:?}, spectatorCode={:?}, matchState={}, matchKind={:?}, localPlayerId={:?}",
                     connection_id, platform_id, payload.internal_room_id, payload.spectator_code, payload.match_state, payload.match_kind, payload.local_player_id
                 );
+
+                if payload.match_state == "LOBBY" {
+                    if let Some(session) = self.session_manager.get(connection_id) {
+                        if let Some(store) = self.room_auto_enter.lock().unwrap().as_ref().cloned() {
+                            let app = self.app_handle.lock().unwrap().clone();
+                            crate::room_auto_enter::maybe_dispatch_for_session(app, self.connection_manager.clone(), &store, &session);
+                        }
+                    }
+                }
             }
             message_types::TEST_EVENT => {
                 let test: TestEventPayload = serde_json::from_value(envelope.payload.clone()).unwrap_or_default();
@@ -3033,9 +3102,10 @@ impl BridgeServer {
 
     /// Get current Bridge snapshot status
     pub fn get_status(&self) -> BridgeStatus {
+        let started = self.is_server_started.lock().unwrap();
         let state = self.state.lock().unwrap();
         BridgeStatus {
-            is_running: *self.is_server_started.lock().unwrap() || state.tcp_server_started,
+            is_running: *started || state.tcp_server_started,
             named_pipe_name: state.pipe_name.clone(),
             pipe_connected: state.pipe_connected,
             runtime_connected: state.runtime_connected,

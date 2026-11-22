@@ -357,6 +357,108 @@ final class MobileAuthHub {
         return sb.length() > 0 ? sb.toString() : "已连接云端会话（进游戏大厅或发 趴数据 可刷新）";
     }
 
+    static final class RoomActionResult {
+        final boolean ok;
+        final boolean requiresConfirm;
+        final boolean online;
+        final String error;
+        final Map<String, Object> body;
+
+        RoomActionResult(boolean ok, boolean requiresConfirm, boolean online, String error, Map<String, Object> body) {
+            this.ok = ok;
+            this.requiresConfirm = requiresConfirm;
+            this.online = online;
+            this.error = error == null ? "" : error;
+            this.body = body;
+        }
+    }
+
+    static Map<String, Object> fetchRoomCatalog() throws Exception {
+        HttpReply reply = requestJsonWithRetry("GET", "/account/room/catalog", null, null, null, null, null, 15000, 1);
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "读取官方开房配置失败"));
+        }
+        return reply.body;
+    }
+
+    static Map<String, Object> fetchCurrentRoom(BoundAccount account) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先在设置页登录星枢游戏账号");
+        HttpReply reply = requestJsonWithRetry("GET", "/account/room/current", null, null, null, null, account.token, 15000, 1);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "读取当前房间失败"));
+        }
+        return reply.body;
+    }
+
+    static RoomActionResult createOfficialRoom(BoundAccount account, Map<String, Object> payload) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先在设置页登录星枢游戏账号");
+        HttpReply reply = requestJson("POST", "/account/room/create", payload, null, null, null, account.token, 28000);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code == 409 && reply.body != null && MiniJson.boolField(reply.body, "requiresConfirm", false)) {
+            return new RoomActionResult(false, true, MiniJson.boolField(reply.body, "online", true),
+                extractError(reply, "检测到账号当前在线，确认后将继续开房。"), reply.body);
+        }
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "创建官方房间失败"));
+        }
+        return new RoomActionResult(true, false, false, "", reply.body);
+    }
+
+    static Map<String, Object> updateOfficialRoom(BoundAccount account, Map<String, Object> payload) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先登录星枢游戏账号");
+        HttpReply reply = requestJson("POST", "/account/room/update", payload, null, null, null, account.token, 20000);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "更新房间设置失败"));
+        }
+        return reply.body;
+    }
+
+    static Map<String, Object> kickRoomPlayer(BoundAccount account, String playerId) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先登录星枢游戏账号");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("player_id", playerId);
+        HttpReply reply = requestJson("POST", "/account/room/kick", body, null, null, null, account.token, 18000);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "踢出成员失败"));
+        }
+        return reply.body;
+    }
+
+    static Map<String, Object> exitOfficialRoom(BoundAccount account) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先登录星枢游戏账号");
+        HttpReply reply = requestJson("POST", "/account/room/exit", new LinkedHashMap<String, Object>(), null, null, null, account.token, 18000);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "解散退出房间失败"));
+        }
+        return reply.body;
+    }
+
+    static Map<String, Object> fetchOfficialLobby(BoundAccount account, int mode) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先登录星枢游戏账号");
+        HttpReply reply = requestJsonWithRetry("GET", "/account/room/lobby?mode=" + mode, null, null, null, null, account.token, 20000, 1);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "拉取官方大厅失败"));
+        }
+        return reply.body;
+    }
+
+    static Map<String, Object> searchOfficialRoom(BoundAccount account, String roomId) throws Exception {
+        if (account == null || account.token.isEmpty()) throw new IOException("请先登录星枢游戏账号");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("room_id", roomId == null ? "" : roomId.trim());
+        HttpReply reply = requestJson("POST", "/account/room/search", body, null, null, null, account.token, 18000);
+        if (reply.code == 401) throw new IOException("UNAUTHORIZED");
+        if (reply.code != 200 || reply.body == null) {
+            throw new IOException(extractError(reply, "查询房号失败"));
+        }
+        return reply.body;
+    }
+
     static void logout(String bearerToken) {
         if (bearerToken == null || bearerToken.isEmpty()) return;
         try {

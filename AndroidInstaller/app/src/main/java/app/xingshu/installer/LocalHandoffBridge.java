@@ -23,6 +23,8 @@ final class LocalHandoffBridge {
     private static String pendingHandoff = "";
     private static String pendingUid = "";
     private static long expiresAtMs = 0L;
+    private static String pendingRoomJson = "";
+    private static long roomExpiresAtMs = 0L;
     private static ServerSocket serverSocket;
     private static Thread acceptThread;
 
@@ -37,6 +39,35 @@ final class LocalHandoffBridge {
             pendingUid = uid;
             expiresAtMs = System.currentTimeMillis() + TTL_MS;
             ensureStartedLocked();
+        }
+    }
+
+    static void publishRoomEntry(String json) {
+        if (json == null || json.isEmpty() || json.length() > 4096) {
+            return;
+        }
+        synchronized (LOCK) {
+            pendingRoomJson = json;
+            roomExpiresAtMs = System.currentTimeMillis() + TTL_MS;
+            ensureStartedLocked();
+        }
+    }
+
+    static void clearRoomEntry() {
+        synchronized (LOCK) {
+            pendingRoomJson = "";
+            roomExpiresAtMs = 0L;
+        }
+    }
+
+    static String peekRoomEntry() {
+        synchronized (LOCK) {
+            if (pendingRoomJson.isEmpty() || System.currentTimeMillis() >= roomExpiresAtMs) {
+                pendingRoomJson = "";
+                roomExpiresAtMs = 0L;
+                return "";
+            }
+            return pendingRoomJson;
         }
     }
 
@@ -67,9 +98,17 @@ final class LocalHandoffBridge {
         try {
             while (!sock.isClosed()) {
                 synchronized (LOCK) {
-                    if (pendingHandoff.isEmpty() || System.currentTimeMillis() >= expiresAtMs) {
+                    long now = System.currentTimeMillis();
+                    boolean hasHandoff = !pendingHandoff.isEmpty() && now < expiresAtMs;
+                    if (!hasHandoff) {
                         pendingHandoff = "";
                         pendingUid = "";
+                    }
+                    boolean hasRoom = !pendingRoomJson.isEmpty() && now < roomExpiresAtMs;
+                    if (!hasRoom) {
+                        pendingRoomJson = "";
+                    }
+                    if (!hasHandoff && !hasRoom) {
                         break;
                     }
                 }
@@ -94,7 +133,27 @@ final class LocalHandoffBridge {
             s.setSoTimeout(2000);
             BufferedReader reader = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
             String reqLine = reader.readLine();
-            if (reqLine == null || !reqLine.startsWith("GET /handoff")) {
+            if (reqLine == null) {
+                writeResponse(s.getOutputStream(), 404, "{\"status\":\"not_found\"}");
+                return;
+            }
+            if (reqLine.startsWith("GET /room-handoff")) {
+                String roomJson = null;
+                synchronized (LOCK) {
+                    if (!pendingRoomJson.isEmpty() && System.currentTimeMillis() < roomExpiresAtMs) {
+                        roomJson = pendingRoomJson;
+                        pendingRoomJson = "";
+                        roomExpiresAtMs = 0L;
+                    }
+                }
+                if (roomJson == null) {
+                    writeResponse(s.getOutputStream(), 404, "{\"status\":\"empty\"}");
+                } else {
+                    writeResponse(s.getOutputStream(), 200, roomJson);
+                }
+                return;
+            }
+            if (!reqLine.startsWith("GET /handoff")) {
                 writeResponse(s.getOutputStream(), 404, "{\"status\":\"not_found\"}");
                 return;
             }

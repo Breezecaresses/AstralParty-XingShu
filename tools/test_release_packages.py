@@ -80,6 +80,23 @@ class PhoneReleasePackages(unittest.TestCase):
             phone.verify_android_archive(changed, self.apk)
         self.assertFalse((self.root.parent / 'escape').exists())
 
+    def test_pure_launcher_apk_verifies_dex_hash_binding(self):
+        pure_apk = self.root / 'pure-launcher.apk'
+        with zipfile.ZipFile(pure_apk, 'w') as apk:
+            apk.writestr(
+                'classes.dex',
+                phone.sha(self.payload).encode('ascii') + b'\x00' + phone.sha(self.vanilla).encode('ascii'),
+            )
+        self.apk = pure_apk
+        self.build()
+        info = phone.verify_android_archive(self.archive, self.archive.with_suffix('.apk'))
+        self.assertEqual(info['releaseVersion'], '0.0.0-fixture.1')
+        tampered_apk = self.root / 'tampered-pure.apk'
+        with zipfile.ZipFile(tampered_apk, 'w') as apk:
+            apk.writestr('classes.dex', b'missing-hashes')
+        with self.assertRaisesRegex(AssertionError, 'Pure launcher APK lacks candidate SHA-256 binding'):
+            phone.verify_apk_payload_binding(tampered_apk, phone.sha(self.payload), phone.sha(self.vanilla))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -21,8 +21,8 @@ function downloadLogFile(filename: string, content: string) {
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
 }
 
-export function AndroidInstallPanel() {
-  const [expanded, setExpanded] = useState(false);
+export function AndroidInstallPanel({ defaultExpanded = false }: { defaultExpanded?: boolean } = {}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [status, setStatus] = useState<Status | null>(null);
   const [serial, setSerial] = useState('');
   const [busy, setBusy] = useState('');
@@ -110,7 +110,7 @@ export function AndroidInstallPanel() {
   if (!isTauriRuntime()) return null;
   return <section className="panel android-install" aria-label="安卓手机安装">
     <div className="android-install-heading"><Smartphone size={25} /><div><h2>安卓手机安装 / 更新</h2><p>连接手机，在电脑上安装星枢；支持检测并备份删除 APX 等冲突插件，安装失败可导出日志。</p></div>
-      <button className={`btn ${expanded ? 'btn-secondary' : 'btn-primary'}`} aria-expanded={expanded} aria-controls="android-install-body" disabled={!!busy} onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '连接手机'}</button>
+      {!defaultExpanded && <button className={`btn ${expanded ? 'btn-secondary' : 'btn-primary'}`} aria-expanded={expanded} aria-controls="android-install-body" disabled={!!busy} onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '连接手机'}</button>}
     </div>
     {expanded && <div id="android-install-body" className="android-install-body">
       <ol className="android-install-steps"><li>手机先在官方游戏完成资源更新，进入大厅后正常退出。</li><li>用数据线连接电脑，开启 USB 调试并在手机允许授权；或使用下方无线连接。</li><li>选择手机后安装。若手机已安装 APX 等同定位冲突插件，将提示确认备份删除并替换为星枢。</li></ol>

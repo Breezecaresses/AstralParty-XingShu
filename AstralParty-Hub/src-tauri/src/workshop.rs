@@ -3,17 +3,18 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::application::install_service::InstallService;
 use crate::domain::error::{HubError, HubResult};
 use crate::domain::installation::GameInstallation;
 use crate::extension_center::{game_root, get_game, ExtensionCenter};
 use crate::install::gates::ProcessGate;
+use crate::mod_resources::{self, SwitchFile, target_key};
+use crate::remote_content;
 use crate::security::hash::compute_file_sha256;
 use crate::security::path_guard::PathGuard;
 
@@ -21,7 +22,14 @@ const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ZIP_UNCOMPRESSED_BYTES: u64 = 160 * 1024 * 1024;
 const MAX_ZIP_ENTRIES: usize = 512;
-const BUNDLE_TARGET_PREFIX: &str = "AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64/";
+const VALID_DATA_DIRS: &[&str] = &[
+    "AstralParty_CN_Data",
+    "吉星派对_Data",
+    "AstralParty_INT_Data",
+    "AstralParty_Data",
+];
+const BUNDLE_REL_SUFFIX: &str = "StreamingAssets/aa/StandaloneWindows64/";
+const ADDRESSABLES_REL_PREFIX: &str = "com.unity.addressables/AssetBundles/";
 const FORBIDDEN_ARCHIVE_EXTS: &[&str] = &[
     ".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".msi", ".msp",
     ".sh", ".scr", ".com", ".pif", ".lnk",
@@ -44,12 +52,15 @@ pub struct WorkshopDownloadFile {
 #[serde(rename_all = "camelCase")]
 pub struct WorkshopInstallRequest {
     pub installation_id: String,
-    pub api_base: String,
     pub mod_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishedMod {
+    id: String,
     pub name: String,
     pub install_kind: String,
-    #[serde(default)]
-    pub game_version: String,
     #[serde(default)]
     pub platforms: Vec<String>,
     #[serde(default)]
@@ -60,14 +71,100 @@ pub struct WorkshopInstallRequest {
     pub size_bytes: u64,
     #[serde(default)]
     pub files: Vec<WorkshopDownloadFile>,
+    #[serde(default)]
+    downloadable: bool,
+}
+
+#[derive(Deserialize)]
+struct PublishedDetail {
+    item: PublishedMod,
+}
+
+async fn published_mod(client: &reqwest::Client, id: &str) -> HubResult<PublishedMod> {
+    let path = format!("/api/workshop/mods/{id}");
+    let data = remote_content::read(client, &path, 2 * 1024 * 1024).await?;
+    let published: PublishedDetail = serde_json::from_slice(&data)
+        .map_err(|_| net_error("星枢工坊发布清单无法识别。"))?;
+    if published.item.id != id || !published.item.downloadable {
+        return Err(HubError::invalid_manifest("该条目尚未在星枢服务器发布可下载文件。"));
+    }
+    Ok(published.item)
+}
+
+pub(crate) async fn official_module_archive_with_progress<F>(
+    id: &str,
+    on_progress: F,
+) -> HubResult<Vec<u8>>
+where
+    F: FnMut(u64, u64),
+{
+    let client = remote_content::client()?;
+    let published = published_mod(&client, id).await?;
+    let path = format!("/api/workshop/mods/{id}/download");
+    if published.install_kind != "xspkg" || published.download_url.as_deref() != Some(&path) {
+        return Err(HubError::invalid_manifest("该官方模块的服务器发布清单不完整。"));
+    }
+    remote_content::verified_with_progress(
+        &client,
+        &path,
+        &published.sha256,
+        published.size_bytes,
+        64 * 1024,
+        on_progress,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModInstallProgress {
+    pub mod_id: String,
+    pub stage: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: u8,
+    pub detail: String,
+}
+
+pub(crate) fn emit_mod_progress(
+    app: &AppHandle,
+    mod_id: &str,
+    stage: &str,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    percent: u8,
+    detail: impl Into<String>,
+) {
+    let _ = app.emit(
+        "xingshu:mod-install-progress",
+        ModInstallProgress {
+            mod_id: mod_id.to_string(),
+            stage: stage.to_string(),
+            downloaded_bytes,
+            total_bytes,
+            percent,
+            detail: detail.into(),
+        },
+    );
+}
+
+pub(crate) fn scaled_download_percent(downloaded: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 10;
+    }
+    let ratio = ((downloaded.saturating_mul(86)) / total).min(86) as u8;
+    4 + ratio
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkshopLocalItemState {
     pub mod_id: String,
+    pub name: String,
     pub phase: String,
     pub install_kind: String,
+    pub source: String,
+    pub linked_drop_id: Option<String>,
     pub transaction_id: Option<String>,
     pub downloaded_path: Option<String>,
     pub can_restore: bool,
@@ -102,6 +199,8 @@ pub(crate) struct WorkshopReceipt {
     transaction_id: Option<String>,
     downloaded_path: Option<String>,
     files: Vec<WorkshopReceiptFile>,
+    #[serde(default)]
+    archive_sha256: Option<String>,
 }
 
 pub(crate) struct StagedBundle {
@@ -131,72 +230,65 @@ pub(crate) fn sanitize_mod_id(mod_id: &str) -> HubResult<String> {
     Ok(trimmed.to_string())
 }
 
-fn is_hex64(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
 
 /// Validates download URLs: enforces `https://` for remote origins and allows `http://` only for loopback dev servers.
-pub(crate) fn resolve_and_validate_url(api_base: &str, url_or_path: &str) -> HubResult<String> {
-    let raw = url_or_path.trim();
-    if raw.is_empty() {
-        return Err(HubError::invalid_manifest("缺少模组下载地址。"));
-    }
-    if raw.len() > 1000 || raw.chars().any(|c| c.is_control() || c == '\\') {
-        return Err(HubError::security_violation("模组下载地址包含非法字符。"));
-    }
-    let combined = if raw.starts_with('/') {
-        let base = api_base.trim().trim_end_matches('/');
-        if base.is_empty() {
-            return Err(net_error("未配置服务端 API 地址，无法拼接相对下载路径。"));
-        }
-        format!("{base}{raw}")
-    } else {
-        raw.to_string()
-    };
-
-    let (scheme, rest) = combined
-        .split_once("://")
-        .ok_or_else(|| HubError::security_violation("下载地址缺少合法协议头。"))?;
-    let scheme_lower = scheme.to_ascii_lowercase();
-    let authority = rest.split('/').next().unwrap_or("");
-    if authority.is_empty() || authority.contains('@') {
-        return Err(HubError::security_violation("下载地址不允许包含认证凭据或空主机。"));
-    }
-
-    let host_no_port = if let Some(bracket_end) = authority.strip_prefix('[').and_then(|s| s.find(']')) {
-        &authority[1..=bracket_end]
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
-    let host_lower = host_no_port.to_ascii_lowercase();
-
-    match scheme_lower.as_str() {
-        "https" => Ok(combined),
-        "http" if matches!(host_lower.as_str(), "127.0.0.1" | "localhost" | "::1") => Ok(combined),
-        "http" => Err(HubError::security_violation(
-            "安全限制：桌面端仅允许通过 HTTPS（或本机环回测试地址）下载模组文件。",
-        )),
-        _ => Err(HubError::security_violation("不支持的下载协议，仅允许 HTTPS。")),
-    }
-}
-
 fn confined(root: &Path, relative: &str) -> HubResult<PathBuf> {
     let clean = PathGuard::sanitize_relative_path(relative)?;
     PathGuard::ensure_within_root(root, &root.join(clean))
 }
 
+fn is_protected_runtime_bundle(bundle_id: &str) -> bool {
+    crate::extension_center::profiles()
+        .into_iter()
+        .any(|p| p["bundleId"].as_str().is_some_and(|id| id.eq_ignore_ascii_case(bundle_id)))
+}
+
+fn active_game_data_dir(root: &Path) -> &'static str {
+    VALID_DATA_DIRS
+        .iter()
+        .copied()
+        .find(|dir| root.join(dir).is_dir())
+        .unwrap_or("AstralParty_CN_Data")
+}
+
 pub(crate) fn validate_bundle_target(root: &Path, target_rel: &str) -> HubResult<(String, PathBuf)> {
     let clean = target_rel.trim().replace('\\', "/");
-    let file_name = clean
-        .strip_prefix(BUNDLE_TARGET_PREFIX)
-        .ok_or_else(|| HubError::security_violation("模组目标不在已核验的游戏资源目录中。"))?;
-    let stem = file_name.strip_suffix(".bundle").unwrap_or("");
-    if stem.len() != 32 || !stem.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Err(HubError::security_violation("模组目标 Bundle 文件名格式无效。"));
+    let Some((data_dir, sub_rel)) = clean.split_once('/') else {
+        return Err(HubError::security_violation("模组目标不在已核验的游戏资源目录中。"));
+    };
+    if !VALID_DATA_DIRS.contains(&data_dir) {
+        return Err(HubError::security_violation("模组目标不在已核验的游戏资源目录中。"));
+    }
+    let bundle_id = if let Some(file_name) = sub_rel.strip_prefix(BUNDLE_REL_SUFFIX) {
+        let stem = file_name.strip_suffix(".bundle").unwrap_or("");
+        if stem.len() != 32 || !stem.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(HubError::security_violation("模组目标 Bundle 文件名格式无效。"));
+        }
+        stem
+    } else if let Some(rest) = sub_rel.strip_prefix(ADDRESSABLES_REL_PREFIX) {
+        let mut parts = rest.split('/');
+        let group = parts.next().unwrap_or("");
+        let hash = parts.next().unwrap_or("");
+        let leaf = parts.next().unwrap_or("");
+        let valid_group = !group.is_empty()
+            && group != "."
+            && group != ".."
+            && group
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'));
+        let valid_hash = hash.len() == 32 && hash.bytes().all(|c| c.is_ascii_hexdigit());
+        if !valid_group || !valid_hash || leaf != "__data" || parts.next().is_some() {
+            return Err(HubError::security_violation("模组目标 Addressables 资产路径格式无效。"));
+        }
+        hash
+    } else {
+        return Err(HubError::security_violation("模组目标不在已核验的游戏资源目录中。"));
+    };
+    if is_protected_runtime_bundle(bundle_id) {
+        return Err(HubError::security_violation("该资源属于星枢运行时核心容器，第三方模组禁止覆盖。"));
     }
     let resolved = confined(root, &clean)?;
     Ok((clean, resolved))
@@ -230,6 +322,22 @@ fn backup_file_path(root: &Path, mod_id: &str, index: usize) -> HubResult<PathBu
     )
 }
 
+pub(crate) fn payload_file_path(root: &Path, mod_id: &str, index: usize) -> HubResult<PathBuf> {
+    let clean_id = sanitize_mod_id(mod_id)?;
+    confined(
+        root,
+        &format!(".xingshu-mods/workshop-payloads/{clean_id}/{index}.bundle"),
+    )
+}
+
+fn xspkg_payload_path(root: &Path, mod_id: &str) -> HubResult<PathBuf> {
+    let clean_id = sanitize_mod_id(mod_id)?;
+    confined(
+        root,
+        &format!(".xingshu-mods/workshop-payloads/{clean_id}/package.xspkg"),
+    )
+}
+
 fn read_workshop_receipt(root: &Path, mod_id: &str) -> HubResult<Option<WorkshopReceipt>> {
     let path = receipt_path(root, mod_id)?;
     if !path.is_file() {
@@ -241,7 +349,7 @@ fn read_workshop_receipt(root: &Path, mod_id: &str) -> HubResult<Option<Workshop
     if receipt.mod_id != mod_id
         || !matches!(
             receipt.phase.as_str(),
-            "prepared" | "installed" | "restored" | "downloaded"
+            "prepared" | "installed" | "restored" | "downloaded" | "disabled"
         )
     {
         return Err(HubError::security_violation("工坊安装收据校验无效。"));
@@ -255,7 +363,7 @@ fn save_workshop_receipt(root: &Path, receipt: &WorkshopReceipt) -> HubResult<()
     atomic_write(&path, &bytes)
 }
 
-fn operation_lock(root: &Path) -> HubResult<fs::File> {
+pub(crate) fn operation_lock(root: &Path) -> HubResult<fs::File> {
     let path = confined(root, ".xingshu-mods/operation.lock")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| HubError::storage_error(e.to_string()))?;
@@ -278,53 +386,28 @@ fn game_closed(game: &GameInstallation) -> HubResult<()> {
     ))
 }
 
-fn local_mod_library_root() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()?
-        .ancestors()
-        .skip(1)
-        .take(4)
-        .map(|p| p.join("ModLibrary"))
-        .find(|p| p.join("catalog.json").is_file())
+fn addressables_candidate_target(data_dir: &str, clean_entry: &str) -> Option<String> {
+    const NEEDLE: &[u8] = b"com.unity.addressables/assetbundles/";
+    let bytes = clean_entry.as_bytes();
+    if bytes.len() < NEEDLE.len() {
+        return None;
+    }
+    let pos = bytes.windows(NEEDLE.len()).position(|w| w.eq_ignore_ascii_case(NEEDLE))?;
+    let rest = &clean_entry[pos + NEEDLE.len()..];
+    Some(format!("{data_dir}/{ADDRESSABLES_REL_PREFIX}{rest}"))
 }
 
-async fn download_verified_bytes(
-    client: &reqwest::Client,
-    url: &str,
-    expected_sha256: &str,
-    max_bytes: usize,
-) -> HubResult<Vec<u8>> {
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| net_error(format!("下载模组文件失败：{e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(net_error(format!("服务端返回错误状态 HTTP {}", status.as_u16())));
-    }
-    if let Some(len) = resp.content_length() {
-        if len > max_bytes as u64 {
-            return Err(HubError::security_violation("下载文件体积超出安全限制。"));
+fn bundle_candidate_target(data_dir: &str, clean_entry: &str) -> String {
+    if let Some((prefix_dir, sub_rel)) = clean_entry.split_once('/') {
+        if VALID_DATA_DIRS.contains(&prefix_dir) && sub_rel.starts_with(BUNDLE_REL_SUFFIX) {
+            return clean_entry.to_string();
         }
     }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| net_error(format!("读取下载流失败：{e}")))?;
-    if bytes.is_empty() || bytes.len() > max_bytes {
-        return Err(HubError::security_violation("下载文件为空或超出安全体积上限。"));
-    }
-    let data = bytes.to_vec();
-    if !expected_sha256.is_empty() {
-        let actual = sha256_hex(&data);
-        if !actual.eq_ignore_ascii_case(expected_sha256) {
-            return Err(HubError::security_violation(format!(
-                "SHA-256 校验不匹配（期望 {expected_sha256}，实际 {actual}），已拒绝安装。"
-            )));
-        }
-    }
-    Ok(data)
+    let base_name = Path::new(clean_entry)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    format!("{data_dir}/{BUNDLE_REL_SUFFIX}{base_name}")
 }
 
 fn extract_bundle_entries_from_zip(
@@ -338,6 +421,7 @@ fn extract_bundle_entries_from_zip(
         return Err(HubError::security_violation("压缩包文件条目数量异常。"));
     }
 
+    let data_dir = active_game_data_dir(root);
     let mut staged = Vec::new();
     let mut total_uncompressed: u64 = 0;
     let mut seen_targets = HashSet::new();
@@ -349,9 +433,12 @@ fn extract_bundle_entries_from_zip(
         if entry.is_symlink() {
             return Err(HubError::security_violation("出于安全限制，压缩包禁止包含符号链接。"));
         }
-        let raw_name = entry.name().replace('\\', "/");
+        let raw_name = crate::security::archive_guard::decode_zip_entry_name(entry.name_raw())
+            .replace('\\', "/");
         if entry.is_dir() {
-            let _ = PathGuard::sanitize_relative_path(&raw_name)?;
+            if !raw_name.trim_matches('/').is_empty() {
+                let _ = PathGuard::sanitize_relative_path(&raw_name)?;
+            }
             continue;
         }
         total_uncompressed = total_uncompressed.saturating_add(entry.size());
@@ -365,17 +452,12 @@ fn extract_bundle_entries_from_zip(
         if FORBIDDEN_ARCHIVE_EXTS.iter().any(|ext| lower.ends_with(ext)) {
             return Err(HubError::security_violation("压缩包禁止包含可执行脚本或二进制文件。"));
         }
-        if !lower.ends_with(".bundle") {
-            continue;
-        }
-        let candidate_target = if clean_entry.starts_with(BUNDLE_TARGET_PREFIX) {
-            clean_entry.clone()
+        let candidate_target = if lower.ends_with(".bundle") {
+            bundle_candidate_target(data_dir, &clean_entry)
+        } else if let Some(addr) = addressables_candidate_target(data_dir, &clean_entry) {
+            addr
         } else {
-            let base_name = Path::new(&clean_entry)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            format!("{BUNDLE_TARGET_PREFIX}{base_name}")
+            continue;
         };
         let (target_rel, target_abs) = validate_bundle_target(root, &candidate_target)?;
         if !target_abs.is_file() {
@@ -409,18 +491,55 @@ fn extract_bundle_entries_from_zip(
     }
     if staged.is_empty() {
         return Err(HubError::invalid_manifest(
-            "压缩包中未发现合法的 StandaloneWindows64 Bundle 资源。",
+            "压缩包中未发现合法的 StandaloneWindows64 Bundle 或 Addressables 资源。",
         ));
     }
     Ok(staged)
 }
 
-fn check_zip_contains_xspkg_manifest(archive_bytes: &[u8]) -> HubResult<bool> {
-    let cursor = std::io::Cursor::new(archive_bytes);
-    let mut zf = zip::ZipArchive::new(cursor)
-        .map_err(|_| HubError::invalid_manifest("下载的模组压缩包格式无效。"))?;
-    let has_manifest = zf.by_name("manifest.json").is_ok();
-    Ok(has_manifest)
+pub(crate) fn read_local_archive(path: &Path, limit: u64) -> HubResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path).map_err(|e| HubError::storage_error(e.to_string()))?
+        .take(limit + 1).read_to_end(&mut bytes).map_err(|e| HubError::storage_error(e.to_string()))?;
+    if bytes.len() as u64 > limit {
+        return Err(HubError::invalid_manifest("本地模组包大小超过限制。"));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn validate_cached_package(path: &Path, expected: Option<&str>, limit: u64) -> HubResult<()> {
+    if !path.is_file() {
+        return Err(HubError::storage_error("此模组缺少离线包。可先还原安装，再重新下载或导入以使用开关。"));
+    }
+    let data = read_local_archive(path, limit)?;
+    if let Some(expected) = expected {
+        if !sha256_hex(&data).eq_ignore_ascii_case(expected) {
+            return Err(HubError::security_violation("离线模组包校验失败。"));
+        }
+        Ok(())
+    } else {
+        validate_community_package(path)
+    }
+}
+
+pub(crate) fn validate_community_package(archive: &Path) -> HubResult<()> {
+    let manifest = crate::packages::parser::PackageParser::parse_archive(archive)?;
+    const RESOURCE_EXTENSIONS: &[&str] = &[
+        "bundle", "png", "webp", "jpg", "jpeg", "ogg", "wav", "mp3", "webm", "mp4",
+        "json", "ini", "txt", "atlas", "bytes", "mat", "asset",
+    ];
+    if !matches!(manifest.package.package_type.as_str(), "mod" | "resource-pack")
+        || manifest.package.id.to_ascii_lowercase().starts_with("xingshu.launcher.")
+        || manifest.files.iter().any(|file| {
+            let target = file.target.replace('\\', "/");
+            !(target.starts_with("game/mods/") || target.starts_with("game/resources/"))
+                || !Path::new(&target).extension().and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| RESOURCE_EXTENSIONS.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed)))
+        })
+    {
+        return Err(HubError::security_violation("工坊资源包只能安装到游戏模组和资源目录。"));
+    }
+    Ok(())
 }
 
 pub(crate) fn install_bundle_entries(
@@ -454,13 +573,18 @@ pub(crate) fn install_bundle_entries(
     }
 
     let mut unique = HashSet::new();
+    let owners = crate::dropped_mods::collect_active_target_owners(root, "")?;
     let mut targets_and_baselines: Vec<(PathBuf, String)> = Vec::with_capacity(staged.len());
 
     // Preflight every file and backup before mutating any game file.
     for entry in staged {
         let (norm_target, target_abs) = validate_bundle_target(root, &entry.target_rel)?;
-        if !unique.insert(norm_target) {
+        let target_id = target_key(&norm_target);
+        if !unique.insert(target_id.clone()) {
             return Err(HubError::invalid_manifest("模组内包含重复的目标路径。"));
+        }
+        if owners.contains_key(&target_id) {
+            return Err(HubError::security_violation("目标资源由其他模组管理，请先停用冲突项。"));
         }
         if !target_abs.is_file() {
             return Err(HubError::invalid_manifest(
@@ -515,6 +639,7 @@ pub(crate) fn install_bundle_entries(
         transaction_id: None,
         downloaded_path: None,
         files: receipt_files,
+        archive_sha256: None,
     };
 
     game_closed(game)?;
@@ -524,6 +649,9 @@ pub(crate) fn install_bundle_entries(
         for (idx, ((target_abs, _baseline_hash), entry)) in
             targets_and_baselines.iter().zip(staged.iter()).enumerate()
         {
+            if let Ok(payload_dest) = payload_file_path(root, &receipt.mod_id, idx) {
+                let _ = atomic_write(&payload_dest, &entry.bytes);
+            }
             atomic_write(target_abs, &entry.bytes)?;
             let post_hash = compute_file_sha256(target_abs)?;
             if !post_hash.eq_ignore_ascii_case(&receipt.files[idx].mod_sha256) {
@@ -607,68 +735,57 @@ pub async fn workshop_list_local_state(
     let game = get_game(&center.db, &installation_id)?;
     tokio::task::spawn_blocking(move || {
         let root = game_root(&game)?;
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-
-        let ws_dir = confined(&root, ".xingshu-mods/workshop-receipts")?;
-        if ws_dir.is_dir() {
-            for entry in fs::read_dir(&ws_dir).map_err(|e| HubError::storage_error(e.to_string()))? {
-                let Ok(entry) = entry else { continue };
+        let mut states = Vec::new();
+        let receipts = confined(&root, ".xingshu-mods/workshop-receipts")?;
+        if receipts.is_dir() {
+            for entry in fs::read_dir(&receipts).map_err(|e| HubError::storage_error(e.to_string()))?.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    continue;
-                }
-                if let Ok(raw) = fs::read(&path) {
-                    if let Ok(r) = serde_json::from_slice::<WorkshopReceipt>(&raw) {
-                        seen.insert(r.mod_id.clone());
-                        let can_restore = matches!(r.phase.as_str(), "installed" | "prepared");
-                        out.push(WorkshopLocalItemState {
-                            mod_id: r.mod_id,
-                            phase: r.phase,
-                            install_kind: r.install_kind,
-                            transaction_id: r.transaction_id,
-                            downloaded_path: r.downloaded_path,
-                            can_restore,
-                        });
-                    }
-                }
-            }
-        }
-
-        // Also surface existing ModLibrary receipts (e.g. from ExternalModsPanel) cleanly.
-        let legacy_dir = confined(&root, ".xingshu-mods/receipts")?;
-        if legacy_dir.is_dir() {
-            if let Ok(dirs) = fs::read_dir(&legacy_dir) {
-                for entry in dirs.flatten() {
-                    let rpath = entry.path().join("receipt.json");
-                    if !rpath.is_file() {
-                        continue;
-                    }
-                    if let Ok(raw) = fs::read(&rpath) {
-                        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&raw) {
-                            let item_id = val["item_id"].as_str().unwrap_or("").to_string();
-                            let phase = val["phase"].as_str().unwrap_or("").to_string();
-                            if !item_id.is_empty() && !seen.contains(&item_id) {
-                                let can_restore = matches!(phase.as_str(), "installed" | "prepared");
-                                out.push(WorkshopLocalItemState {
-                                    mod_id: item_id,
-                                    phase,
-                                    install_kind: "bundle_mod".into(),
-                                    transaction_id: None,
-                                    downloaded_path: None,
-                                    can_restore,
-                                });
-                            }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") { continue; }
+                if let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) {
+                    if let Ok(Some(receipt)) = read_workshop_receipt(&root, id) {
+                        if let Ok(state) = local_state(&root, receipt) {
+                            states.push(state);
                         }
                     }
                 }
             }
         }
+        states.extend(crate::external_mods::list_managed_library(&root)?);
+        Ok(states)
+    }).await.map_err(|e| HubError::storage_error(e.to_string()))?
+}
 
-        Ok(out)
+fn downloaded_archive_path(root: &Path, id: &str) -> HubResult<PathBuf> {
+    let id = sanitize_mod_id(id)?;
+    confined(root, &format!(".xingshu-mods/downloads/{id}/{id}.zip"))
+}
+
+fn local_state(root: &Path, receipt: WorkshopReceipt) -> HubResult<WorkshopLocalItemState> {
+    let mut phase = receipt.phase;
+    let mut linked_drop_id = None;
+    let mut downloaded_path = None;
+    if receipt.install_kind == "external_archive" && phase == "downloaded" {
+        let path = downloaded_archive_path(root, &receipt.mod_id)?;
+        let id = crate::dropped_mods::derive_mod_id(&path);
+        if let Some(drop) = crate::dropped_mods::managed_drop(root, &id)? {
+            phase = drop.phase;
+            linked_drop_id = Some(id);
+        }
+        if path.is_file() {
+            downloaded_path = Some(path.display().to_string());
+        }
+    }
+    Ok(WorkshopLocalItemState {
+        mod_id: receipt.mod_id,
+        name: receipt.name,
+        install_kind: receipt.install_kind,
+        source: "workshop".into(),
+        linked_drop_id,
+        can_restore: matches!(phase.as_str(), "installed" | "prepared" | "disabled" | "downloaded"),
+        phase,
+        transaction_id: receipt.transaction_id,
+        downloaded_path,
     })
-    .await
-    .map_err(|e| HubError::storage_error(e.to_string()))?
 }
 
 #[tauri::command]
@@ -676,56 +793,73 @@ pub async fn workshop_download_and_install(
     request: WorkshopInstallRequest,
     center: State<'_, ExtensionCenter>,
     install_service: State<'_, InstallService>,
+    app: AppHandle,
 ) -> HubResult<WorkshopInstallResult> {
     let mod_id = sanitize_mod_id(&request.mod_id)?;
+    match run_workshop_download_and_install(&app, &mod_id, request, &center, &install_service).await {
+        Ok(result) => {
+            emit_mod_progress(&app, &mod_id, "done", 1, 1, 100, result.message.clone());
+            Ok(result)
+        }
+        Err(err) => {
+            emit_mod_progress(&app, &mod_id, "error", 0, 0, 0, err.message.clone());
+            Err(err)
+        }
+    }
+}
+
+async fn run_workshop_download_and_install(
+    app: &AppHandle,
+    mod_id: &str,
+    request: WorkshopInstallRequest,
+    center: &ExtensionCenter,
+    install_service: &InstallService,
+) -> HubResult<WorkshopInstallResult> {
     let game = get_game(&center.db, &request.installation_id)?;
-    if !request.platforms.is_empty() && !request.platforms.iter().any(|p| p == &game.platform) {
+    let root = game_root(&game)?;
+    game_closed(&game)?;
+    emit_mod_progress(app, mod_id, "fetching_meta", 0, 0, 2, "正在获取模组清单…");
+    let client = remote_content::client()?;
+    let published = published_mod(&client, mod_id).await?;
+    if !published.platforms.iter().any(|p| p == &game.platform) {
         return Err(HubError::invalid_manifest(format!(
             "此模组适配 {}，与当前所选渠道 {} 不符。",
-            request.platforms.join(" / "),
+            published.platforms.join(" / "),
             game.platform
         )));
     }
-    let root = game_root(&game)?;
-    game_closed(&game)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|e| net_error(format!("初始化下载客户端失败：{e}")))?;
 
     // Path 1: Explicit verified bundle file mapping (Seed items & curated bundle manifests).
-    if request.install_kind == "bundle_mod" && !request.files.is_empty() {
-        let local_lib = local_mod_library_root();
-        let mut staged = Vec::with_capacity(request.files.len());
-        for f in &request.files {
-            if !is_hex64(&f.sha256) {
-                return Err(HubError::security_violation("模组文件缺少有效的 SHA-256 指纹。"));
-            }
+    if published.install_kind == "bundle_mod" && !published.files.is_empty() {
+        let total = published.files.iter().try_fold(0_u64, |sum, f| sum.checked_add(f.size));
+        if published.files.len() > MAX_ZIP_ENTRIES || total.is_none_or(|n| n > MAX_ZIP_UNCOMPRESSED_BYTES) {
+            return Err(HubError::security_violation("工坊资源数量或总大小超过限制。"));
+        }
+        let total_bytes = total.unwrap_or(0);
+        let file_count = published.files.len();
+        let mut completed_bytes = 0_u64;
+        let mut staged = Vec::with_capacity(file_count);
+        for (idx, f) in published.files.iter().enumerate() {
             let (norm_target, _) = validate_bundle_target(&root, &f.target)?;
-            let bytes = if let Some(ref url_or_path) = f.payload_url {
-                let url = resolve_and_validate_url(&request.api_base, url_or_path)?;
-                download_verified_bytes(&client, &url, &f.sha256, MAX_PAYLOAD_BYTES).await?
-            } else if let Some(ref lib) = local_lib {
-                let local_file = confined(lib, &format!("payload/{}.bundle", f.sha256))?;
-                if !local_file.is_file() {
-                    return Err(HubError::storage_error(
-                        "服务端尚未上传此条目的资产包，且本机 ModLibrary 中缺少对应文件。",
-                    ));
-                }
-                let data = fs::read(&local_file).map_err(|e| HubError::storage_error(e.to_string()))?;
-                if sha256_hex(&data) != f.sha256.to_ascii_lowercase() {
-                    return Err(HubError::security_violation("本地 ModLibrary 文件指纹不匹配。"));
-                }
-                data
-            } else {
-                return Err(HubError::storage_error(
-                    "服务端未提供该条目的资产下载，且本机未附带 ModLibrary/payload；请先补充服务端资产或前往发布页下载。",
-                ));
-            };
-            if f.size > 0 && bytes.len() as u64 != f.size {
-                return Err(HubError::security_violation("下载的资产体积与清单声明不符。"));
+            let path = format!("/api/workshop/mods/{mod_id}/payload/{}", f.sha256);
+            if f.payload_url.as_deref() != Some(&path) {
+                return Err(HubError::invalid_manifest("该资源没有星枢服务器下载地址。"));
             }
+            let detail = format!("正在下载资源 ({}/{})", idx + 1, file_count);
+            let bytes = remote_content::verified_with_progress(
+                &client,
+                &path,
+                &f.sha256,
+                f.size,
+                MAX_PAYLOAD_BYTES,
+                |dl, _| {
+                    let current = completed_bytes.saturating_add(dl);
+                    let pct = scaled_download_percent(current, total_bytes);
+                    emit_mod_progress(app, mod_id, "downloading", current, total_bytes, pct, detail.clone());
+                },
+            )
+            .await?;
+            completed_bytes = completed_bytes.saturating_add(f.size);
             staged.push(StagedBundle {
                 target_rel: norm_target,
                 expected_sha256: f.sha256.to_ascii_lowercase(),
@@ -734,10 +868,12 @@ pub async fn workshop_download_and_install(
             });
         }
 
-        let name = request.name.clone();
+        emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 95, "正在备份原版文件并写入模组…");
+        let name = published.name;
+        let mod_id_owned = mod_id.to_string();
         let receipt = tokio::task::spawn_blocking(move || {
             let _lock = operation_lock(&root)?;
-            install_bundle_entries(&game, &root, &mod_id, &name, &staged)
+            install_bundle_entries(&game, &root, &mod_id_owned, &name, &staged)
         })
         .await
         .map_err(|e| HubError::storage_error(e.to_string()))??;
@@ -752,44 +888,60 @@ pub async fn workshop_download_and_install(
     }
 
     // Path 2: Single downloadable package archive (.xspkg or .zip).
-    let dl_raw = request
-        .download_url
-        .as_deref()
-        .ok_or_else(|| HubError::invalid_manifest("此工坊条目没有提供可下载的模组包地址。"))?;
-    let dl_url = resolve_and_validate_url(&request.api_base, dl_raw)?;
-    if !request.sha256.is_empty() && !is_hex64(&request.sha256) {
-        return Err(HubError::security_violation("工坊条目声明的 SHA-256 格式无效。"));
+    let path = format!("/api/workshop/mods/{mod_id}/download");
+    if published.download_url.as_deref() != Some(&path) {
+        return Err(HubError::invalid_manifest("该条目没有星枢服务器托管包。"));
     }
-    if request.sha256.is_empty() && request.install_kind != "external_archive" {
-        return Err(HubError::security_violation(
-            "安全策略：直接安装的在线模组包必须提供 SHA-256 摘要，请从发布页核验后再手动导入。",
-        ));
-    }
+    let total_bytes = published.size_bytes;
+    emit_mod_progress(app, mod_id, "downloading", 0, total_bytes, 4, "正在连接星枢工坊下载模组包…");
+    let archive_bytes = remote_content::verified_with_progress(
+        &client,
+        &path,
+        &published.sha256,
+        published.size_bytes,
+        MAX_ARCHIVE_BYTES,
+        |dl, total| {
+            let pct = scaled_download_percent(dl, total);
+            emit_mod_progress(app, mod_id, "downloading", dl, total, pct, "正在下载模组包…");
+        },
+    )
+    .await?;
 
-    let archive_bytes =
-        download_verified_bytes(&client, &dl_url, &request.sha256, MAX_ARCHIVE_BYTES).await?;
+    emit_mod_progress(app, mod_id, "verifying", total_bytes, total_bytes, 93, "正在校验 SHA-256 与资源清单…");
 
-    if request.install_kind == "xspkg" || check_zip_contains_xspkg_manifest(&archive_bytes)? {
-        let dl_dir = confined(&root, &format!(".xingshu-mods/downloads/{mod_id}"))?;
-        fs::create_dir_all(&dl_dir).map_err(|e| HubError::storage_error(e.to_string()))?;
-        let pkg_path = dl_dir.join(format!("{mod_id}.xspkg"));
-        atomic_write(&pkg_path, &archive_bytes)?;
+    if published.install_kind == "xspkg" {
+        if mod_id.starts_with("xingshu.launcher.") {
+            return Err(HubError::invalid_manifest("官方模块请使用启动器自带的模块安装入口。"));
+        }
 
-        let svc = install_service.inner();
-        let pkg_for_install = pkg_path.clone();
-        let inst_id = request.installation_id.clone();
-        let mod_name = request.name.clone();
+        let svc = install_service;
+        let mod_name = published.name;
+        let mod_id_owned = mod_id.to_string();
+        emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 97, "正在备份原版文件并写入模组…");
         let receipt = tokio::task::block_in_place(|| -> HubResult<WorkshopReceipt> {
+            let work = tempfile::NamedTempFile::new().map_err(|e| HubError::storage_error(e.to_string()))?;
+            fs::write(work.path(), &archive_bytes).map_err(|e| HubError::storage_error(e.to_string()))?;
+            validate_community_package(work.path())?;
             let _lock = operation_lock(&root)?;
-            let tx = svc.install_package_from_zip(&pkg_for_install, &inst_id)?;
+            game_closed(&game)?;
+            if read_workshop_receipt(&root, &mod_id_owned)?.is_some_and(|receipt| receipt.phase != "restored") {
+                return Err(HubError::invalid_manifest("此模组已有安装记录，请使用开关。"));
+            }
+            let pkg_cache = xspkg_payload_path(&root, &mod_id_owned)?;
+            atomic_write(&pkg_cache, &archive_bytes)?;
+            let tx = svc.install_mod_package_in_locked_root(work.path(), &game)?;
+            if tx.state != "COMPLETED" {
+                return Err(HubError::transaction_error("模组安装事务未完成。"));
+            }
             let receipt = WorkshopReceipt {
-                mod_id: mod_id.clone(),
+                mod_id: mod_id_owned.clone(),
                 name: mod_name,
                 install_kind: "xspkg".into(),
                 phase: "installed".into(),
                 transaction_id: Some(tx.id.clone()),
-                downloaded_path: Some(pkg_for_install.display().to_string()),
+                downloaded_path: None,
                 files: Vec::new(),
+                archive_sha256: Some(sha256_hex(&archive_bytes)),
             };
             save_workshop_receipt(&root, &receipt)?;
             Ok(receipt)
@@ -804,13 +956,15 @@ pub async fn workshop_download_and_install(
         });
     }
 
-    if request.install_kind == "bundle_mod" {
+    if published.install_kind == "bundle_mod" {
+        emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 96, "正在解析压缩包、备份原版并写入…");
         let root_for_zip = root.clone();
-        let name = request.name.clone();
+        let name = published.name;
+        let mod_id_owned = mod_id.to_string();
         let receipt = tokio::task::spawn_blocking(move || {
             let _lock = operation_lock(&root_for_zip)?;
             let staged = extract_bundle_entries_from_zip(&root_for_zip, &archive_bytes)?;
-            install_bundle_entries(&game, &root_for_zip, &mod_id, &name, &staged)
+            install_bundle_entries(&game, &root_for_zip, &mod_id_owned, &name, &staged)
         })
         .await
         .map_err(|e| HubError::storage_error(e.to_string()))??;
@@ -824,18 +978,26 @@ pub async fn workshop_download_and_install(
         });
     }
 
-    // external_archive fallback: verify zip, store safely under .xingshu-mods/downloads, never blind-extract.
-    let dl_dir = confined(&root, &format!(".xingshu-mods/downloads/{mod_id}"))?;
-    let zip_path = dl_dir.join(format!("{mod_id}.zip"));
+    if published.install_kind != "external_archive" {
+        return Err(HubError::invalid_manifest("服务器提供了无法识别的模组类型。"));
+    }
+    // Generic archives are downloaded as data only.
+    emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 97, "正在写入缓存压缩包…");
+    let _lock = operation_lock(&root)?;
+    let zip_path = downloaded_archive_path(&root, mod_id)?;
+    if read_workshop_receipt(&root, mod_id)?.is_some_and(|receipt| receipt.phase != "restored") {
+        return Err(HubError::invalid_manifest("模组已缓存，请从已安装 Mod 管理。"));
+    }
     atomic_write(&zip_path, &archive_bytes)?;
     let receipt = WorkshopReceipt {
-        mod_id: mod_id.clone(),
-        name: request.name,
+        mod_id: mod_id.to_string(),
+        name: published.name,
         install_kind: "external_archive".into(),
         phase: "downloaded".into(),
         transaction_id: None,
         downloaded_path: Some(zip_path.display().to_string()),
         files: Vec::new(),
+        archive_sha256: Some(sha256_hex(&archive_bytes)),
     };
     save_workshop_receipt(&root, &receipt)?;
 
@@ -861,66 +1023,149 @@ pub async fn workshop_restore_mod(
     let clean_id = sanitize_mod_id(&mod_id)?;
     let game = get_game(&center.db, &installation_id)?;
     let root = game_root(&game)?;
-    game_closed(&game)?;
+    let service = install_service.inner();
 
-    if let Some(receipt) = read_workshop_receipt(&root, &clean_id)? {
-        if receipt.install_kind == "xspkg" {
-            let tx_id = receipt
-                .transaction_id
-                .clone()
-                .ok_or_else(|| HubError::storage_error("缺少 .xspkg 安装事务标识，请前往安装事务页回滚。"))?;
-            let svc = install_service.inner();
-            tokio::task::block_in_place(|| -> HubResult<()> {
-                let _lock = operation_lock(&root)?;
-                svc.rollback_transaction(&tx_id)?;
-                let mut updated = receipt;
-                updated.phase = "restored".into();
-                save_workshop_receipt(&root, &updated)
-            })?;
-            return Ok("已通过安装事务回滚 .xspkg 模组，原文件已恢复。".into());
+    tokio::task::block_in_place(|| {
+        let _lock = operation_lock(&root)?;
+        game_closed(&game)?;
+        let receipt = read_workshop_receipt(&root, &clean_id)?;
+        if clean_id.starts_with("local.") && receipt.as_ref().is_none_or(|receipt| receipt.phase == "restored") {
+            crate::external_mods::restore_item_by_id(&root, &clean_id)?;
+            return Ok("已还原本地模组库条目。".into());
         }
-        tokio::task::spawn_blocking(move || {
-            let _lock = operation_lock(&root)?;
-            restore_bundle_receipt(&root, &receipt)
-        })
-        .await
-        .map_err(|e| HubError::storage_error(e.to_string()))??;
-        return Ok("已还原安装前备份文件。".into());
-    }
+        let mut receipt = receipt.ok_or_else(|| HubError::storage_error("未找到此模组的安装记录。"))?;
+        match (receipt.install_kind.as_str(), receipt.phase.as_str()) {
+            (_, "restored") => return Ok("模组已移除。".into()),
+            (_, "disabled") => {},
+            ("external_archive", "downloaded") => {
+                let path = downloaded_archive_path(&root, &clean_id)?;
+                let drop_id = crate::dropped_mods::derive_mod_id(&path);
+                if crate::dropped_mods::managed_drop(&root, &drop_id)?.is_some() {
+                    crate::dropped_mods::restore_dropped_in_locked_root(&game, &root, &drop_id, Some(service))?;
+                }
+                match fs::remove_file(path) {
+                    Ok(()) => {},
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(e) => return Err(HubError::storage_error(e.to_string())),
+                }
+            },
+            ("xspkg", "installed" | "prepared") => {
+                let tx = receipt.transaction_id.as_deref()
+                    .ok_or_else(|| HubError::storage_error("缺少模组安装事务标识。"))?;
+                service.rollback_mod_transaction(tx, &game.id)?;
+            },
+            ("bundle_mod", "installed" | "prepared") => {
+                restore_bundle_receipt(&root, &receipt)?;
+                return Ok("已还原安装前备份文件。".into());
+            },
+            _ => return Err(HubError::invalid_manifest("此模组没有可移除的安装记录。")),
+        }
+        receipt.phase = "restored".into();
+        save_workshop_receipt(&root, &receipt)?;
+        Ok("已移除模组。".into())
+    })
+}
 
-    if clean_id.starts_with("local.") {
-        tokio::task::spawn_blocking(move || {
-            let _lock = operation_lock(&root)?;
-            crate::external_mods::restore_item_by_id(&root, &clean_id)
-        })
-        .await
-        .map_err(|e| HubError::storage_error(e.to_string()))??;
-        return Ok("已还原内置模组库条目的安装前备份文件。".into());
-    }
+#[tauri::command]
+pub async fn workshop_toggle_mod(
+    installation_id: String,
+    mod_id: String,
+    enabled: bool,
+    center: State<'_, ExtensionCenter>,
+    install_service: State<'_, InstallService>,
+) -> HubResult<WorkshopLocalItemState> {
+    let clean_id = sanitize_mod_id(&mod_id)?;
+    let game = get_game(&center.db, &installation_id)?;
+    let root = game_root(&game)?;
+    let service = install_service.inner();
 
-    Err(HubError::storage_error("未找到该工坊条目的安装备份记录。"))
+    tokio::task::block_in_place(|| {
+        let _lock = operation_lock(&root)?;
+        game_closed(&game)?;
+        let receipt = read_workshop_receipt(&root, &clean_id)?;
+        if clean_id.starts_with("local.") && receipt.as_ref().is_none_or(|receipt| receipt.phase == "restored") {
+            return crate::external_mods::toggle_managed_library(&game, &root, &clean_id, enabled);
+        }
+        let mut receipt = receipt.ok_or_else(|| HubError::storage_error("未找到此模组的安装记录。"))?;
+
+        if receipt.install_kind == "external_archive" && receipt.phase == "downloaded" {
+            let path = downloaded_archive_path(&root, &clean_id)?;
+            let drop_id = crate::dropped_mods::derive_mod_id(&path);
+            if crate::dropped_mods::managed_drop(&root, &drop_id)?.is_some() {
+                crate::dropped_mods::toggle_dropped_in_locked_root(&game, &root, &drop_id, enabled, service)?;
+            } else if enabled {
+                let bytes = read_local_archive(&path, MAX_ARCHIVE_BYTES as u64)?;
+                if receipt.archive_sha256.as_ref().is_some_and(|expected| {
+                    !sha256_hex(&bytes).eq_ignore_ascii_case(expected)
+                }) {
+                    return Err(HubError::security_violation("下载模组包校验失败，请移除后重新下载。"));
+                }
+                if crate::dropped_mods::is_xspkg_archive(&path)? {
+                    validate_community_package(&path)?;
+                }
+                let backups = crate::storage::repositories::backup_repository::BackupRepository::new(center.db.clone());
+                crate::dropped_mods::install_dropped_in_locked_root(
+                    &game, &root, &path, false, Some(service), Some(&backups),
+                )?;
+            }
+            return local_state(&root, receipt);
+        }
+
+        let phase = if enabled { "installed" } else { "disabled" };
+        if receipt.phase == phase {
+            return local_state(&root, receipt);
+        }
+        if !matches!(receipt.phase.as_str(), "installed" | "disabled") {
+            return Err(HubError::invalid_manifest("请先还原上次未完成的模组操作。"));
+        }
+
+        match receipt.install_kind.as_str() {
+            "xspkg" => {
+                let cache = xspkg_payload_path(&root, &clean_id)?;
+                validate_cached_package(&cache, receipt.archive_sha256.as_deref(), MAX_ARCHIVE_BYTES as u64)?;
+                if enabled {
+                    validate_community_package(&cache)?;
+                    let tx = service.install_mod_package_in_locked_root(&cache, &game)?;
+                    if tx.state != "COMPLETED" {
+                        return Err(HubError::transaction_error("模组启用事务未完成。"));
+                    }
+                    receipt.transaction_id = Some(tx.id);
+                } else {
+                    let tx = receipt.transaction_id.as_deref()
+                        .ok_or_else(|| HubError::storage_error("缺少模组安装事务标识。"))?;
+                    service.rollback_mod_transaction(tx, &game.id)?;
+                }
+            },
+            "bundle_mod" => {
+                if enabled {
+                    let owners = crate::dropped_mods::collect_active_target_owners(&root, &clean_id)?;
+                    if receipt.files.iter().any(|file| owners.contains_key(&target_key(&file.target))) {
+                        return Err(HubError::security_violation("此资源由其他模组使用，请先停用冲突项。"));
+                    }
+                }
+                let files = receipt.files.iter().map(|file| {
+                    let (_, target) = validate_bundle_target(&root, &file.target)?;
+                    Ok(SwitchFile {
+                        target,
+                        baseline: backup_file_path(&root, &clean_id, file.index)?,
+                        payload: payload_file_path(&root, &clean_id, file.index)?,
+                        baseline_sha256: file.baseline_sha256.clone(),
+                        mod_sha256: file.mod_sha256.clone(),
+                    })
+                }).collect::<HubResult<Vec<_>>>()?;
+                mod_resources::set_enabled(&files, enabled)?;
+            },
+            _ => return Err(HubError::invalid_manifest("此模组类型不支持启停。")),
+        }
+        receipt.phase = phase.into();
+        save_workshop_receipt(&root, &receipt)?;
+        local_state(&root, receipt)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn validates_https_and_rejects_unsafe_download_urls() {
-        assert_eq!(
-            resolve_and_validate_url("https://astralparty.example.com", "/api/workshop/mods/abc/download").unwrap(),
-            "https://astralparty.example.com/api/workshop/mods/abc/download"
-        );
-        assert_eq!(
-            resolve_and_validate_url("http://127.0.0.1:8769", "/api/workshop/mods/abc/download").unwrap(),
-            "http://127.0.0.1:8769/api/workshop/mods/abc/download"
-        );
-        assert!(resolve_and_validate_url("", "/api/workshop/mods/abc/download").is_err());
-        assert!(resolve_and_validate_url("", "http://example.com/mod.zip").is_err());
-        assert!(resolve_and_validate_url("", "file:///C:/Windows/win.ini").is_err());
-        assert!(resolve_and_validate_url("", "https://user:pass@example.com/mod.zip").is_err());
-        assert!(resolve_and_validate_url("https://example.com", "/api/..\\evil").is_err());
-    }
 
     #[test]
     fn sanitizes_mod_ids_and_confines_bundle_targets() {
@@ -1039,5 +1284,50 @@ mod tests {
             z.finish().unwrap();
         }
         assert!(extract_bundle_entries_from_zip(tmp.path(), bad_buf.get_ref()).is_err());
+    }
+
+    #[test]
+    fn validates_and_extracts_addressables_and_gbk_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (game, bundle_rel, orig, modded) = fixture_game(tmp.path());
+        let addr_rel = "AstralParty_CN_Data/com.unity.addressables/AssetBundles/cards_all/fedcba9876543210fedcba9876543210/__data";
+        let addr_abs = tmp.path().join(addr_rel);
+        fs::create_dir_all(addr_abs.parent().unwrap()).unwrap();
+        fs::write(&addr_abs, b"orig-addr").unwrap();
+
+        assert!(validate_bundle_target(tmp.path(), addr_rel).is_ok());
+        assert!(validate_bundle_target(
+            tmp.path(),
+            "AstralParty_CN_Data/com.unity.addressables/AssetBundles/../evil/fedcba9876543210fedcba9876543210/__data",
+        ).is_err());
+        // Protected runtime bundle container cannot be overwritten by a community mod.
+        assert!(validate_bundle_target(
+            tmp.path(),
+            "AstralParty_CN_Data/com.unity.addressables/AssetBundles/core/21b07f52b18434b20781372324ee459f/__data",
+        ).is_err());
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut z = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            z.start_file("0123456789abcdef0123456789abcdef.bundle", opts).unwrap();
+            z.write_all(&modded).unwrap();
+            z.start_file("com.unity.addressables/AssetBundles/cards_all/fedcba9876543210fedcba9876543210/__data", opts).unwrap();
+            z.write_all(b"mod-addr").unwrap();
+            z.finish().unwrap();
+        }
+        assert!(!crate::security::archive_guard::decode_zip_entry_name(b"\xBF\xA8\xC3\xE6.txt").is_empty());
+        let staged = extract_bundle_entries_from_zip(tmp.path(), buf.get_ref()).unwrap();
+        assert_eq!(staged.len(), 2);
+        assert!(staged.iter().any(|s| s.target_rel == bundle_rel));
+        assert!(staged.iter().any(|s| s.target_rel == addr_rel));
+
+        // Full install -> toggle disabled/enabled -> restore roundtrip on mixed .bundle + Addressables __data
+        let receipt = install_bundle_entries(&game, tmp.path(), "sub.mixed01", "NunNan Mixed", &staged).unwrap();
+        assert_eq!(fs::read(tmp.path().join(&bundle_rel)).unwrap(), modded);
+        assert_eq!(fs::read(&addr_abs).unwrap(), b"mod-addr");
+        restore_bundle_receipt(tmp.path(), &receipt).unwrap();
+        assert_eq!(fs::read(tmp.path().join(&bundle_rel)).unwrap(), orig);
+        assert_eq!(fs::read(&addr_abs).unwrap(), b"orig-addr");
     }
 }

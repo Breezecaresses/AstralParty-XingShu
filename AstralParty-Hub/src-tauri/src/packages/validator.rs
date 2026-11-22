@@ -2,6 +2,7 @@ use crate::domain::error::{HubError, HubResult};
 use crate::packages::manifest::HubPackageManifestV1;
 use crate::security::path_guard::PathGuard;
 use crate::security::permissions::PermissionsGuard;
+use std::collections::HashSet;
 
 pub struct ManifestValidator;
 
@@ -29,6 +30,7 @@ impl ManifestValidator {
             return Err(HubError::invalid_manifest("Package contains no file declarations."));
         }
 
+        let mut targets = HashSet::new();
         for file in &manifest.files {
             // Validate logical target prefix
             if !PermissionsGuard::assert_valid_logical_prefix(&file.target) {
@@ -40,7 +42,12 @@ impl ManifestValidator {
 
             // Path traversal safety
             PathGuard::sanitize_relative_path(&file.source)?;
-            PathGuard::sanitize_relative_path(&file.target)?;
+            let target = PathGuard::sanitize_relative_path(&file.target)?;
+            let target = target.to_string_lossy().replace('\\', "/");
+            let key = if cfg!(windows) { target.to_lowercase() } else { target };
+            if !targets.insert(key) {
+                return Err(HubError::invalid_manifest("模组清单包含重复的安装目标。"));
+            }
 
             // Validate SHA256 format
             if file.sha256.len() != 64 || !file.sha256.chars().all(|c| c.is_ascii_hexdigit()) {

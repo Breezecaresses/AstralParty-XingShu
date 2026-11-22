@@ -127,7 +127,7 @@ export const DiagnosticsPage: React.FC = () => {
       </div>
 
       <details className="panel" open={runtimeOpen} onToggle={event => setRuntimeOpen(event.currentTarget.open)}>
-        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>游戏组件检查 · 文件、进程与连接</summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{isZh ? '星枢官方插件与组件检查 · 文件、进程与连接' : 'XingShu Official Plugin & Diagnostics'}</summary>
         {runtimeOpen && <div style={{ marginTop: 20 }}><RuntimeDiagnosticsPanel /></div>}
       </details>
 

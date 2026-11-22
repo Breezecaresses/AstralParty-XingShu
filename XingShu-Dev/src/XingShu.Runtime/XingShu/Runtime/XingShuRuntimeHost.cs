@@ -25,9 +25,11 @@ namespace XingShu.Runtime
         public const string LogFileName = "xingshu_runtime_lifecycle.log";
         public const string LegacyLogFileName = "xingshu_runtime_lifecycle.log";
 #if XINGSHU_ANDROID_PREVIEW
-        public const string RuntimeVersion = "1.0.0-android-preview8.34";
+        public const string RuntimeVersion = "1.0.0-android-preview8.35";
+#elif XINGSHU_MODULAR_LAUNCHER
+        public const string RuntimeVersion = "1.0.0-game-ui-r8.40";
 #else
-        public const string RuntimeVersion = "1.0.0-game-ui-r8.33";
+        public const string RuntimeVersion = "1.0.0-game-ui-r8.40";
 #endif
 
         private static string _logPath;
@@ -72,7 +74,8 @@ namespace XingShu.Runtime
             {
                 GameObject targetHost = hostObject != null ? hostObject : gameObject;
                 XingShu.SpectatorTelemetry.SpectatorEventInterceptor.Initialize(targetHost);
-                XingShuRuntime.MatchPort.SettlementScreenshot.Install(targetHost);
+                if (LauncherModules.CanLoad(nameof(XingShuRuntime.MatchPort.SettlementScreenshot)))
+                    XingShuRuntime.MatchPort.SettlementScreenshot.Install(targetHost);
                 LogLifecycle("[XingShuRuntimeHost.Initialize] SpectatorEventInterceptor 初始化完成");
             }
             catch (Exception ex)
@@ -115,6 +118,8 @@ namespace XingShu.Runtime
 #if XINGSHU_ANDROID_PREVIEW
             AndroidCloudHands.Reset();
 #endif
+            NativeRoomAutoEnter.Reset();
+            NativeRoomController.Reset();
 
             try
             {
@@ -286,6 +291,7 @@ namespace XingShu.Runtime
                 _lastReportedContextFingerprint = null;
                 CheckAndEmitIdentityUpdate(force: true);
                 EvaluateAndPublishMatchContext(force: true);
+                NativeRoomController.ForceBroadcastSnapshot();
                 GameLibraryExporter.Request();
             }
             BridgeEnvelope message;
@@ -297,7 +303,12 @@ namespace XingShu.Runtime
                 else if (message.messageType == "GAME_LIBRARY_REQUEST") GameLibraryExporter.Request();
                 else if (message.messageType == "GAME_LIBRARY_MATCH_REQUEST") GameLibraryExporter.RequestMatch(message);
                 else if (message.messageType == "GAME_REPLAY_REQUEST") HubReplayController.Execute(message);
+                else if (message.messageType == "ROOM_AUTO_ENTER") NativeRoomAutoEnter.EnqueueFromBridge(message);
+                else if (message.messageType != null && message.messageType.StartsWith("ROOM_IN_GAME_", StringComparison.Ordinal))
+                    NativeRoomController.EnqueueCommand(message);
             }
+            NativeRoomAutoEnter.Tick();
+            NativeRoomController.Tick();
             // 1. 场景切换即时感知与事件驱动
             CheckSceneTransition();
             XingShuRuntime.Utilities.OriginalArtworkService.Instance.Tick();

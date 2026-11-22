@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <radialGradient id="mark-gold-dot" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#fff7c2" />
+      <stop offset="45%" stop-color="#ffd166" />
+      <stop offset="100%" stop-color="#ffaa3b" />
+    </radialGradient>
+
+    <mask id="mark-star-mask">
+      <rect width="128" height="128" fill="#ffffff" />
+      <!-- Integrated Launch-Chevron Cutout -->
+      <path d="M56.5 53 L76 64 L56.5 75 L60.5 64 Z" fill="#000000" />
+      <!-- Crisp Clearance Gap Under Front Orbital Arc -->
+      <g transform="rotate(-32 64 64)">
+        <path d="M122 64 A58 25.5 0 0 1 6 64 L14 64 A50 14.5 0 0 0 114 64 Z" fill="#000000" />
+      </g>
+    </mask>
+
+    <mask id="mark-orbit-mask">
+      <rect width="128" height="128" fill="#ffffff" />
+      <circle cx="97.2" cy="30.8" r="9" fill="#000000" />
+      <circle cx="30.8" cy="97.2" r="7.5" fill="#000000" />
+    </mask>
+  </defs>
+
+  <!-- Subtle Translucent Secondary Rear Orbit -->
+  <g mask="url(#mark-orbit-mask)">
+    <g transform="rotate(-32 64 64)">
+      <path d="M8 64 A56 22 0 0 1 120 64 L116 64 A52 18 0 0 0 12 64 Z" fill="#ffffff" fill-opacity="0.38" />
+    </g>
+  </g>
+
+  <!-- Clean Tile-Less White 4-Point Star with Subtle Facet & Launch Cutout -->
+  <g mask="url(#mark-star-mask)">
+    <path d="M64 16 L78 50 L112 64 L78 78 L64 112 L50 78 L16 64 L50 50 Z" fill="#ffffff" />
+    <!-- Subtle Facet Accent on Lower-Right Quadrant for Prism Crispness -->
+    <polygon points="64,64 112,64 78,78 64,112" fill="#e6f1ff" fill-opacity="0.45" />
+  </g>
+
+  <!-- Crisp Luminous Front Orbital Arc -->
+  <g mask="url(#mark-orbit-mask)">
+    <g transform="rotate(-32 64 64)">
+      <path d="M120 64 A56 23 0 0 1 8 64 L12 64 A52 17 0 0 0 116 64 Z" fill="#ffffff" />
+    </g>
+  </g>
+
+  <!-- Warm Astral-Gold Satellite Dot -->
+  <circle cx="97.2" cy="30.8" r="6.2" fill="url(#mark-gold-dot)" />
+
+  <!-- Crisp White Starlight Counter-Spark -->
+  <path d="M30.8 91.5 L32.5 95.5 L36.5 97.2 L32.5 98.9 L30.8 102.9 L29.1 98.9 L25.1 97.2 L29.1 95.5 Z" fill="#ffffff" fill-opacity="0.92" />
+</svg>

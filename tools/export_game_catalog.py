@@ -5,6 +5,7 @@ Run export_catalog_schema.ps1 first. Schemas come from Cecil metadata, not guess
 import hashlib
 import argparse
 import base64
+import io
 import json
 import re
 import shutil
@@ -145,8 +146,23 @@ def main():
     parser.add_argument('--catalog-json', type=Path, help='Current official remote Addressables catalog')
     parser.add_argument('--game-data', type=Path, default=GAME_DATA)
     parser.add_argument('--resource-version', default='')
+    parser.add_argument('--locate-art', action='append', metavar='KEY',
+                        help='Resolve a card or encyclopaedia texture in the local game without exporting it')
+    parser.add_argument('--export-steam-emotes', action='store_true',
+                        help='Export animated emotes updated by the current Steam Addressables catalog')
     args = parser.parse_args()
     SOURCE_CATALOG, GAME_DATA = args.catalog_json, args.game_data
+    if args.export_steam_emotes:
+        if not SOURCE_CATALOG:
+            parser.error('--export-steam-emotes requires --catalog-json from the active Steam client')
+        export_steam_emotes()
+        return
+    if args.locate_art:
+        results = [locate_local_texture(key) for key in args.locate_art]
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+        if any(result.get('bundle') is None for result in results):
+            sys.exit(1)
+        return
     tables, source = extract(args.config_bundle)
     # Preview audits also retain referenced Buff text, rather than inventing a
     # complete skill description from an unlabelled parameter vector.
@@ -342,17 +358,92 @@ def bundle_digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def locate_local_texture(key):
+    if not re.fullmatch(r'[A-Za-z0-9_]{1,160}', key):
+        raise ValueError('Invalid addressable artwork name')
+    game_data = GAME_DATA.resolve(strict=True)
+    for candidate in asset_bundles(key):
+        bundle = candidate.resolve(strict=True)
+        if not bundle.is_relative_to(game_data):
+            continue
+        for obj in UnityPy.load(str(bundle)).objects:
+            if obj.type.name in ('Texture2D', 'Sprite') and obj.read().m_Name == key:
+                return {'key': key, 'bundle': str(bundle), 'pathId': obj.path_id, 'type': obj.type.name}
+    return {'key': key, 'bundle': None}
+
+
+def export_steam_emotes():
+    from PIL import Image
+
+    shared = ROOT / 'AstralParty-Hub/src/shared'
+    public = ROOT / 'AstralParty-Hub/public/catalog'
+    manifest_path = shared / 'steamAnimatedEmotes.generated.json'
+    game_catalog = json.loads((shared / 'gameCatalog.generated.json').read_text('utf-8'))
+    animated = {
+        item['image'] for character in game_catalog['characters'] for item in character.get('emotes', [])
+        if item.get('animated') and re.fullmatch(r'UT_Item_Emoji_\d+_\d+', item.get('image', ''))
+    }
+    manifest = json.loads(manifest_path.read_text('utf-8')) if manifest_path.exists() else {}
+    updated = {}
+    cache = (GAME_DATA / 'com.unity.addressables/AssetBundles').resolve()
+    for key in sorted(animated):
+        texture_name = key.replace('UT_Item_Emoji_', 'VEmoji_', 1)
+        matching = [path for path in asset_bundles(texture_name) if path.resolve().is_relative_to(cache)]
+        if not matching:
+            continue
+        sheet = None
+        for path in matching:
+            for obj in UnityPy.load(str(path)).objects:
+                if obj.type.name == 'Texture2D':
+                    texture = obj.read()
+                    if texture.m_Name == texture_name:
+                        sheet = texture.image.convert('RGBA')
+                        break
+            if sheet is not None:
+                break
+        cell_size = 168
+        if sheet is None or sheet.width % cell_size or sheet.height % cell_size:
+            raise ValueError(f'Invalid Steam expression sprite sheet: {texture_name}')
+        frames = []
+        for y in range(0, sheet.height, cell_size):
+            for x in range(0, sheet.width, cell_size):
+                frame = sheet.crop((x, y, x + cell_size, y + cell_size))
+                if frame.getchannel('A').getbbox():
+                    frames.append(frame.resize((128, 128), Image.Resampling.LANCZOS))
+        if len(frames) < 2:
+            raise ValueError(f'Missing Steam emote animation frames: {texture_name}')
+        output = io.BytesIO()
+        frames[0].save(output, 'WEBP', save_all=True, append_images=frames[1:],
+                       duration=33, loop=0, quality=88, method=4)
+        updated[key] = output.getvalue()
+
+    if not updated:
+        raise ValueError('No updated animation sheets found in the selected Steam cache')
+    for key, content in updated.items():
+        (public / f'{key}.webp').write_bytes(content)
+        manifest[key] = hashlib.sha256(content).hexdigest()[:16]
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', 'utf-8')
+    print(f'Exported {len(updated)} animated Steam emotes ({sum(map(len, updated.values())):,} bytes)')
+
+
 def export_images(wanted):
     dest=ROOT/'AstralParty-Hub/public/catalog'
     dest.mkdir(parents=True,exist_ok=True)
     assets={}
     manifest_path = ROOT/'XingShu-Dev/build/catalog/image-sources.json'
+    animated_path = ROOT/'AstralParty-Hub/src/shared/steamAnimatedEmotes.generated.json'
+    animated = json.loads(animated_path.read_text('utf-8')) if animated_path.exists() else {}
     previous = json.loads(manifest_path.read_text('utf-8')) if manifest_path.exists() else {}
     manifest = {}
     for key in sorted(wanted):
         if not re.fullmatch(r'[A-Za-z0-9_]+',key): continue
         existing=ROOT/'AstralParty-Hub/public/cards'/f'{key}.png'
         target=dest/f'{key}.webp'
+        if key in animated:
+            if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest().startswith(animated[key]):
+                assets[key] = f'/catalog/{key}.webp'
+                continue
+            raise ValueError(f'Steam animated expression needs to be exported again: {key}')
         bundles = asset_bundles(key)
         fingerprint = '|'.join(bundle_digest(path) for path in bundles)
         if fingerprint and previous.get(key) == fingerprint and target.exists():

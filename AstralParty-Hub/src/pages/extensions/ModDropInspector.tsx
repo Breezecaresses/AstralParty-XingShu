@@ -26,6 +26,8 @@ interface Props {
   onBusy: (busy: boolean) => void;
   disabled?: boolean;
   onInstalled: () => void;
+  showInstalled?: boolean;
+  onOpenInstalled?: () => void;
 }
 
 const SOURCE_KIND_LABELS: Record<string, string> = {
@@ -39,6 +41,7 @@ const SOURCE_KIND_LABELS: Record<string, string> = {
 const TARGET_KIND_LABELS: Record<string, string> = {
   streaming_assets: 'StreamingAssets/aa',
   addressables: 'Addressables/__data',
+  modimg: 'modimg/ 贴图覆盖',
   catalog: 'catalog.bundle',
   xspkg: '.xspkg 清单目标',
 };
@@ -46,7 +49,7 @@ const TARGET_KIND_LABELS: Record<string, string> = {
 const errorText = (err: unknown) =>
   err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : String(err);
 
-export function ModDropInspector({ installationId, onBusy, disabled = false, onInstalled }: Props) {
+export function ModDropInspector({ installationId, onBusy, disabled = false, onInstalled, showInstalled = true, onOpenInstalled }: Props) {
   const [pendingPaths, clearPendingPaths] = usePendingDroppedModPaths();
   const [sourcePath, setSourcePath] = useState('');
   const [queuedPaths, setQueuedPaths] = useState<string[]>([]);
@@ -61,7 +64,7 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
   const sectionRef = useRef<HTMLElement>(null);
 
   const loadRecords = useCallback(async () => {
-    if (!installationId) {
+    if (!showInstalled || !installationId) {
       setRecords([]);
       return;
     }
@@ -70,7 +73,7 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
     } catch {
       // Non-fatal
     }
-  }, [installationId]);
+  }, [installationId, showInstalled]);
 
   useEffect(() => {
     void loadRecords();
@@ -118,9 +121,12 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
     sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [pendingPaths, clearPendingPaths, inspectPath]);
 
-  // Re-inspect automatically if user dropped a file before selecting an installation.
+  // Keep the chosen file when the target changes, but require a fresh inspection for that target.
   useEffect(() => {
-    if (installationId && sourcePath && !inspectResult && !busy && error.includes('先在上方选择')) {
+    const needsInspection = inspectResult
+      ? inspectResult.installationId !== installationId
+      : error.includes('先在上方选择');
+    if (installationId && sourcePath && !busy && needsInspection) {
       void inspectPath(sourcePath);
     }
   }, [installationId, sourcePath, inspectResult, busy, error, inspectPath]);
@@ -136,8 +142,8 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
     setInstallResult(null);
     try {
       const buffer = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buffer));
-      const stagedPath = await api.stageDroppedModBytes(file.name, bytes);
+      const bytes = new Uint8Array(buffer);
+      const stagedPath = await api.stageDroppedModRaw(file.name, bytes);
       setQueuedPaths([stagedPath]);
       await inspectPath(stagedPath);
     } catch (err) {
@@ -148,7 +154,7 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
   };
 
   const handleInstall = async () => {
-    if (!installationId || !inspectResult || busy || disabled) return;
+    if (!installationId || inspectResult?.installationId !== installationId || busy || disabled) return;
     setBusy(true);
     onBusy(true);
     setError('');
@@ -318,12 +324,16 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
                   className="btn btn-secondary btn-sm"
                   disabled={busy || disabled}
                   onClick={() => {
+                    if (!showInstalled) {
+                      onOpenInstalled?.();
+                      return;
+                    }
                     const existing = records.find((r) => r.modId === inspectResult.modId);
                     if (existing) void handleRestore(existing);
                   }}
                 >
                   <RotateCcw size={14} />
-                  已安装 · 一键还原
+                  {showInstalled ? '已安装 · 一键还原' : '已安装 · 前往管理'}
                 </button>
               ) : (
                 <button
@@ -465,7 +475,7 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
         </div>
       )}
 
-      {records.filter((r) => r.canRestore).length > 0 && (
+      {showInstalled && records.some((r) => r.canRestore) && (
         <div className="mod-drop-installed-list">
           <h3>已安装的本地拖入模组（{records.filter((r) => r.canRestore).length}）</h3>
           <div className="mod-drop-record-grid">

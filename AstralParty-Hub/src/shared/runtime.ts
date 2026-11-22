@@ -58,13 +58,43 @@ export function isTauriRuntime(): boolean {
   return Boolean(scope.__TAURI_INTERNALS__ || scope.isTauri);
 }
 
+export function installedArtworkUrl(asset: string): string {
+  if (import.meta.env?.MODE !== 'launcher' || !isTauriRuntime() || !/^[a-z0-9_]{1,160}$/i.test(asset)) return '';
+  let target = 'primary';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const channel = localStorage.getItem('extensions.channel') || localStorage.getItem('xingshu.target.channel') || '';
+      const selected =
+        (channel &&
+          (localStorage.getItem(`extensions.target.${channel}`) ||
+            localStorage.getItem(`xingshu.target.installation.${channel}`))) ||
+        channel ||
+        target;
+      if (/^[a-z0-9_-]{1,100}$/i.test(selected)) target = selected;
+    }
+  } catch {
+    // The backend can select the primary registered installation.
+  }
+  return `http://game-art.localhost/${encodeURIComponent(target)}/${asset}`;
+}
+
 /** Resolve VITE BASE_URL for public assets (/ -> /foo, /hub/ -> /hub/foo). */
 export function assetUrl(path: string): string {
   if (!path) return '';
   if (/^(https?:|data:|blob:|#)/i.test(path)) return path;
-  const base = (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.BASE_URL) || '/';
+  const env = (import.meta as { env?: Record<string, string> }).env;
+  const base = env?.BASE_URL || '/';
   const normalizedBase = base.endsWith('/') ? base : `${base}/`;
   const clean = path.startsWith('/') ? path.slice(1) : path;
+  if (env?.MODE === 'launcher' && isTauriRuntime()) {
+    const artwork = /^(?:catalog|cards|platform-tiles)\/([a-z0-9_]+)\.(?:png|webp|jpe?g)(?:\?.*)?$/i.exec(clean);
+    if (artwork) return installedArtworkUrl(artwork[1]);
+    const spine = /^catalog\/spine\/(SpineHandCard_[a-z0-9_]+)\/([a-z0-9_.]+)$/i.exec(clean);
+    if (spine) return `${installedArtworkUrl(spine[1])}/${spine[2]}`;
+  }
+  if (env?.MODE === 'launcher' && isTauriRuntime() && /^catalog\/video\//.test(clean)) {
+    return `${webApiBaseUrl()}/xingshu-hub/${clean}`;
+  }
   if (normalizedBase !== '/' && `/${clean}`.startsWith(normalizedBase)) {
     return `/${clean}`;
   }
@@ -80,6 +110,7 @@ export function routerBasename(): string | undefined {
 
 /** Base URL for XingShu-Server API endpoints in Pure-Web and Desktop modes. */
 export function webApiBaseUrl(): string {
+  if (isTauriRuntime()) return 'https://astralparty-xingshu.lanxichaxu.cn';
   try {
     if (typeof localStorage !== 'undefined') {
       const override = localStorage.getItem('xingshu.web.apiBase')?.trim();
@@ -91,7 +122,6 @@ export function webApiBaseUrl(): string {
   const envBase =
     (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.VITE_XINGSHU_API_BASE) || '';
   if (envBase.trim()) return envBase.trim().replace(/\/+$/, '');
-  if (isTauriRuntime()) return 'https://124.221.176.134';
   return '';
 }
 
@@ -113,3 +143,5 @@ export function getDesktopFeatureMeta(featureKey: keyof typeof DESKTOP_ONLY_KEYS
 }
 
 const DESKTOP_ONLY_KEYS = DESKTOP_FEATURES;
+
+export const isLauncherPreview = import.meta.env?.VITE_XINGSHU_LAUNCHER_PREVIEW === '1';

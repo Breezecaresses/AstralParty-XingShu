@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "module-panel",
+  "description": "Native window controls for the XingShu module panel",
+  "windows": ["module-ball"],
+  "permissions": [
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
+  ]
+}

@@ -444,7 +444,7 @@ namespace XingShuRuntime.UI
 
         private void BuildDisplayScaleCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "Card_DisplaySettings", XingShuMobileUIHelper.IsMobile ? 300f : 155f);
+            GameObject cardGo = CreateCardContainer(parent, "Card_DisplaySettings", XingShuMobileUIHelper.IsMobile ? 305f : 196f);
 
             Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "显示适配", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
             RectTransform ctRt = cardTitle.rectTransform;
@@ -454,77 +454,90 @@ namespace XingShuRuntime.UI
             ctRt.anchoredPosition = new Vector2(24f, -14f);
             ctRt.sizeDelta = new Vector2(240f, 22f);
 
-            Text subtitle = XingShuUIFactory.CreateText(cardGo, "Subtitle", XingShuMobileUIHelper.IsMobile ? "拖动顶部移动浮窗；窗口大小与文字大小分别保存" : "全局 UI 渲染与子系统基准缩放比率控制，调节即时生效并持久化", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            Text subtitle = XingShuUIFactory.CreateText(cardGo, "Subtitle", "功能中心默认全屏铺满安全区域，支持双端自定义尺寸与重置居中", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
             RectTransform stRt = subtitle.rectTransform;
             stRt.anchorMin = new Vector2(0f, 1f);
             stRt.anchorMax = new Vector2(0f, 1f);
             stRt.pivot = new Vector2(0f, 1f);
             stRt.anchoredPosition = new Vector2(24f, -38f);
-            stRt.sizeDelta = new Vector2(460f, 18f);
+            stRt.sizeDelta = new Vector2(500f, 18f);
 
-            Text scaleLabel = XingShuUIFactory.CreateText(cardGo, "GlobalScaleLabel", XingShuMobileUIHelper.IsMobile ? "手机文字大小" : "全局 UI 缩放倍率", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform gslRt = scaleLabel.rectTransform;
-            gslRt.anchorMin = new Vector2(0f, 1f);
-            gslRt.anchorMax = new Vector2(0f, 1f);
-            gslRt.pivot = new Vector2(0f, 1f);
-            gslRt.anchoredPosition = new Vector2(24f, -66f);
-            gslRt.sizeDelta = new Vector2(160f, 20f);
+            // Row 1 (PC & Android Unified): 功能中心大小 (65% - 100%)
+            Text panelTitle = XingShuUIFactory.CreateText(cardGo, "PanelScaleLabel", "功能中心大小 (65% - 100%)", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            RectTransform ptlRt = panelTitle.rectTransform;
+            ptlRt.anchorMin = new Vector2(0f, 1f);
+            ptlRt.anchorMax = new Vector2(0f, 1f);
+            ptlRt.pivot = new Vector2(0f, 1f);
+            ptlRt.anchoredPosition = new Vector2(24f, -66f);
+            ptlRt.sizeDelta = new Vector2(220f, 20f);
 
-            float minScale = XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.MobileTextScaleMin : XingShuConfigKeys.FunctionCenterDesktopScaleMin;
-            float maxScale = XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.MobileTextScaleMax : XingShuConfigKeys.FunctionCenterDesktopScaleMax;
-            float defScale = XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.MobileUserScaleDefault : XingShuConfigKeys.FunctionCenterDesktopScaleDefault;
+            float initPanelScale = XingShuUICenter.PanelScale;
+            _mobilePanelScaleValueText = XingShuUIFactory.CreateText(cardGo, "PanelScaleValue",
+                initPanelScale >= 0.985f ? "100% (全屏)" : $"{Mathf.RoundToInt(initPanelScale * 100f)}%",
+                13, XingShuUITheme.CyanAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            RectTransform psvRt = _mobilePanelScaleValueText.rectTransform;
+            psvRt.anchorMin = new Vector2(1f, 1f);
+            psvRt.anchorMax = new Vector2(1f, 1f);
+            psvRt.pivot = new Vector2(1f, 1f);
+            psvRt.anchoredPosition = new Vector2(-24f, -66f);
+            psvRt.sizeDelta = new Vector2(120f, 20f);
 
-            float initGScale = XingShuMobileUIHelper.IsMobile ? XingShuMobilePageLayout.TextScale : XingShuConfigService.GetFloat(XingShuConfigKeys.MobileUserScale, defScale);
-            if (!XingShuMobileUIHelper.IsMobile)
-            {
-                initGScale = XingShuMobileUIHelper.FiniteClamp(initGScale, minScale, maxScale, defScale);
-            }
-            _globalScaleValueText = XingShuUIFactory.CreateText(cardGo, "GlobalScaleValue", $"{initGScale:F2}x", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            RectTransform gsvRt = _globalScaleValueText.rectTransform;
-            gsvRt.anchorMin = new Vector2(1f, 1f);
-            gsvRt.anchorMax = new Vector2(1f, 1f);
-            gsvRt.pivot = new Vector2(1f, 1f);
-            gsvRt.anchoredPosition = new Vector2(-24f, -66f);
-            gsvRt.sizeDelta = new Vector2(80f, 20f);
-
-            _globalScaleSlider = XingShuUIFactory.CreateSlider(cardGo, "GlobalScaleSlider", minScale, maxScale, initGScale, OnGlobalScaleSliderChanged);
-            RectTransform gssRt = _globalScaleSlider.GetComponent<RectTransform>();
-            gssRt.anchorMin = new Vector2(0f, 1f);
-            gssRt.anchorMax = new Vector2(1f, 1f);
-            gssRt.pivot = new Vector2(0.5f, 1f);
-            gssRt.anchoredPosition = new Vector2(0f, -88f);
-            gssRt.sizeDelta = new Vector2(-48f, 24f);
+            _mobilePanelScaleSlider = XingShuUIFactory.CreateSlider(cardGo, "CenterPanelScaleSlider",
+                XingShuUICenter.CenterScaleMin, XingShuUICenter.CenterScaleMax,
+                initPanelScale, OnMobilePanelScaleChanged);
+            RectTransform psRt = _mobilePanelScaleSlider.GetComponent<RectTransform>();
+            psRt.anchorMin = new Vector2(0f, 1f);
+            psRt.anchorMax = new Vector2(1f, 1f);
+            psRt.pivot = new Vector2(0.5f, 1f);
+            psRt.anchoredPosition = new Vector2(0f, -88f);
+            psRt.sizeDelta = new Vector2(-48f, 24f);
 
             if (XingShuMobileUIHelper.IsMobile)
             {
-                XingShuDetailLayout.Text(cardGo.transform, "窗口大小", 24, 134, 200, 24, 13);
-                _mobilePanelScaleValueText = XingShuDetailLayout.Text(cardGo.transform,
-                    $"{XingShuMobilePageLayout.PanelScale:P0}", 240, 134, 120, 24, 13);
-                _mobilePanelScaleSlider = XingShuUIFactory.CreateSlider(cardGo, "MobilePanelScaleSlider",
-                    XingShuConfigKeys.MobilePanelScaleMin, XingShuConfigKeys.MobilePanelScaleMax,
-                    XingShuMobilePageLayout.PanelScale, OnMobilePanelScaleChanged);
-                var panelSlider = _mobilePanelScaleSlider.GetComponent<RectTransform>();
-                panelSlider.anchorMin = new Vector2(0, 1); panelSlider.anchorMax = Vector2.one;
-                panelSlider.pivot = Vector2.up; panelSlider.anchoredPosition = new Vector2(24, -166);
-                panelSlider.sizeDelta = new Vector2(-48, 24);
-                XingShuDetailLayout.Button(cardGo.transform, "重置窗口位置", 24, 208, 260, 44, () => {
-                    XingShuConfigService.SetFloat(XingShuConfigKeys.MobilePanelX, .70f);
-                    XingShuConfigService.SetFloat(XingShuConfigKeys.MobilePanelY, .50f);
-                    XingShuConfigService.Save();
-                    XingShuUICenter.RefreshMobileWindow();
-                });
+                Text scaleLabel = XingShuUIFactory.CreateText(cardGo, "GlobalScaleLabel", "手机文字大小", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+                RectTransform gslRt = scaleLabel.rectTransform;
+                gslRt.anchorMin = new Vector2(0f, 1f);
+                gslRt.anchorMax = new Vector2(0f, 1f);
+                gslRt.pivot = new Vector2(0f, 1f);
+                gslRt.anchoredPosition = new Vector2(24f, -124f);
+                gslRt.sizeDelta = new Vector2(160f, 20f);
+
+                float initGScale = XingShuMobilePageLayout.TextScale;
+                _globalScaleValueText = XingShuUIFactory.CreateText(cardGo, "GlobalScaleValue", $"{initGScale:F2}x", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+                RectTransform gsvRt = _globalScaleValueText.rectTransform;
+                gsvRt.anchorMin = new Vector2(1f, 1f);
+                gsvRt.anchorMax = new Vector2(1f, 1f);
+                gsvRt.pivot = new Vector2(1f, 1f);
+                gsvRt.anchoredPosition = new Vector2(-24f, -124f);
+                gsvRt.sizeDelta = new Vector2(80f, 20f);
+
+                _globalScaleSlider = XingShuUIFactory.CreateSlider(cardGo, "GlobalScaleSlider",
+                    XingShuConfigKeys.MobileTextScaleMin, XingShuConfigKeys.MobileTextScaleMax,
+                    initGScale, OnGlobalScaleSliderChanged);
+                RectTransform gssRt = _globalScaleSlider.GetComponent<RectTransform>();
+                gssRt.anchorMin = new Vector2(0f, 1f);
+                gssRt.anchorMax = new Vector2(1f, 1f);
+                gssRt.pivot = new Vector2(0.5f, 1f);
+                gssRt.anchoredPosition = new Vector2(0f, -146f);
+                gssRt.sizeDelta = new Vector2(-48f, 24f);
+
+                Button resetWinBtn = XingShuDetailLayout.Button(cardGo.transform, "恢复标准大小", 24, 190, 220, 40, XingShuUICenter.ResetWindowCenter);
+            }
+            else
+            {
+                Button resetWinBtn = XingShuDetailLayout.Button(cardGo.transform, "恢复标准大小", 24, 124, 160, 32, XingShuUICenter.ResetWindowCenter);
             }
 
             string noteStr = XingShuMobileUIHelper.IsMobile
-                ? "窗口默认约半屏，可调 70%–130%；文字可调 80%–135%。悬浮球保持独立，窗口会限制在屏幕内。"
-                : "仅调整 XingShu 功能中心显示比例\n桌面安全范围 1.00x ~ 1.25x\n不会缩放游戏原生 UI";
+                ? "默认对齐游戏设置标准尺寸；缩小窗口后可拖动顶部自由移动，右上角「标准」按钮也可切换"
+                : "默认对齐游戏设置标准尺寸，可调 65%–100%；缩小后可拖动顶部自由移动，右上角「标准」按钮可切换";
             Text noteText = XingShuUIFactory.CreateText(cardGo, "Note", noteStr, 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
             RectTransform ntRt = noteText.rectTransform;
             ntRt.anchorMin = new Vector2(0f, 0f);
             ntRt.anchorMax = new Vector2(1f, 0f);
             ntRt.pivot = new Vector2(0f, 0f);
             ntRt.anchoredPosition = new Vector2(24f, 6f);
-            ntRt.sizeDelta = new Vector2(-48f, 34f);
+            ntRt.sizeDelta = new Vector2(-48f, 24f);
         }
 
         private void BuildResetDefaultsCard(GameObject parent)
@@ -648,26 +661,23 @@ namespace XingShuRuntime.UI
                 }
 
                 // Card C
-                float minScale = XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.MobileTextScaleMin : XingShuConfigKeys.FunctionCenterDesktopScaleMin;
-                float maxScale = XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.MobileTextScaleMax : XingShuConfigKeys.FunctionCenterDesktopScaleMax;
-                float defScale = XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.MobileUserScaleDefault : XingShuConfigKeys.FunctionCenterDesktopScaleDefault;
-
-                float gscale = XingShuMobileUIHelper.IsMobile ? XingShuMobilePageLayout.TextScale : XingShuConfigService.GetFloat(XingShuConfigKeys.MobileUserScale, defScale);
-                if (!XingShuMobileUIHelper.IsMobile)
+                if (XingShuMobileUIHelper.IsMobile)
                 {
-                    gscale = XingShuMobileUIHelper.FiniteClamp(gscale, minScale, maxScale, defScale);
+                    float gscale = XingShuMobilePageLayout.TextScale;
+                    if (!Mathf.Approximately(_lastObservedGScale, gscale))
+                    {
+                        _lastObservedGScale = gscale;
+                        if (_globalScaleSlider != null) _globalScaleSlider.SetValueWithoutNotify(gscale);
+                        if (_globalScaleValueText != null) _globalScaleValueText.text = $"{gscale:F2}x";
+                    }
                 }
-                if (!Mathf.Approximately(_lastObservedGScale, gscale))
+                float panelScale = XingShuUICenter.PanelScale;
+                if (!Mathf.Approximately(_lastObservedPanelScale, panelScale))
                 {
-                    _lastObservedGScale = gscale;
-                    if (_globalScaleSlider != null) _globalScaleSlider.SetValueWithoutNotify(gscale);
-                    if (_globalScaleValueText != null) _globalScaleValueText.text = $"{gscale:F2}x";
-                }
-                if (XingShuMobileUIHelper.IsMobile && !Mathf.Approximately(_lastObservedPanelScale, XingShuMobilePageLayout.PanelScale))
-                {
-                    _lastObservedPanelScale = XingShuMobilePageLayout.PanelScale;
-                    _mobilePanelScaleSlider?.SetValueWithoutNotify(_lastObservedPanelScale);
-                    if (_mobilePanelScaleValueText != null) _mobilePanelScaleValueText.text = $"{_lastObservedPanelScale:P0}";
+                    _lastObservedPanelScale = panelScale;
+                    _mobilePanelScaleSlider?.SetValueWithoutNotify(panelScale);
+                    if (_mobilePanelScaleValueText != null)
+                        _mobilePanelScaleValueText.text = panelScale >= 0.985f ? "100% (标准)" : $"{Mathf.RoundToInt(panelScale * 100f)}%";
                 }
             }
             finally
@@ -789,11 +799,10 @@ namespace XingShuRuntime.UI
         private void OnMobilePanelScaleChanged(float val)
         {
             if (_suppressCallbacks) return;
-            val = XingShuMobileUIHelper.FiniteClamp(val, XingShuConfigKeys.MobilePanelScaleMin, XingShuConfigKeys.MobilePanelScaleMax, 1f);
-            if (_mobilePanelScaleValueText != null) _mobilePanelScaleValueText.text = $"{val:P0}";
-            XingShuConfigService.SetFloat(XingShuConfigKeys.MobilePanelScale, val);
-            XingShuConfigService.Save();
-            XingShuUICenter.RefreshMobileWindow();
+            val = XingShuMobileUIHelper.FiniteClamp(val, XingShuUICenter.CenterScaleMin, XingShuUICenter.CenterScaleMax, XingShuUICenter.CenterScaleDefault);
+            if (_mobilePanelScaleValueText != null)
+                _mobilePanelScaleValueText.text = val >= 0.985f ? "100% (标准)" : $"{Mathf.RoundToInt(val * 100f)}%";
+            XingShuUICenter.SetPanelScale(val);
         }
 
         private void OnGlobalScaleSliderChanged(float val)
@@ -898,6 +907,7 @@ namespace XingShuRuntime.UI
                 XingShuUICenter.RefreshMobileText();
                 XingShuUICenter.RefreshMobileWindow();
             }
+            XingShuUICenter.ResetWindowCenter();
             XingShuConfigService.SetFloat(XingShuConfigKeys.MobileUserScale, defUserScale);
             XingShuMobileUIHelper.UserScaleMultiplier = defUserScale;
 

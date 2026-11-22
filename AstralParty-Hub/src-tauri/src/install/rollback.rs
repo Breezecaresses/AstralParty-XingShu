@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 use crate::domain::error::{HubError, HubResult};
 use crate::domain::installation::Backup;
 use crate::install::backup::BackupManifestData;
+use crate::security::hash::compute_file_sha256;
 use crate::storage::repositories::ExtensionRepository;
 
 pub struct RollbackEngine;
@@ -23,25 +24,26 @@ impl RollbackEngine {
             let target_path = Path::new(&record.original_path);
 
             if record.existed_before {
-                if let Some(backup_path_str) = &record.backup_path {
-                    let backup_file = Path::new(backup_path_str);
-                    if backup_file.exists() {
-                        info!("Restoring original file: {} -> {}", backup_file.display(), target_path.display());
-                        if let Some(parent) = target_path.parent() {
-                            fs::create_dir_all(parent).ok();
-                        }
-                        fs::copy(backup_file, target_path).map_err(|e| {
-                            HubError::transaction_error(format!("Failed to restore original file during rollback: {e}"))
-                        })?;
-                    } else {
-                        warn!("Backup file '{}' missing during rollback attempt!", backup_path_str);
-                    }
+                let backup_file = record.backup_path.as_deref().ok_or_else(|| {
+                    HubError::transaction_error("未找到安装前备份。")
+                })?;
+                let parent = target_path.parent().ok_or_else(|| HubError::transaction_error("还原目标路径无效。"))?;
+                let io_error = |error: std::io::Error| HubError::transaction_error(error.to_string());
+                fs::create_dir_all(parent).map_err(io_error)?;
+                let mut source = fs::File::open(backup_file).map_err(io_error)?;
+                let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
+                std::io::copy(&mut source, &mut staged).map_err(io_error)?;
+                let digest = compute_file_sha256(staged.path())?;
+                if !record.original_sha256.as_ref().is_some_and(|expected| expected.eq_ignore_ascii_case(&digest)) {
+                    return Err(HubError::security_violation("还原使用的备份校验失败。"));
                 }
-            } else {
-                // File was newly added by the transaction; delete it to cleanly restore prior state
-                if target_path.exists() {
-                    info!("Removing newly added file during rollback: {}", target_path.display());
-                    fs::remove_file(target_path).ok();
+                staged.as_file().sync_all().map_err(io_error)?;
+                staged.persist(target_path).map_err(|error| io_error(error.error))?;
+            } else if target_path.exists() {
+                match fs::remove_file(target_path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(HubError::transaction_error(error.to_string())),
                 }
             }
         }

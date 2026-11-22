@@ -48,7 +48,7 @@ impl PackageParser {
             let normalized_source = file.source.replace('\\', "/");
             let found = (0..archive.len()).any(|idx| {
                 if let Ok(entry) = archive.by_index(idx) {
-                    entry.name().replace('\\', "/") == normalized_source
+                    entry.name().is_ok_and(|name| name.replace('\\', "/") == normalized_source)
                 } else {
                     false
                 }

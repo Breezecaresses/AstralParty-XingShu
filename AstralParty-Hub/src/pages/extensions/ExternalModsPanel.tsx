@@ -9,7 +9,15 @@ interface Finding { name: string; path: string; sha256: string; level: string; d
 interface ModReport { gamePath: string; libraryPath: string | null; compatible: boolean; findings: Finding[]; library: LibraryEntry[]; notes: string[] }
 const errorText = (e: unknown) => e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
 
-export function ExternalModsPanel({ installationId, onBusy, disabled = false }: { installationId: string; onBusy: (busy: boolean) => void; disabled?: boolean }) {
+interface ExternalModsPanelProps {
+  installationId: string;
+  onBusy: (busy: boolean) => void;
+  disabled?: boolean;
+  showInstalled?: boolean;
+  onChanged?: () => void;
+}
+
+export function ExternalModsPanel({ installationId, onBusy, disabled = false, showInstalled = true, onChanged }: ExternalModsPanelProps) {
   const [report, setReport] = useState<ModReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -36,6 +44,7 @@ export function ExternalModsPanel({ installationId, onBusy, disabled = false }: 
     acting.current = true; setBusy(true); onBusy(true); setError(''); setFeedback('');
     try {
       const message = await invoke<string>('external_mod_action', { installationId, itemId: item.id, action: operation });
+      onChanged?.();
       if (alive.current) { setFeedback(message); await load(); }
     } catch (e) { if (alive.current) setError(errorText(e)); }
     finally { acting.current = false; onBusy(false); if (alive.current) setBusy(false); }
@@ -47,7 +56,10 @@ export function ExternalModsPanel({ installationId, onBusy, disabled = false }: 
     catch (e) { if (alive.current) setError(errorText(e)); }
     finally { acting.current = false; onBusy(false); if (alive.current) setBusy(false); }
   };
-  const visible = report?.library.filter(item => `${item.name} ${item.author} ${item.archive}`.toLowerCase().includes(query.toLowerCase())) || [];
+  const visible = report?.library.filter(item =>
+    (showInstalled || !item.canRestore) &&
+    `${item.name} ${item.author} ${item.archive}`.toLowerCase().includes(query.toLowerCase()),
+  ) || [];
   return <section className="external-mods">
     <div className="extension-header"><div><h2>外部模组与加速组件</h2><p>检查当前游戏目录，区分兼容版本、已知冲突和待核验文件</p></div><div>
       <button className="btn btn-secondary" disabled={busy || disabled} onClick={() => { setFeedback(''); void load(); }}><RefreshCw size={14} />重新检测</button>

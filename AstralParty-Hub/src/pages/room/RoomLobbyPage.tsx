@@ -1,290 +1,454 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
-  AlertTriangle,
+  Blocks,
   Check,
-  Clock,
   Copy,
   Crown,
   DoorOpen,
-  Eye,
+  Gamepad2,
   Lock,
-  MessageSquare,
-  Plus,
+  Play,
   RefreshCw,
-  Server,
-  Shield,
-  Smartphone,
-  Sparkles,
-  Tag,
-  UserPlus,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  UserRound,
+  UserX,
   Users,
-  Globe,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from '../../i18n';
+import type { GameLaunchResult } from '../../shared/types';
+import { useExtensionTarget } from '../extensions/ExtensionWorkspace';
 import {
-  ROOM_MAPS,
-  ROOM_TAG_OPTIONS,
-  ROOM_TITLE_PRESETS,
-  SAMPLE_CHARACTERS,
+  DIFFICULTY_OPTIONS,
+  OFFICIAL_MODES,
+  SPEED_OPTIONS,
   THINK_TIME_OPTIONS,
-  ZERO_YIELD_NOTICE_EN,
-  ZERO_YIELD_NOTICE_ZH,
-  buildPaKaiFangCommand,
-  buildSlotsForStatus,
-  createDefaultDraft,
-  createInitialRoomSnapshot,
-  effectivePrivacy,
-  getMapById,
-  isSelfHostedZeroYield,
-  sanitizeNumericPassword,
-  type HostTarget,
-  type RoomConfigDraft,
-  type RoomMode,
-  type RoomPreviewSnapshot,
-  type RoomPreviewStatus,
-  type RoomPrivacy,
+  UPGRADE_PLAN_OPTIONS,
+  applyModeSelection,
+  buildInviteCopyText,
+  createDefaultOfficialDraft,
+  getMapForMode,
+  getMapsForMode,
+  getModeSpec,
+  type ActiveOfficialRoom,
+  type LobbyRoomSummary,
+  type OfficialRoomDraft,
 } from './roomTemplateData';
 
-function randomRoomCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+type AccountInfo = { uid: string; nick?: string };
+
+interface RuntimeRoomPlayer {
+  playerId: number;
+  name: string;
+  slot: number;
+  level: number;
+  ready: boolean;
+  isBot: boolean;
+  isHost: boolean;
+  isSelf: boolean;
+}
+
+interface RuntimeRoomSnapshot {
+  inRoom: boolean;
+  roomId: number;
+  roomState: string;
+  name: string;
+  hasPwd: boolean;
+  roomPwd: string;
+  mode: number;
+  mapId: number;
+  difficulty: number;
+  upgradePlan: number;
+  timePlan: number;
+  masterId: number;
+  isHost: boolean;
+  maxPlayers: number;
+  players: RuntimeRoomPlayer[];
+}
+
+interface RoomCommandResult {
+  requestId: string;
+  action: string;
+  ok: boolean;
+  errId: number;
+  roomId: number;
+  message: string;
+}
+
+interface InGameRoomStateResponse {
+  connected: boolean;
+  runtimeVersion: string;
+  matchState: string;
+  platformId: string;
+  playerId?: number | null;
+  inRoom: boolean;
+  snapshot?: RuntimeRoomSnapshot | null;
+  lastResult?: RoomCommandResult | null;
+}
+
+function formatError(err: unknown): string {
+  if (!err) return '操作未完成，请稍后重试。';
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object') {
+    const rec = err as { message?: string; error?: string };
+    if (rec.message) return rec.message;
+    if (rec.error) return rec.error;
+  }
+  return String(err);
+}
+
+function isNotOpenError(err: unknown, message: string): boolean {
+  const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+  return code === 'OFFICIAL_MODE_NOT_OPEN' || message.includes('10015') || message.includes('NotOpen');
 }
 
 export const RoomLobbyPage: React.FC = () => {
   const { locale } = useTranslation();
-  const isZh = locale === 'zh-CN';
+  const zh = locale === 'zh-CN';
+  const target = useExtensionTarget();
+  const installationId = target.selected?.id ?? '';
 
-  const [draft, setDraft] = useState<RoomConfigDraft>(() => createDefaultDraft());
-  const [room, setRoom] = useState<RoomPreviewSnapshot>(() => createInitialRoomSnapshot());
-  const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const [showQqPreview, setShowQqPreview] = useState(true);
+  const [inGameState, setInGameState] = useState<InGameRoomStateResponse | null>(null);
+  const [account, setAccount] = useState<AccountInfo | null>(null);
 
-  const filteredMaps = useMemo(
-    () => ROOM_MAPS.filter((m) => m.mode === draft.mode),
-    [draft.mode],
-  );
-  const selectedDraftMap = useMemo(() => getMapById(draft.mapId), [draft.mapId]);
-  const activeRoomMap = useMemo(() => getMapById(room.config.mapId), [room.config.mapId]);
-  const generatedCommand = useMemo(() => buildPaKaiFangCommand(draft), [draft]);
-  const draftZeroYield = useMemo(() => isSelfHostedZeroYield(draft), [draft]);
-  const activeZeroYield = useMemo(() => isSelfHostedZeroYield(room.config), [room.config]);
-  const draftEffectivePrivacy = useMemo(() => effectivePrivacy(draft), [draft]);
-  const activeEffectivePrivacy = useMemo(() => effectivePrivacy(room.config), [room.config]);
+  const [draft, setDraft] = useState<OfficialRoomDraft>(() => createDefaultOfficialDraft());
+  const [addBotsOnStart, setAddBotsOnStart] = useState(false);
 
-  const occupiedCount = useMemo(
-    () => room.slots.filter((s) => s.seat <= room.config.maxPlayers && s.occupied).length,
-    [room],
-  );
+  const [lobbyModeId, setLobbyModeId] = useState<number>(4);
+  const [lobbyRooms, setLobbyRooms] = useState<LobbyRoomSummary[]>([]);
+  const [lobbyLoading, setLobbyLoading] = useState(false);
 
-  const flashToast = (msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast((prev) => (prev === msg ? null : prev)), 2600);
-  };
+  const [searchRoomId, setSearchRoomId] = useState('');
+  const [searchResult, setSearchResult] = useState<{ found: boolean; roomId: string; isPwd?: boolean; error?: string } | null>(null);
+
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [launchingGame, setLaunchingGame] = useState(false);
+  const [modeOpenMap, setModeOpenMap] = useState<Record<number, boolean>>({});
+  const [banner, setBanner] = useState<{ kind: 'ok' | 'err' | 'info'; text: string; recoverableMode?: boolean } | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const lastSeenResultIdRef = useRef<string>('');
+  const lastSyncedRoomIdRef = useRef<number>(0);
+
+  const snapshot = inGameState?.snapshot ?? null;
+  const inLobbyReady = Boolean(inGameState?.connected && inGameState?.matchState === 'LOBBY');
+  const inRoom = Boolean(inLobbyReady && inGameState?.inRoom && snapshot && snapshot.roomId > 0);
+  const isRoomHost = Boolean(inRoom && snapshot?.isHost);
+
+  const currentMode = useMemo(() => getModeSpec(draft.modeId), [draft.modeId]);
+  const modeMaps = useMemo(() => getMapsForMode(draft.modeId), [draft.modeId]);
+  const currentMap = useMemo(() => getMapForMode(draft.modeId, draft.mapId), [draft.modeId, draft.mapId]);
+
+  const showBanner = useCallback((kind: 'ok' | 'err' | 'info', text: string, recoverableMode = false) => {
+    setBanner({ kind, text, recoverableMode });
+  }, []);
+
+  const refreshCatalog = useCallback(async () => {
+    try {
+      const cat = await invoke<{ modes?: Array<{ id?: number; officialOpen?: boolean }> }>('account_room_catalog');
+      if (Array.isArray(cat?.modes)) {
+        const next: Record<number, boolean> = {};
+        for (const item of cat.modes) {
+          if (typeof item.id === 'number') {
+            next[item.id] = item.officialOpen !== false;
+          }
+        }
+        setModeOpenMap(next);
+      }
+    } catch {
+      // Optional server status overlay; static catalog remains usable.
+    }
+  }, []);
+
+  const syncDraftFromSnapshot = useCallback((room: RuntimeRoomSnapshot) => {
+    setDraft((prev) => ({
+      ...prev,
+      modeId: room.mode > 0 ? room.mode : prev.modeId,
+      mapId: room.mapId > 0 ? room.mapId : prev.mapId,
+      difficulty: Math.max(0, Math.min(3, room.difficulty ?? prev.difficulty)),
+      upgradePlan: room.upgradePlan > 0 ? room.upgradePlan : prev.upgradePlan,
+      timePlan: room.timePlan > 0 ? room.timePlan : prev.timePlan,
+      roomName: room.name || prev.roomName,
+      password: room.roomPwd ?? prev.password,
+    }));
+  }, []);
+
+  const refreshInGameState = useCallback(async () => {
+    try {
+      const st = await invoke<InGameRoomStateResponse>('in_game_room_state', {
+        installationId: installationId || null,
+      });
+      setInGameState(st);
+
+      const snap = st.snapshot;
+      if (snap?.inRoom && snap.roomId > 0) {
+        if (lastSyncedRoomIdRef.current !== snap.roomId) {
+          lastSyncedRoomIdRef.current = snap.roomId;
+          syncDraftFromSnapshot(snap);
+        }
+      } else {
+        lastSyncedRoomIdRef.current = 0;
+      }
+
+      if (st.lastResult && st.lastResult.requestId && st.lastResult.requestId !== lastSeenResultIdRef.current) {
+        lastSeenResultIdRef.current = st.lastResult.requestId;
+        if (st.lastResult.ok) {
+          showBanner('ok', st.lastResult.message || (zh ? '操作已执行' : 'Done'));
+        } else {
+          const msg = st.lastResult.message || (zh ? `操作未成功（错误码 ${st.lastResult.errId}）` : `Failed (${st.lastResult.errId})`);
+          showBanner('err', msg, st.lastResult.errId === 10015 || msg.includes('10015'));
+        }
+      }
+    } catch {
+      // Keep last known view cleanly.
+    }
+  }, [installationId, showBanner, syncDraftFromSnapshot, zh]);
+
+  const refreshLobby = useCallback(async (modeOverride?: number, userTriggered = false) => {
+    const mode = modeOverride ?? lobbyModeId;
+    setLobbyLoading(true);
+    try {
+      const resp = await invoke<{ rooms?: LobbyRoomSummary[]; mode?: number }>('account_room_lobby', { mode });
+      setLobbyRooms(Array.isArray(resp?.rooms) ? resp.rooms : []);
+      if (userTriggered) {
+        showBanner('info', zh ? `已刷新「${getModeSpec(mode).name}」官方大厅列表` : 'Official lobby refreshed');
+      }
+    } catch (err) {
+      if (userTriggered) showBanner('err', formatError(err));
+    } finally {
+      setLobbyLoading(false);
+    }
+  }, [lobbyModeId, showBanner, zh]);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      void refreshCatalog();
+      void refreshInGameState();
+      try {
+        const res = await invoke<{ status?: string; account?: AccountInfo | null }>('get_cloud_account');
+        if (!active) return;
+        const acct = res?.status === 'signed_in' && res.account?.uid ? res.account : null;
+        setAccount(acct);
+        if (acct) {
+          void refreshLobby(lobbyModeId, false);
+        }
+      } catch {
+        if (active) setAccount(null);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []); // initial mount load
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshInGameState();
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [refreshInGameState]);
 
   const copyText = async (key: string, text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedTarget(key);
-      flashToast(isZh ? `已复制${label}` : `Copied ${label}`);
-      window.setTimeout(() => setCopiedTarget((prev) => (prev === key ? null : prev)), 1800);
+      setCopiedKey(key);
+      showBanner('ok', zh ? `已复制${label}` : `Copied ${label}`);
+      window.setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 1800);
     } catch {
-      flashToast(isZh ? '剪贴板不可用，请手动复制' : 'Clipboard unavailable');
+      showBanner('err', zh ? '剪贴板不可用，请手动复制' : 'Clipboard unavailable');
     }
   };
 
-  const handleHostTargetChange = (hostTarget: HostTarget) => {
-    setDraft((prev) => {
-      if (hostTarget === 'OFFICIAL') {
-        const safeMode: RoomMode =
-          prev.mode === 'COOP_EVENT' || prev.mode === 'SELF_HOSTED' ? 'PVE' : prev.mode;
-        const nextMap =
-          safeMode === prev.mode
-            ? getMapById(prev.mapId)
-            : (ROOM_MAPS.find((m) => m.mode === safeMode) ?? ROOM_MAPS[0]);
-        return {
-          ...prev,
-          hostTarget,
-          mode: safeMode,
-          mapId: nextMap.id,
-          difficulty:
-            nextMap.difficulties.includes(prev.difficulty)
-              ? prev.difficulty
-              : (nextMap.difficulties[Math.min(2, Math.max(0, nextMap.difficulties.length - 1))] ?? ''),
-        };
+  const handleLaunchGame = async () => {
+    if (launchingGame || !installationId) return;
+    setLaunchingGame(true);
+    try {
+      const start = await invoke<GameLaunchResult>('launcher_start', { installationId });
+      if (!start.success && !start.alreadyRunning) {
+        showBanner('err', start.message || (zh ? '未能启动游戏客户端' : 'Failed to start game'));
+      } else {
+        showBanner(
+          'info',
+          zh
+            ? '已启动游戏，请在游戏内登录并进入主大厅后直接在此创建/修改房间。'
+            : 'Game started. Log in and reach the lobby to create or manage a room here.',
+        );
       }
-      const nextMode: RoomMode = prev.mode === 'PVE' || prev.mode === 'PVP' ? 'COOP_EVENT' : prev.mode;
-      const nextMap = ROOM_MAPS.find((m) => m.mode === nextMode) ?? getMapById(prev.mapId);
-      return {
-        ...prev,
-        hostTarget,
-        mode: nextMode,
-        mapId: nextMap.id,
-        difficulty: nextMap.difficulties[Math.min(2, Math.max(0, nextMap.difficulties.length - 1))] ?? '',
-      };
-    });
+    } catch (err) {
+      showBanner('err', formatError(err));
+    } finally {
+      setLaunchingGame(false);
+    }
   };
 
-  const handleModeChange = (mode: RoomMode) => {
-    const firstMap = ROOM_MAPS.find((m) => m.mode === mode) ?? ROOM_MAPS[0];
-    setDraft((prev) => ({
-      ...prev,
-      hostTarget: firstMap.officialAvailable ? prev.hostTarget : 'SELF_HOSTED',
-      mode,
-      mapId: firstMap.id,
-      difficulty: firstMap.difficulties[Math.min(2, Math.max(0, firstMap.difficulties.length - 1))] ?? '',
-    }));
+  const handleCreateOrModifyInGame = async () => {
+    if (busyAction || !inLobbyReady) return;
+    const modifying = inRoom;
+    setBusyAction(modifying ? 'modify' : 'create');
+    try {
+      if (modifying) {
+        await invoke<string>('in_game_room_modify', {
+          installationId: installationId || null,
+          request: {
+            roomPwd: draft.password.trim().slice(0, 12),
+            mapId: currentMap.id,
+            difficulty: currentMode.hasDifficulty ? Math.max(0, Math.min(3, Math.trunc(draft.difficulty))) : 0,
+            upgradePlan: currentMode.hasUpgrade ? draft.upgradePlan : currentMode.defaultUpgrade,
+            timePlan: draft.timePlan,
+            speedType: draft.speedType,
+            skipStory: Boolean(currentMap.hasStory && draft.skipStory),
+            roomLabel: draft.roomLabel,
+          },
+        });
+        showBanner('info', zh ? '已向游戏客户端发送修改房间指令，等待游戏回包…' : 'Room update dispatched to game client…');
+      } else {
+        await invoke<string>('in_game_room_create', {
+          installationId: installationId || null,
+          request: {
+            roomPwd: draft.password.trim().slice(0, 12),
+            roomName: draft.roomName.trim().slice(0, 36),
+            mode: currentMode.id,
+            mapId: currentMap.id,
+            difficulty: currentMode.hasDifficulty ? Math.max(0, Math.min(3, Math.trunc(draft.difficulty))) : 0,
+            upgradePlan: currentMode.hasUpgrade ? draft.upgradePlan : currentMode.defaultUpgrade,
+            timePlan: draft.timePlan,
+            speedType: draft.speedType,
+            skipStory: Boolean(currentMap.hasStory && draft.skipStory),
+            roomLabel: draft.roomLabel,
+          },
+        });
+        showBanner('info', zh ? '已向游戏内发送创建房间指令，请留意游戏窗口或此处状态…' : 'Create room command dispatched…');
+      }
+      window.setTimeout(() => void refreshInGameState(), 350);
+    } catch (err) {
+      const msg = formatError(err);
+      showBanner('err', msg, isNotOpenError(err, msg));
+    } finally {
+      setBusyAction(null);
+    }
   };
 
-  const handleMapChange = (mapId: number) => {
-    const nextMap = getMapById(mapId);
-    setDraft((prev) => ({
-      ...prev,
-      hostTarget: nextMap.officialAvailable ? prev.hostTarget : 'SELF_HOSTED',
-      mapId,
-      difficulty: nextMap.difficulties.includes(prev.difficulty)
-        ? prev.difficulty
-        : (nextMap.difficulties[Math.min(2, Math.max(0, nextMap.difficulties.length - 1))] ?? ''),
-    }));
+  const handleStartMatchInGame = async () => {
+    if (busyAction || !inRoom || !isRoomHost) return;
+    setBusyAction('start');
+    try {
+      await invoke<string>('in_game_room_start', {
+        installationId: installationId || null,
+        isAddBot: addBotsOnStart,
+      });
+      showBanner('info', zh ? '已发送游戏内开始对局指令…' : 'Start match command sent…');
+      window.setTimeout(() => void refreshInGameState(), 350);
+    } catch (err) {
+      showBanner('err', formatError(err));
+    } finally {
+      setBusyAction(null);
+    }
   };
 
-  const handleSimulateCreate = () => {
-    const nextCode = randomRoomCode();
-    const nextStatus: RoomPreviewStatus = 'RECRUITING';
-    const nextConfig: RoomConfigDraft = { ...draft };
-    setRoom({
-      roomCode: nextCode,
-      status: nextStatus,
-      config: nextConfig,
-      slots: buildSlotsForStatus(nextStatus, nextConfig.maxPlayers),
-      updatedAtLabel: isZh ? '刚刚 · 已按左侧配置模拟创建' : 'Just now · Simulated from draft',
-    });
-    flashToast(
-      isZh
-        ? `已在模板中模拟创建房间 #${nextCode}（尚未接入实机接口）`
-        : `Simulated room #${nextCode} created in preview template`,
-    );
+  const handleKickInGame = async (playerId: number, name: string) => {
+    if (busyAction || !inRoom || !isRoomHost || playerId <= 0) return;
+    setBusyAction(`kick:${playerId}`);
+    try {
+      await invoke<string>('in_game_room_kick', {
+        installationId: installationId || null,
+        targetPlayerId: playerId,
+      });
+      showBanner('info', zh ? `已发送移出 ${name || playerId} 指令…` : `Kick dispatched for ${name || playerId}`);
+      window.setTimeout(() => void refreshInGameState(), 350);
+    } catch (err) {
+      showBanner('err', formatError(err));
+    } finally {
+      setBusyAction(null);
+    }
   };
 
-  const handleSwitchPreviewStatus = (status: RoomPreviewStatus) => {
-    setRoom((prev) => ({
-      ...prev,
-      status,
-      slots: buildSlotsForStatus(status, prev.config.maxPlayers),
-      updatedAtLabel: isZh ? '刚刚 · 预览状态已切换' : 'Just now · Preview state switched',
-    }));
+  const handleExitInGame = async () => {
+    if (busyAction || !inRoom) return;
+    setBusyAction('exit');
+    try {
+      await invoke<string>('in_game_room_exit', {
+        installationId: installationId || null,
+      });
+      lastSyncedRoomIdRef.current = 0;
+      showBanner('info', zh ? '已发送退出当前房间指令…' : 'Exit room command sent…');
+      window.setTimeout(() => void refreshInGameState(), 350);
+    } catch (err) {
+      showBanner('err', formatError(err));
+    } finally {
+      setBusyAction(null);
+    }
   };
 
-  const handleJoinEmptySlot = (targetSeat?: number) => {
-    const openSlot = room.slots.find(
-      (s) => s.seat <= room.config.maxPlayers && !s.occupied && (!targetSeat || s.seat === targetSeat),
-    );
-    if (!openSlot) {
-      flashToast(isZh ? '当前预览房间已满员' : 'Preview room is full');
+  const handleSearchRoom = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const clean = searchRoomId.replace(/\D+/g, '').trim();
+    if (!clean) {
+      showBanner('err', zh ? '请输入要查询的数字房间号' : 'Enter a numeric room ID');
       return;
     }
-    const charChoice = SAMPLE_CHARACTERS[(openSlot.seat + Math.floor(Math.random() * 3)) % SAMPLE_CHARACTERS.length];
-    setRoom((prev) => {
-      const updatedSlots = prev.slots.map((s) =>
-        s.seat === openSlot.seat
-          ? {
-              ...s,
-              occupied: true,
-              isHost: prev.status === 'IDLE' && openSlot.seat === 1,
-              playerName: openSlot.seat === 1 ? '星枢旅人' : `测试队友 P${openSlot.seat}`,
-              uid: `10${openSlot.seat}9420${openSlot.seat}`,
-              characterName: charChoice.name,
-              characterTitle: charChoice.title,
-              ready: prev.status === 'IDLE' && openSlot.seat === 1,
-            }
-          : s,
+    setBusyAction('search');
+    try {
+      const resp = await invoke<{ found?: boolean; roomId?: string; isPwd?: boolean; error?: string }>(
+        'account_room_search',
+        { roomId: clean },
       );
-      const count = updatedSlots.filter((s) => s.seat <= prev.config.maxPlayers && s.occupied).length;
-      const nextStatus: RoomPreviewStatus =
-        count >= prev.config.maxPlayers ? 'READY_FULL' : 'RECRUITING';
-      return {
-        ...prev,
-        status: nextStatus,
-        slots: updatedSlots,
-        updatedAtLabel: isZh ? `刚刚 · P${openSlot.seat} 已模拟加入` : `Just now · P${openSlot.seat} joined`,
-      };
-    });
-  };
-
-  const handleToggleSlotReady = (seat: number) => {
-    setRoom((prev) => ({
-      ...prev,
-      slots: prev.slots.map((s) =>
-        s.seat === seat && s.occupied && !s.isHost ? { ...s, ready: !s.ready } : s,
-      ),
-    }));
-  };
-
-  const handleClearSlot = (seat: number) => {
-    setRoom((prev) => {
-      const updatedSlots = prev.slots.map((s) =>
-        s.seat === seat && !s.isHost
-          ? {
-              ...s,
-              occupied: false,
-              playerName: '',
-              uid: '',
-              characterName: '',
-              characterTitle: '',
-              ready: false,
-            }
-          : s,
-      );
-      const count = updatedSlots.filter((s) => s.seat <= prev.config.maxPlayers && s.occupied).length;
-      return {
-        ...prev,
-        status: count === 0 ? 'IDLE' : 'RECRUITING',
-        slots: updatedSlots,
-      };
-    });
-  };
-
-  const statusMeta = (status: RoomPreviewStatus) => {
-    if (status === 'IDLE') {
-      return {
-        label: isZh ? '空闲待机' : 'Idle',
-        bg: 'rgba(120, 117, 110, 0.12)',
-        color: 'var(--text-secondary)',
-        border: 'rgba(120, 117, 110, 0.24)',
-      };
+      setSearchResult({
+        found: Boolean(resp?.found),
+        roomId: resp?.roomId || clean,
+        isPwd: Boolean(resp?.isPwd),
+        error: resp?.error,
+      });
+    } catch (err) {
+      showBanner('err', formatError(err));
+    } finally {
+      setBusyAction(null);
     }
-    if (status === 'RECRUITING') {
-      return {
-        label: isZh ? `招募中 (${occupiedCount}/${room.config.maxPlayers})` : `Recruiting (${occupiedCount}/${room.config.maxPlayers})`,
-        bg: 'var(--accent-soft)',
-        color: 'var(--accent-text)',
-        border: 'var(--accent-border)',
-      };
-    }
+  };
+
+  const snapshotInviteModel = useMemo<ActiveOfficialRoom | null>(() => {
+    if (!snapshot || !inRoom) return null;
+    const modeSpec = getModeSpec(snapshot.mode || draft.modeId);
+    const mapSpec = getMapForMode(modeSpec.id, snapshot.mapId || draft.mapId);
+    const diffSpec = DIFFICULTY_OPTIONS.find((d) => d.id === snapshot.difficulty);
+    const upgSpec = UPGRADE_PLAN_OPTIONS.find((u) => u.id === snapshot.upgradePlan);
+    const timeSpec = THINK_TIME_OPTIONS.find((t) => t.id === snapshot.timePlan);
+    const spdSpec = SPEED_OPTIONS.find((s) => s.id === draft.speedType);
     return {
-      label: isZh ? `满员备战中 (${occupiedCount}/${room.config.maxPlayers})` : `Full & Ready (${occupiedCount}/${room.config.maxPlayers})`,
-      bg: 'var(--success-bg)',
-      color: 'var(--success)',
-      border: 'rgba(21, 128, 61, 0.28)',
+      roomId: String(snapshot.roomId),
+      name: snapshot.name || `房间 #${snapshot.roomId}`,
+      mode: modeSpec.id,
+      modeName: modeSpec.name,
+      mapId: mapSpec.id,
+      mapName: mapSpec.name,
+      difficulty: snapshot.difficulty,
+      difficultyName: modeSpec.hasDifficulty && diffSpec ? diffSpec.label : '',
+      timePlan: snapshot.timePlan,
+      timePlanName: timeSpec ? timeSpec.label : '',
+      speedType: draft.speedType,
+      speedName: spdSpec ? spdSpec.label : '',
+      upgradePlan: snapshot.upgradePlan,
+      upgradeName: modeSpec.hasUpgrade && upgSpec ? upgSpec.label : '',
+      roomLabel: draft.roomLabel,
+      roomLabelName: '',
+      skipStory: draft.skipStory,
+      hasPwd: snapshot.hasPwd,
+      pwd: snapshot.roomPwd,
+      masterId: String(snapshot.masterId),
+      playerCount: snapshot.players.length,
+      maxPlayers: snapshot.maxPlayers || 4,
+      status: snapshot.roomState || 'WAIT',
+      handedOff: true,
+      message: '',
+      ttlSecondsRemaining: 0,
+      canUpdate: snapshot.isHost,
+      canKick: snapshot.isHost,
+      players: [],
     };
-  };
-
-  const inviteText = useMemo(() => {
-    const mapLabel = isZh ? activeRoomMap.name : activeRoomMap.enName;
-    const diffPart = room.config.difficulty ? ` · ${room.config.difficulty}` : '';
-    const thinkPart = isZh ? ` · 思考${room.config.thinkTime}` : ` · Think:${room.config.thinkTime}`;
-    const tagPart = room.config.roomTag ? ` · [${room.config.roomTag}]` : '';
-    const yieldPart = activeZeroYield ? (isZh ? ' · 自托管0收益' : ' · Self-Hosted 0 Yield') : '';
-    const cleanPwd = sanitizeNumericPassword(room.config.password);
-    const pwdPart =
-      activeEffectivePrivacy === 'PASSWORD'
-        ? (isZh ? `｜密码：${cleanPwd}` : ` | Pass: ${cleanPwd}`)
-        : '';
-    return isZh
-      ? `【星枢组队邀请】房间号 #${room.roomCode}｜${room.config.mode} · ${mapLabel}${diffPart}${thinkPart}${tagPart}${yieldPart}${pwdPart}｜当前 ${occupiedCount}/${room.config.maxPlayers} 人｜QQ 发送「趴加入 ${room.roomCode}」查看/上车`
-      : `[XingShu Squad Invite] Room #${room.roomCode} | ${room.config.mode} · ${mapLabel}${diffPart}${thinkPart}${tagPart}${yieldPart}${pwdPart} | ${occupiedCount}/${room.config.maxPlayers} players`;
-  }, [activeEffectivePrivacy, activeRoomMap, activeZeroYield, isZh, occupiedCount, room]);
-
-  const badge = statusMeta(room.status);
+  }, [draft.modeId, draft.mapId, draft.roomLabel, draft.skipStory, draft.speedType, inRoom, snapshot]);
 
   return (
     <div style={{ maxWidth: 1220, margin: '0 auto', paddingBottom: 40 }}>
@@ -296,257 +460,252 @@ export const RoomLobbyPage: React.FC = () => {
           alignItems: 'flex-start',
           flexWrap: 'wrap',
           gap: 12,
-          marginBottom: 18,
+          marginBottom: 16,
         }}
       >
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
-              {isZh ? '房间与组队 · 趴开房' : 'Rooms & Squad · Quick Host'}
+              {zh ? '游戏内联机开房 · 实时控制' : 'In-Game Room Control'}
             </h1>
             <span
               style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
                 fontSize: 11,
                 fontWeight: 700,
                 padding: '3px 10px',
                 borderRadius: 999,
-                background: 'var(--accent-soft)',
-                color: 'var(--accent-text)',
-                border: '1px solid var(--accent-border)',
+                background: inLobbyReady ? 'var(--success-bg)' : 'var(--accent-soft)',
+                color: inLobbyReady ? 'var(--success)' : 'var(--accent-text)',
+                border: inLobbyReady ? '1px solid rgba(21, 128, 61, 0.25)' : '1px solid var(--accent-border)',
               }}
             >
-              {isZh ? '模板预览 · 未接入后端' : 'Preview Template · Local Mock'}
+              <ShieldCheck size={12} />
+              {inLobbyReady
+                ? (zh ? '已连接游戏客户端大厅 · 可直接开房/改房' : 'Connected to In-Game Lobby')
+                : inGameState?.connected
+                  ? (zh ? `已连接（当前状态：${inGameState.matchState}）` : `Connected (${inGameState.matchState})`)
+                  : (zh ? '需在游戏内登录并进入大厅后使用' : 'Requires Running Game Lobby')}
             </span>
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 6, marginBottom: 0 }}>
-            {isZh
-              ? '用于确认星枢 Hub、手机端与 QQ Bot 三端「趴开房 / 房间与组队信息」交互与视觉效果的静态交互模板。'
-              : 'Interactive UI & command template for quick room creation and P1-P4 squad telemetry across Hub, Mobile, and QQ Bot.'}
+            {zh
+              ? '为避免云端预建房被官方服务器回收，现改为在游戏运行并进入主大厅后直接发起建房、修改房规、踢人与开始对局。'
+              : 'Create, modify, kick, and start rooms directly through the live running game client once signed in at the lobby.'}
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {toast && (
+          {inGameState?.playerId && inGameState.playerId > 0 && (
             <span
               style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
                 fontSize: 12,
-                fontWeight: 600,
+                fontWeight: 650,
                 padding: '6px 12px',
-                borderRadius: 10,
+                borderRadius: 999,
                 background: 'var(--success-bg)',
                 color: 'var(--success)',
                 border: '1px solid rgba(21, 128, 61, 0.25)',
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
-              {toast}
+              <UserRound size={13} />
+              {zh ? `局内 UID ${inGameState.playerId}` : `In-Game UID ${inGameState.playerId}`}
             </span>
           )}
           <button
             type="button"
             className="btn btn-secondary"
             style={{ fontSize: 12, padding: '7px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            onClick={() => {
-              const def = createDefaultDraft();
-              setDraft(def);
-              setRoom(createInitialRoomSnapshot());
-              flashToast(isZh ? '已恢复默认模板状态' : 'Reset to default template');
-            }}
+            onClick={() => void refreshInGameState()}
           >
             <RefreshCw size={14} />
-            {isZh ? '重置模板' : 'Reset'}
+            {zh ? '刷新游戏连接' : 'Refresh'}
           </button>
         </div>
       </div>
 
-      {/* Preview Architecture Banner */}
-      <div
-        className="card"
-        style={{
-          padding: '14px 18px',
-          marginBottom: 18,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 14,
-          flexWrap: 'wrap',
-          background: 'linear-gradient(120deg, rgba(255, 241, 229, 0.72), rgba(255, 255, 255, 0.9))',
-          borderColor: 'var(--accent-border)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 260, flex: 1 }}>
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 10,
-              background: '#1c1c1c',
-              color: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
-            <Sparkles size={18} />
-          </div>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {isZh ? '当前展示为三端原型模板（纯本地状态演示）' : 'Interactive Prototype Template (Local State Only)'}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-              {isZh
-                ? '左侧可配置「趴开房」参数并生成跨端指令；右侧可切换空闲 / 招募中 / 满员备战中状态并模拟 P1–P4 入队与准备。'
-                : 'Configure room presets on the left, simulate creating a room, and toggle P1-P4 slots & states on the right.'}
-            </div>
-          </div>
+      {/* Feedback Banner */}
+      {banner && (
+        <div
+          className="card"
+          style={{
+            padding: '10px 14px',
+            marginBottom: 14,
+            fontSize: 12.5,
+            fontWeight: 600,
+            background:
+              banner.kind === 'err'
+                ? 'var(--danger-bg, rgba(220, 38, 38, 0.08))'
+                : banner.kind === 'ok'
+                  ? 'var(--success-bg)'
+                  : 'var(--accent-soft)',
+            color:
+              banner.kind === 'err'
+                ? 'var(--danger, #b91c1c)'
+                : banner.kind === 'ok'
+                  ? 'var(--success)'
+                  : 'var(--accent-text)',
+            borderColor:
+              banner.kind === 'err'
+                ? 'rgba(220, 38, 38, 0.28)'
+                : banner.kind === 'ok'
+                  ? 'rgba(21, 128, 61, 0.28)'
+                  : 'var(--accent-border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10,
+          }}
+        >
+          <span>{banner.text}</span>
+          {banner.recoverableMode && draft.modeId !== 4 && !inRoom && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ fontSize: 12, padding: '5px 12px', flexShrink: 0 }}
+              onClick={() => {
+                setDraft((prev) => applyModeSelection(prev, 4));
+                setBanner(null);
+              }}
+            >
+              {zh ? '切回合作挑战' : 'Switch to Co-op'}
+            </button>
+          )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="status-pill ok" style={{ fontSize: 11.5 }}>
-            <DoorOpen size={13} />
-            Hub
-          </span>
-          <span className="status-pill ok" style={{ fontSize: 11.5 }}>
-            <Smartphone size={13} />
-            Android
-          </span>
-          <span className="status-pill ok" style={{ fontSize: 11.5 }}>
-            <MessageSquare size={13} />
-            QQ Bot
-          </span>
-        </div>
-      </div>
+      )}
 
-      {/* Main 2-Column Grid */}
+      {/* In-Game Lobby Gate */}
+      {!inLobbyReady && (
+        <div
+          className="card"
+          style={{
+            padding: 18,
+            marginBottom: 18,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            borderColor: 'var(--accent-border)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 360px' }}>
+            <Gamepad2 size={22} style={{ color: 'var(--accent-text)', flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>
+                {inGameState?.connected
+                  ? (zh ? `已连接游戏客户端（当前处于 ${inGameState.matchState}），请返回主大厅或等待房间后操作` : `Client connected (${inGameState.matchState}); return to Lobby to control room`)
+                  : (zh ? '请先在安装「星枢官方插件 Mod」后启动游戏并进入大厅' : 'Launch the game with XingShu Official Plugin Mod and enter the lobby')}
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3 }}>
+                {zh
+                  ? '游戏内打开后会自动与本页建立本地直连网桥；你可以直接在左侧选好地图、难度与密码，进入大厅后一点即建房并修改开局。'
+                  : 'Once the running client reaches the lobby, room creation, edits, kicks, and game start activate automatically.'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {installationId && !inGameState?.connected && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={launchingGame}
+                style={{ fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                onClick={() => void handleLaunchGame()}
+              >
+                <Play size={14} />
+                {launchingGame ? (zh ? '正在启动…' : 'Launching…') : (zh ? '启动游戏' : 'Launch Game')}
+              </button>
+            )}
+            <Link
+              to="/extensions/launcher"
+              className="btn btn-secondary"
+              style={{ textDecoration: 'none', fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Blocks size={14} />
+              {zh ? '检查/安装官方插件 Mod' : 'Manage Plugin Mod'}
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Two-Column Live Workspace */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
           gap: 18,
           alignItems: 'start',
         }}
       >
-        {/* Left: 「趴开房」One-Tap Host Config Template */}
-        <section className="card" style={{ marginBottom: 0 }}>
+        {/* Left Panel: In-Game Room Create / Modify Form */}
+        <section className="card" style={{ padding: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <DoorOpen size={18} color="var(--accent)" />
+              <SlidersHorizontal size={17} style={{ color: 'var(--accent-text)' }} />
               <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
-                {isZh ? '「趴开房」一键开房配置' : 'Quick Host Configuration'}
+                {inRoom ? (zh ? '修改游戏内房间参数' : 'Modify Active Room') : (zh ? '游戏内创建房间配置' : 'Create In-Game Room')}
               </h2>
             </div>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>
-              {isZh ? '模板表单' : 'Template Form'}
+            <span style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+              {zh ? '6 种官方现役玩法 · 19 张地图' : '6 Modes · 19 Maps'}
             </span>
           </div>
 
-          {/* Host Target Selector: Official Active vs Self-Hosted 0-Yield */}
+          {/* 1. Mode */}
           <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-              {isZh ? '0. 托管目标与收益规则' : '0. Host Target & Yield Policy'}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>
+                {zh ? '1. 对局模式（官方实装入口）' : '1. Game Mode'}
+              </span>
+              {inRoom && (
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                  {zh ? '退出当前房间后可切换模式' : 'Exit room to switch mode'}
+                </span>
+              )}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {(
-                [
-                  {
-                    id: 'OFFICIAL',
-                    zh: '官方现有模式',
-                    en: 'Official Live Mode',
-                    descZh: '直连官方规则 · 正常结算经验/星币/任务',
-                    descEn: 'Official rules · Normal EXP & Coin rewards',
-                  },
-                  {
-                    id: 'SELF_HOSTED',
-                    zh: '自托管服务器 · 0收益 (原型占位)',
-                    en: 'Self-Hosted Server · 0 Yield (Prototype)',
-                    descZh: '非官方现役活动/娱乐演练 · 0 收益隔离',
-                    descEn: 'Retired / custom modes · 0 official yield',
-                  },
-                ] as const
-              ).map((target) => {
-                const active = (draftZeroYield ? 'SELF_HOSTED' : draft.hostTarget) === target.id;
-                const isSelf = target.id === 'SELF_HOSTED';
-                return (
-                  <button
-                    key={target.id}
-                    type="button"
-                    onClick={() => handleHostTargetChange(target.id)}
-                    style={{
-                      textAlign: 'left',
-                      padding: '9px 11px',
-                      borderRadius: 12,
-                      cursor: 'pointer',
-                      border: active
-                        ? (isSelf ? '1.5px solid #b45309' : '1.5px solid #15803d')
-                        : '1px solid var(--glass-border)',
-                      background: active
-                        ? (isSelf ? 'rgba(254, 243, 199, 0.72)' : 'rgba(232, 246, 237, 0.78)')
-                        : 'var(--glass-surface-subtle)',
-                      color: active ? (isSelf ? '#92400e' : '#166534') : 'var(--text-primary)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700 }}>
-                      <Server size={13} />
-                      <span>{isZh ? target.zh : target.en}</span>
-                    </div>
-                    <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>
-                      {isZh ? target.descZh : target.descEn}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Mode Selection */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-              {isZh ? '1. 对局模式' : '1. Game Mode'}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-              {(
-                [
-                  { id: 'PVE', zh: 'PVE 合作', en: 'PVE Co-op', descZh: '官方现役副本 / 打怪', descEn: 'Official Co-op Stages', zeroYield: false },
-                  { id: 'PVP', zh: 'PVP 对战', en: 'PVP Match', descZh: '官方现役 4 人大乱斗', descEn: 'Official 4P Arena', zeroYield: false },
-                  { id: 'COOP_EVENT', zh: '合作活动 · 0收益', en: 'Co-op Event · 0 Yield', descZh: '官方未开放 · 自托管托管', descEn: 'Unavailable in Live · Self-Hosted', zeroYield: true },
-                  { id: 'SELF_HOSTED', zh: '星枢自托管 · 0收益', en: 'XingShu Self-Hosted · 0 Yield', descZh: '绝版复刻 / 自定义沙盒', descEn: 'Retired / Custom Sandbox', zeroYield: true },
-                ] as const
-              ).map((m) => {
-                const active = draft.mode === m.id;
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+              {OFFICIAL_MODES.map((m) => {
+                const selected = draft.modeId === m.id;
+                const open = modeOpenMap[m.id] !== false;
                 return (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => handleModeChange(m.id)}
+                    disabled={inRoom}
+                    onClick={() => setDraft((prev) => applyModeSelection(prev, m.id))}
                     style={{
                       textAlign: 'left',
-                      padding: '10px 11px',
-                      borderRadius: 12,
-                      cursor: 'pointer',
-                      border: active ? '1.5px solid #1c1c1c' : '1px solid var(--glass-border)',
-                      background: active ? '#1c1c1c' : 'var(--glass-surface-subtle)',
-                      color: active ? '#ffffff' : 'var(--text-primary)',
-                      transition: 'all 0.16s ease',
+                      padding: '9px 10px',
+                      borderRadius: 10,
+                      border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                      background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                      color: selected ? 'var(--accent-text)' : 'var(--text-primary)',
+                      cursor: inRoom ? 'not-allowed' : 'pointer',
+                      opacity: inRoom && !selected ? 0.58 : 1,
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{isZh ? m.zh : m.en}</span>
-                      {m.zeroYield && (
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            padding: '1px 6px',
-                            borderRadius: 999,
-                            background: active ? 'rgba(251, 191, 36, 0.24)' : 'rgba(245, 158, 11, 0.16)',
-                            color: active ? '#fde68a' : '#b45309',
-                          }}
-                        >
-                          0 收益
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>{zh ? m.name : m.enName}</span>
+                      {!open ? (
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 999, background: 'rgba(100,116,139,0.16)', color: 'var(--text-secondary)' }}>
+                          {zh ? '未开放' : 'Closed'}
                         </span>
-                      )}
+                      ) : m.seasonal ? (
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 999, background: 'rgba(217,119,6,0.14)', color: '#b45309' }}>
+                          {zh ? '限时' : 'Event'}
+                        </span>
+                      ) : null}
                     </div>
-                    <div style={{ fontSize: 11, opacity: active ? 0.78 : 0.7, marginTop: 2 }}>
-                      {isZh ? m.descZh : m.descEn}
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                      {m.kind === 'pve' ? 'PVE 合作' : 'PVP 对战'}
                     </div>
                   </button>
                 );
@@ -554,203 +713,168 @@ export const RoomLobbyPage: React.FC = () => {
             </div>
           </div>
 
-          {draftZeroYield && (
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: 11,
-                marginBottom: 14,
-                background: 'rgba(254, 243, 199, 0.72)',
-                border: '1px solid rgba(217, 119, 6, 0.35)',
-                color: '#92400e',
-                fontSize: 12,
-                lineHeight: 1.5,
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 8,
-              }}
-            >
-              <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} />
-              <div>
-                <div style={{ fontWeight: 700 }}>
-                  {isZh ? '自托管服务器 · 0 收益模式（原型占位）' : 'Self-Hosted Server · 0 Yield Mode (Prototype)'}
-                </div>
-                <div style={{ fontSize: 11.5, marginTop: 2 }}>
-                  {isZh ? ZERO_YIELD_NOTICE_ZH : ZERO_YIELD_NOTICE_EN}
-                </div>
+          {/* 2. Maps */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 7 }}>
+              {zh ? `2. 游玩地图（${modeMaps.length} 张可用）` : `2. Map (${modeMaps.length})`}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {modeMaps.map((map) => {
+                const selected = map.id === currentMap.id;
+                return (
+                  <button
+                    key={`${map.modeId}-${map.id}`}
+                    type="button"
+                    onClick={() =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        mapId: map.id,
+                        skipStory: map.hasStory ? prev.skipStory : false,
+                      }))
+                    }
+                    style={{
+                      fontSize: 12.5,
+                      fontWeight: selected ? 700 : 500,
+                      padding: '6px 11px',
+                      borderRadius: 9,
+                      border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                      background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                      color: selected ? 'var(--accent-text)' : 'var(--text-primary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {zh ? map.name : map.enName}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 3. Conditional Difficulty OR Upgrade Plan */}
+          {currentMode.hasDifficulty && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 7 }}>
+                {zh ? '3. 合作难度' : '3. Difficulty'}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {DIFFICULTY_OPTIONS.map((d) => {
+                  const selected = Math.min(3, draft.difficulty) === d.id;
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => setDraft((prev) => ({ ...prev, difficulty: d.id }))}
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: selected ? 700 : 500,
+                        padding: '6px 12px',
+                        borderRadius: 9,
+                        border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                        background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                        color: selected ? 'var(--accent-text)' : 'var(--text-primary)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {zh ? d.label : d.enLabel}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 6 }}>
+                {zh ? '极限难度仅官方限时开放（非活动期由官方返回 10015 / NotOpen）' : 'Extreme difficulty is only open during limited official events.'}
               </div>
             </div>
           )}
 
-          {/* Map Selection */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-              {isZh ? '2. 游玩地图' : '2. Map'}
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {filteredMaps.map((m) => {
-                const active = draft.mapId === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => handleMapChange(m.id)}
-                    style={{
-                      padding: '6px 11px',
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: active ? 700 : 500,
-                      cursor: 'pointer',
-                      border: active ? '1px solid var(--accent-border)' : '1px solid var(--glass-border)',
-                      background: active ? 'var(--accent-soft)' : 'rgba(255,255,255,0.75)',
-                      color: active ? 'var(--accent-text)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    {isZh ? m.name : m.enName}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Difficulty & Max Players */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                {isZh ? '3. 难度档位（原版分级）' : '3. Official Difficulty'}
+          {currentMode.hasUpgrade && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 7 }}>
+                {zh ? '3. 升级星币方案' : '3. Star Coin Plan'}
               </div>
-              {selectedDraftMap.difficulties.length > 0 ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {selectedDraftMap.difficulties.map((diff) => {
-                    const active = draft.difficulty === diff;
-                    return (
-                      <button
-                        key={diff}
-                        type="button"
-                        onClick={() => setDraft((prev) => ({ ...prev, difficulty: diff }))}
-                        style={{
-                          padding: '5px 10px',
-                          borderRadius: 8,
-                          fontSize: 12,
-                          fontWeight: active ? 700 : 500,
-                          cursor: 'pointer',
-                          border: active ? '1px solid #1c1c1c' : '1px solid var(--glass-border)',
-                          background: active ? '#1c1c1c' : 'var(--glass-surface-subtle)',
-                          color: active ? '#fff' : 'var(--text-primary)',
-                        }}
-                      >
-                        {diff}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: 'var(--text-muted)',
-                    padding: '7px 10px',
-                    borderRadius: 8,
-                    background: 'var(--glass-surface-subtle)',
-                    border: '1px dashed var(--glass-border)',
-                  }}
-                >
-                  {isZh ? '当前模式无需难度选择' : 'Standard difficulty'}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                {isZh ? '4. 人数上限' : '4. Max Players'}
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {([2, 3, 4] as const).map((n) => {
-                  const active = draft.maxPlayers === n;
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {UPGRADE_PLAN_OPTIONS.map((u) => {
+                  const selected = draft.upgradePlan === u.id;
                   return (
                     <button
-                      key={n}
+                      key={u.id}
                       type="button"
-                      onClick={() => setDraft((prev) => ({ ...prev, maxPlayers: n }))}
+                      onClick={() => setDraft((prev) => ({ ...prev, upgradePlan: u.id }))}
                       style={{
-                        flex: 1,
-                        padding: '6px 8px',
-                        borderRadius: 8,
-                        fontSize: 12,
-                        fontWeight: active ? 700 : 500,
+                        fontSize: 12.5,
+                        fontWeight: selected ? 700 : 500,
+                        padding: '6px 11px',
+                        borderRadius: 9,
+                        border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                        background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                        color: selected ? 'var(--accent-text)' : 'var(--text-primary)',
                         cursor: 'pointer',
-                        border: active ? '1px solid #1c1c1c' : '1px solid var(--glass-border)',
-                        background: active ? '#1c1c1c' : 'var(--glass-surface-subtle)',
-                        color: active ? '#fff' : 'var(--text-primary)',
                       }}
                     >
-                      {n}{isZh ? '人' : 'P'}
+                      {zh ? u.label : u.enLabel}
                     </button>
                   );
                 })}
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Think Time & Room Tag (aligned with official Create Room UI) */}
+          {/* 4. Thinking Time & Game Speed */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                <Clock size={13} />
-                {isZh ? '5. 思考时间' : '5. Think Time'}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                {zh ? '思考时间' : 'Think Time'}
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 {THINK_TIME_OPTIONS.map((t) => {
-                  const active = draft.thinkTime === t;
+                  const selected = draft.timePlan === t.id;
                   return (
                     <button
-                      key={t}
+                      key={t.id}
                       type="button"
-                      onClick={() => setDraft((prev) => ({ ...prev, thinkTime: t }))}
+                      onClick={() => setDraft((prev) => ({ ...prev, timePlan: t.id }))}
                       style={{
                         flex: 1,
+                        fontSize: 12.5,
+                        fontWeight: selected ? 700 : 500,
                         padding: '6px 8px',
-                        borderRadius: 8,
-                        fontSize: 12,
-                        fontWeight: active ? 700 : 500,
+                        borderRadius: 9,
+                        border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                        background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                        color: selected ? 'var(--accent-text)' : 'var(--text-primary)',
                         cursor: 'pointer',
-                        border: active ? '1px solid #1c1c1c' : '1px solid var(--glass-border)',
-                        background: active ? '#1c1c1c' : 'var(--glass-surface-subtle)',
-                        color: active ? '#fff' : 'var(--text-primary)',
                       }}
                     >
-                      {t}
+                      {zh ? t.label : t.enLabel}
                     </button>
                   );
                 })}
               </div>
             </div>
-
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                <Tag size={13} />
-                {isZh ? '6. 房间标签' : '6. Room Tag'}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                {zh ? '对局速度' : 'Speed'}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {ROOM_TAG_OPTIONS.map((tag) => {
-                  const active = draft.roomTag === tag;
+              <div style={{ display: 'flex', gap: 6 }}>
+                {SPEED_OPTIONS.map((s) => {
+                  const selected = draft.speedType === s.id;
                   return (
                     <button
-                      key={tag}
+                      key={s.id}
                       type="button"
-                      onClick={() => setDraft((prev) => ({ ...prev, roomTag: tag }))}
+                      onClick={() => setDraft((prev) => ({ ...prev, speedType: s.id }))}
                       style={{
-                        padding: '5px 9px',
-                        borderRadius: 8,
-                        fontSize: 11.5,
-                        fontWeight: active ? 700 : 500,
+                        flex: 1,
+                        fontSize: 12.5,
+                        fontWeight: selected ? 700 : 500,
+                        padding: '6px 8px',
+                        borderRadius: 9,
+                        border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                        background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                        color: selected ? 'var(--accent-text)' : 'var(--text-primary)',
                         cursor: 'pointer',
-                        border: active ? '1px solid var(--accent-border)' : '1px solid var(--glass-border)',
-                        background: active ? 'var(--accent-soft)' : 'var(--glass-surface-subtle)',
-                        color: active ? 'var(--accent-text)' : 'var(--text-secondary)',
                       }}
                     >
-                      {tag}
+                      {zh ? s.label : s.enLabel}
                     </button>
                   );
                 })}
@@ -758,460 +882,326 @@ export const RoomLobbyPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Privacy & Password */}
+          {/* 5. Official Room Labels */}
           <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-              {isZh ? '7. 密码与可见性（不输入则为公开房间）' : '7. Password & Privacy (empty = public)'}
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
+              {zh ? '房间标签' : 'Room Tag'}
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              {(
-                [
-                  { id: 'PUBLIC', zh: '公开可见', en: 'Public', icon: Globe },
-                  { id: 'FRIENDS', zh: '仅好友', en: 'Friends Only', icon: Shield },
-                  { id: 'PASSWORD', zh: '密码房', en: 'Password', icon: Lock },
-                ] as const
-              ).map((item) => {
-                const active = draft.privacy === item.id;
-                const Icon = item.icon;
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {currentMode.labels.map((lbl) => {
+                const selected = draft.roomLabel === lbl.id;
                 return (
                   <button
-                    key={item.id}
+                    key={lbl.id}
                     type="button"
-                    onClick={() => setDraft((prev) => ({ ...prev, privacy: item.id as RoomPrivacy }))}
+                    onClick={() => setDraft((prev) => ({ ...prev, roomLabel: lbl.id }))}
                     style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      padding: '6px 11px',
-                      borderRadius: 10,
                       fontSize: 12,
-                      fontWeight: active ? 700 : 500,
+                      fontWeight: selected ? 700 : 500,
+                      padding: '5px 10px',
+                      borderRadius: 999,
+                      border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                      background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                      color: selected ? 'var(--accent-text)' : 'var(--text-secondary)',
                       cursor: 'pointer',
-                      border: active ? '1px solid var(--accent-border)' : '1px solid var(--glass-border)',
-                      background: active ? 'var(--accent-soft)' : 'var(--glass-surface-subtle)',
-                      color: active ? 'var(--accent-text)' : 'var(--text-secondary)',
                     }}
                   >
-                    <Icon size={13} />
-                    {isZh ? item.zh : item.en}
+                    {zh ? lbl.label : lbl.enLabel}
                   </button>
                 );
               })}
-
-              {draft.privacy === 'PASSWORD' && (
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={draft.password}
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, password: sanitizeNumericPassword(e.target.value) }))
-                  }
-                  placeholder={isZh ? '1-6位数字密码（留空则公开）' : '1-6 digits (empty = public)'}
-                  style={{
-                    width: 210,
-                    padding: '6px 10px',
-                    borderRadius: 10,
-                    border: '1px solid var(--glass-border-strong)',
-                    background: '#fff',
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    color: 'var(--text-primary)',
-                  }}
-                />
-              )}
             </div>
-            {draft.privacy === 'PASSWORD' && draftEffectivePrivacy === 'PUBLIC' && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                {isZh ? '当前未输入数字密码，创建后将自动作为公开房间。' : 'No digits entered — will create as a public room.'}
-              </div>
-            )}
           </div>
 
-          {/* Room Title & Note */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-              {isZh ? '8. 房间标题与备注' : '8. Room Title & Note'}
-            </div>
-            <input
-              type="text"
-              maxLength={40}
-              value={draft.roomName}
-              onChange={(e) => setDraft((prev) => ({ ...prev, roomName: e.target.value }))}
-              placeholder={isZh ? '输入房名，例如：日常刷本速车' : 'Enter room title...'}
-              style={{
-                width: '100%',
-                boxSizing: 'border-box',
-                padding: '8px 12px',
-                borderRadius: 10,
-                border: '1px solid var(--glass-border)',
-                background: '#fff',
-                fontSize: 13,
-                color: 'var(--text-primary)',
-                marginBottom: 8,
-              }}
-            />
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-              {ROOM_TITLE_PRESETS.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setDraft((prev) => ({ ...prev, roomName: preset }))}
-                  style={{
-                    padding: '3px 9px',
-                    borderRadius: 999,
-                    fontSize: 11,
-                    cursor: 'pointer',
-                    border: '1px solid var(--glass-border)',
-                    background: 'var(--glass-surface-subtle)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  + {preset.split(' · ')[0]}
-                </button>
-              ))}
-            </div>
-            <input
-              type="text"
-              maxLength={60}
-              value={draft.note}
-              onChange={(e) => setDraft((prev) => ({ ...prev, note: e.target.value }))}
-              placeholder={isZh ? '备注（如：缺辅助位 / 欢迎萌新）' : 'Optional squad note...'}
-              style={{
-                width: '100%',
-                boxSizing: 'border-box',
-                padding: '7px 12px',
-                borderRadius: 10,
-                border: '1px solid var(--glass-border)',
-                background: 'var(--glass-surface-subtle)',
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-              }}
-            />
-          </div>
-
-          {/* Generated 「趴开房」 Command Box */}
-          <div
-            style={{
-              padding: '11px 13px',
-              borderRadius: 12,
-              background: 'var(--glass-code-bg)',
-              border: '1px solid var(--glass-border)',
-              marginBottom: 14,
-            }}
-          >
-            <div
+          {/* 6. Optional Skip Story */}
+          {currentMap.hasStory && (
+            <label
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: 6,
-              }}
-            >
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)' }}>
-                {isZh ? '生成「趴开房」跨端指令预览' : 'Generated Command Preview'}
-              </span>
-              <button
-                type="button"
-                onClick={() => void copyText('cmd', generatedCommand, isZh ? '开房指令' : 'command')}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '3px 8px',
-                  borderRadius: 6,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  border: '1px solid var(--glass-border)',
-                  background: '#fff',
-                  color: 'var(--text-primary)',
-                }}
-              >
-                {copiedTarget === 'cmd' ? <Check size={12} color="var(--success)" /> : <Copy size={12} />}
-                {copiedTarget === 'cmd' ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制指令' : 'Copy')}
-              </button>
-            </div>
-            <code
-              style={{
-                display: 'block',
+                gap: 8,
                 fontSize: 12.5,
-                lineHeight: 1.5,
-                color: 'var(--text-primary)',
-                wordBreak: 'break-all',
+                fontWeight: 600,
+                marginBottom: 14,
+                cursor: 'pointer',
               }}
             >
-              {generatedCommand}
-            </code>
+              <input
+                type="checkbox"
+                checked={draft.skipStory}
+                onChange={(e) => setDraft((prev) => ({ ...prev, skipStory: e.target.checked }))}
+              />
+              {zh ? `跳过「${currentMap.name}」开场剧情` : `Skip story intro on ${currentMap.enName}`}
+            </label>
+          )}
+
+          {/* 7. Room Name + Password */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 10, marginBottom: 16 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 5 }}>
+                {zh ? '房间名称（创建时有效）' : 'Room Name'}
+              </label>
+              <input
+                type="text"
+                maxLength={36}
+                disabled={inRoom}
+                placeholder={zh ? '留空自动使用昵称默认房名…' : 'Default room name'}
+                value={draft.roomName}
+                onChange={(e) => setDraft((prev) => ({ ...prev, roomName: e.target.value }))}
+                style={{
+                  width: '100%',
+                  padding: '7px 10px',
+                  borderRadius: 9,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12.5,
+                  opacity: inRoom ? 0.65 : 1,
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 5 }}>
+                {zh ? '房间密码（选填，留空公开）' : 'Password (optional)'}
+              </label>
+              <input
+                type="text"
+                maxLength={12}
+                placeholder={zh ? '公开无密码' : 'Public'}
+                value={draft.password}
+                onChange={(e) => setDraft((prev) => ({ ...prev, password: e.target.value.slice(0, 12) }))}
+                style={{
+                  width: '100%',
+                  padding: '7px 10px',
+                  borderRadius: 9,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12.5,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              />
+            </div>
           </div>
 
-          {/* Primary CTA */}
+          {/* Primary Action */}
           <button
             type="button"
             className="btn btn-primary"
-            style={{
-              width: '100%',
-              padding: '11px 16px',
-              fontSize: 13.5,
-              fontWeight: 700,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-            }}
-            onClick={handleSimulateCreate}
+            disabled={!inLobbyReady || busyAction !== null || (inRoom && !isRoomHost)}
+            style={{ width: '100%', padding: '11px 16px', fontSize: 14, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+            onClick={() => void handleCreateOrModifyInGame()}
           >
-            <DoorOpen size={16} />
-            {isZh ? '模拟创建房间并刷新右侧预览' : 'Simulate Create Room (Update Preview)'}
+            <Gamepad2 size={16} />
+            {!inLobbyReady
+              ? (zh ? '请先进入游戏大厅后开房' : 'Enter In-Game Lobby First')
+              : inRoom
+                ? isRoomHost
+                  ? busyAction === 'modify'
+                    ? (zh ? '正在向游戏发送改房…' : 'Updating Room…')
+                    : (zh ? `立即同步修改房间 #${snapshot?.roomId}` : `Apply Changes to #${snapshot?.roomId}`)
+                  : (zh ? '当前非房主，不可修改房规' : 'Host Only')
+                : busyAction === 'create'
+                  ? (zh ? '正在游戏内建房…' : 'Creating Room…')
+                  : (zh ? '一键游戏内直连建房' : 'Create Room In-Game')}
           </button>
         </section>
 
-        {/* Right: Current Room & Squad Info Card + Cross-Platform Link Placeholders */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <section className="card" style={{ marginBottom: 0 }}>
-            {/* Room Top Meta */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                justifyContent: 'space-between',
-                gap: 12,
-                flexWrap: 'wrap',
-                marginBottom: 12,
-              }}
-            >
+        {/* Right Panel: Live In-Game Room Status + Optional Official Lobby Lookup */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <section className="card" style={{ padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Users size={17} style={{ color: 'var(--accent-text)' }} />
+                <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+                  {zh ? '当前游戏内房间状态' : 'Live In-Game Room'}
+                </h2>
+              </div>
+              <span
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  background: inRoom ? 'var(--success-bg)' : 'rgba(120, 117, 110, 0.12)',
+                  color: inRoom ? 'var(--success)' : 'var(--text-secondary)',
+                  border: inRoom ? '1px solid rgba(21, 128, 61, 0.25)' : '1px solid rgba(120, 117, 110, 0.24)',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {inRoom && snapshot
+                  ? (zh ? `等待房 · ${snapshot.players.length}/${snapshot.maxPlayers || 4} 人` : `Waiting · ${snapshot.players.length}/${snapshot.maxPlayers || 4}`)
+                  : inLobbyReady
+                    ? (zh ? '大厅待建房' : 'In Lobby')
+                    : (zh ? '未连接游戏' : 'Offline')}
+              </span>
+            </div>
+
+            {!inRoom || !snapshot ? (
+              <div
+                style={{
+                  padding: '18px 14px',
+                  borderRadius: 12,
+                  background: 'var(--bg-primary)',
+                  border: '1px dashed var(--border-color)',
+                  color: 'var(--text-secondary)',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                {inLobbyReady
+                  ? (zh
+                      ? '已检测到你正在游戏大厅！在左侧选好模式、地图与密码后点击「一键游戏内直连建房」，游戏将立即打开真实官方等待房。'
+                      : 'In-game lobby detected! Pick mode and map on the left and click Create Room In-Game.')
+                  : (zh
+                      ? '尚未检测到游戏进入大厅状态。使用「星枢官方插件 Mod」启动游戏并登录后，此处会自动显示当前实时房间席位、房规修改与直接开局按钮。'
+                      : 'Waiting for the game client with XingShu Official Plugin Mod to reach the lobby.')}
+              </div>
+            ) : (
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>
-                    {isZh ? '当前房间与组队信息' : 'Current Room & Squad'}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 11.5,
-                      fontWeight: 700,
-                      padding: '2px 9px',
-                      borderRadius: 999,
-                      background: badge.bg,
-                      color: badge.color,
-                      border: `1px solid ${badge.border}`,
-                    }}
-                  >
-                    {badge.label}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: '2px 9px',
-                      borderRadius: 999,
-                      background: activeZeroYield ? 'rgba(254, 243, 199, 0.85)' : 'var(--success-bg)',
-                      color: activeZeroYield ? '#92400e' : 'var(--success)',
-                      border: activeZeroYield
-                        ? '1px solid rgba(217, 119, 6, 0.35)'
-                        : '1px solid rgba(21, 128, 61, 0.25)',
-                    }}
-                  >
-                    {activeZeroYield
-                      ? (isZh ? '自托管 · 0收益 (原型占位)' : 'Self-Hosted · 0 Yield')
-                      : (isZh ? '官方现有模式' : 'Official Mode')}
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                  <div>
+                    <div
+                      style={{
+                        fontSize: 28,
+                        fontWeight: 800,
+                        letterSpacing: 1,
+                        fontVariantNumeric: 'tabular-nums',
+                        color: 'var(--text-primary)',
+                      }}
+                    >
+                      #{snapshot.roomId}
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>{snapshot.name}</div>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {isRoomHost ? (zh ? '你是房主' : 'You are Host') : (zh ? `房主 UID ${snapshot.masterId}` : `Host ${snapshot.masterId}`)}
                   </span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 6 }}>
-                  <span style={{ fontSize: 24, fontWeight: 800, fontFamily: 'monospace', letterSpacing: 1 }}>
-                    #{room.roomCode}
-                  </span>
-                  <button
-                    type="button"
-                    title={isZh ? '随机切换预览房号' : 'Randomize code'}
-                    onClick={() => setRoom((prev) => ({ ...prev, roomCode: randomRoomCode() }))}
+
+                {snapshotInviteModel && (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.55 }}>
+                    {[
+                      snapshotInviteModel.modeName,
+                      snapshotInviteModel.mapName,
+                      snapshotInviteModel.difficultyName,
+                      snapshotInviteModel.upgradeName,
+                      snapshotInviteModel.timePlanName ? `思考:${snapshotInviteModel.timePlanName}` : '',
+                      snapshot.hasPwd ? (snapshot.roomPwd ? `密码:${snapshot.roomPwd}` : '私密房间') : '公开',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                )}
+
+                {isRoomHost && (
+                  <label
                     style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: 'var(--text-muted)',
-                      cursor: 'pointer',
-                      padding: 2,
                       display: 'inline-flex',
                       alignItems: 'center',
+                      gap: 7,
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                      marginTop: 12,
+                      cursor: 'pointer',
                     }}
                   >
-                    <RefreshCw size={13} />
+                    <input
+                      type="checkbox"
+                      checked={addBotsOnStart}
+                      onChange={(e) => setAddBotsOnStart(e.target.checked)}
+                    />
+                    {zh ? '开局时自动补足人机队友' : 'Fill empty seats with bots on start'}
+                  </label>
+                )}
+
+                {/* Live Room Actions */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: 12, padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                    onClick={() => void copyText('roomId', String(snapshot.roomId), '房间号')}
+                  >
+                    {copiedKey === 'roomId' ? <Check size={13} /> : <Copy size={13} />}
+                    {zh ? '复制房号' : 'Copy ID'}
+                  </button>
+                  {snapshotInviteModel && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: 12, padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                      onClick={() => void copyText('invite', buildInviteCopyText(snapshotInviteModel, zh), '组队邀请')}
+                    >
+                      {copiedKey === 'invite' ? <Check size={13} /> : <Copy size={13} />}
+                      {zh ? '复制组队邀请' : 'Copy Invite'}
+                    </button>
+                  )}
+                  {isRoomHost && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busyAction !== null}
+                      style={{ fontSize: 12, padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                      onClick={() => void handleStartMatchInGame()}
+                    >
+                      <Play size={13} />
+                      {busyAction === 'start' ? (zh ? '正在启动…' : 'Starting…') : (zh ? '开始对局' : 'Start Match')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busyAction !== null}
+                    style={{ fontSize: 12, padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger, #b91c1c)' }}
+                    onClick={() => void handleExitInGame()}
+                  >
+                    <DoorOpen size={13} />
+                    {busyAction === 'exit' ? (zh ? '正在退出…' : 'Exiting…') : (zh ? '退出房间' : 'Exit Room')}
                   </button>
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginTop: 2 }}>
-                  {room.config.roomName || (isZh ? '未命名星枢房间' : 'Untitled Room')}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
-                  {room.config.mode} · {isZh ? activeRoomMap.name : activeRoomMap.enName}
-                  {room.config.difficulty ? ` · ${room.config.difficulty}` : ''}
-                  {` · ${isZh ? '思考' : 'Think'}:${room.config.thinkTime}`}
-                  {room.config.roomTag ? ` · [${room.config.roomTag}]` : ''} ·{' '}
-                  {activeEffectivePrivacy === 'PASSWORD'
-                    ? (isZh ? `密码 ${sanitizeNumericPassword(room.config.password)}` : `Pass ${sanitizeNumericPassword(room.config.password)}`)
-                    : activeEffectivePrivacy === 'FRIENDS'
-                    ? (isZh ? '仅好友' : 'Friends')
-                    : (isZh ? '公开房' : 'Public')}
-                </div>
-                {activeZeroYield && (
-                  <div
-                    style={{
-                      marginTop: 6,
-                      padding: '6px 9px',
-                      borderRadius: 8,
-                      background: 'rgba(254, 243, 199, 0.72)',
-                      border: '1px solid rgba(217, 119, 6, 0.3)',
-                      color: '#92400e',
-                      fontSize: 11.5,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {isZh ? ZERO_YIELD_NOTICE_ZH : ZERO_YIELD_NOTICE_EN}
-                  </div>
-                )}
-                {room.config.note && (
-                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 3 }}>
-                    {room.config.note}
-                  </div>
-                )}
-              </div>
 
-              {/* Preview State Switcher */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>
-                  {isZh ? '切换预览状态' : 'Preview State'}
-                </span>
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    padding: 3,
-                    borderRadius: 10,
-                    background: 'var(--glass-surface-subtle)',
-                    border: '1px solid var(--glass-border)',
-                    gap: 3,
-                  }}
-                >
-                  {(
-                    [
-                      { id: 'IDLE', zh: '空闲', en: 'Idle' },
-                      { id: 'RECRUITING', zh: '招募中', en: 'Recruiting' },
-                      { id: 'READY_FULL', zh: '满员备战中', en: 'Full Ready' },
-                    ] as const
-                  ).map((st) => {
-                    const active = room.status === st.id;
+                {/* Live P1-P4 Seats */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+                  {[0, 1, 2, 3].map((slotIdx) => {
+                    const player = snapshot.players.find((p) => p.slot === slotIdx);
+                    if (!player) {
+                      return (
+                        <div
+                          key={slotIdx}
+                          style={{
+                            padding: '9px 12px',
+                            borderRadius: 10,
+                            border: '1px dashed var(--border-color)',
+                            color: 'var(--text-secondary)',
+                            fontSize: 12,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span>P{slotIdx + 1} · {zh ? '等待队友加入空位…' : 'Open slot'}</span>
+                          <span>{snapshot.hasPwd ? (zh ? '凭密码加入' : 'Password') : (zh ? '公开可进' : 'Open')}</span>
+                        </div>
+                      );
+                    }
                     return (
-                      <button
-                        key={st.id}
-                        type="button"
-                        onClick={() => handleSwitchPreviewStatus(st.id)}
+                      <div
+                        key={`${slotIdx}-${player.playerId}`}
                         style={{
-                          padding: '4px 9px',
-                          borderRadius: 7,
-                          fontSize: 11.5,
-                          fontWeight: active ? 700 : 500,
-                          cursor: 'pointer',
-                          border: active ? '1px solid var(--glass-border)' : '1px solid transparent',
-                          background: active ? '#fff' : 'transparent',
-                          color: active ? 'var(--text-primary)' : 'var(--text-muted)',
-                          boxShadow: active ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
-                        }}
-                      >
-                        {isZh ? st.zh : st.en}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Action Bar */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: 12, padding: '6px 11px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                onClick={() => void copyText('code', room.roomCode, isZh ? '房间号' : 'room code')}
-              >
-                {copiedTarget === 'code' ? <Check size={13} color="var(--success)" /> : <Copy size={13} />}
-                {isZh ? '复制房间号' : 'Copy Code'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: 12, padding: '6px 11px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                onClick={() => void copyText('invite', inviteText, isZh ? '邀请文案' : 'invite text')}
-              >
-                {copiedTarget === 'invite' ? <Check size={13} color="var(--success)" /> : <Users size={13} />}
-                {isZh ? '邀请队友' : 'Invite Squad'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: 12, padding: '6px 11px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                onClick={() => handleJoinEmptySlot()}
-              >
-                <UserPlus size={13} />
-                {isZh ? '加入房间（模拟占位）' : 'Simulate Join'}
-              </button>
-            </div>
-
-            {/* P1 - P4 Squad Slots */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              {room.slots.map((slot) => {
-                const disabledByLimit = slot.seat > room.config.maxPlayers;
-                return (
-                  <div
-                    key={slot.seat}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 10,
-                      padding: '10px 12px',
-                      borderRadius: 12,
-                      border: slot.occupied
-                        ? '1px solid var(--glass-border)'
-                        : '1px dashed var(--glass-border-strong)',
-                      background: disabledByLimit
-                        ? 'rgba(28, 28, 28, 0.025)'
-                        : slot.occupied
-                        ? 'rgba(255, 255, 255, 0.88)'
-                        : 'var(--glass-surface-subtle)',
-                      opacity: disabledByLimit ? 0.5 : 1,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                      <span
-                        style={{
-                          width: 30,
-                          height: 30,
-                          borderRadius: 9,
-                          display: 'inline-flex',
+                          padding: '9px 12px',
+                          borderRadius: 10,
+                          background: 'var(--bg-primary)',
+                          border: '1px solid var(--border-color)',
+                          display: 'flex',
                           alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 12,
-                          fontWeight: 800,
-                          flexShrink: 0,
-                          background: slot.isHost
-                            ? '#1c1c1c'
-                            : slot.occupied
-                            ? 'var(--accent-soft)'
-                            : 'rgba(28,28,28,0.06)',
-                          color: slot.isHost
-                            ? '#fff'
-                            : slot.occupied
-                            ? 'var(--accent-text)'
-                            : 'var(--text-muted)',
+                          justifyContent: 'space-between',
+                          gap: 8,
                         }}
                       >
-                        P{slot.seat}
-                      </span>
-
-                      {slot.occupied ? (
                         <div style={{ minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                              {slot.playerName}
-                            </span>
-                            {slot.isHost && (
+                            <strong style={{ fontSize: 13 }}>P{slotIdx + 1} {player.name || `玩家 ${player.playerId}`}</strong>
+                            {player.isHost && (
                               <span
                                 style={{
                                   display: 'inline-flex',
@@ -1219,211 +1209,236 @@ export const RoomLobbyPage: React.FC = () => {
                                   gap: 3,
                                   fontSize: 10.5,
                                   fontWeight: 700,
-                                  padding: '1px 7px',
+                                  padding: '2px 7px',
                                   borderRadius: 999,
-                                  background: 'rgba(255, 196, 108, 0.28)',
-                                  color: '#92400e',
+                                  background: 'var(--accent-soft)',
+                                  color: 'var(--accent-text)',
                                 }}
                               >
-                                <Crown size={10} />
-                                {isZh ? '房主' : 'Host'}
+                                <Crown size={11} />
+                                {zh ? '房主' : 'Host'}
                               </span>
                             )}
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                              UID {slot.uid}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-                            {slot.characterName} · {slot.characterTitle}
-                          </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)' }}>
-                            {disabledByLimit
-                              ? (isZh ? `未开放（当前上限 ${room.config.maxPlayers} 人）` : `Closed (limit ${room.config.maxPlayers})`)
-                              : (isZh ? '等待队友加入空位…' : 'Open slot waiting for teammate...')}
-                          </div>
-                          {!disabledByLimit && (
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                              {isZh ? '点击右侧按钮可模拟占位加入' : 'Click Join to simulate teammate'}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Slot Actions */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                      {slot.occupied ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleSlotReady(slot.seat)}
-                            style={{
-                              padding: '4px 10px',
-                              borderRadius: 999,
-                              fontSize: 11.5,
-                              fontWeight: 700,
-                              cursor: slot.isHost ? 'default' : 'pointer',
-                              border: 'none',
-                              background: slot.ready ? 'var(--success-bg)' : 'var(--warning-bg)',
-                              color: slot.ready ? 'var(--success)' : 'var(--warning)',
-                            }}
-                          >
-                            {slot.isHost
-                              ? (isZh ? '房主已就绪' : 'Host Ready')
-                              : slot.ready
-                              ? (isZh ? '已准备' : 'Ready')
-                              : (isZh ? '未准备' : 'Not Ready')}
-                          </button>
-                          {!slot.isHost && (
-                            <button
-                              type="button"
-                              onClick={() => handleClearSlot(slot.seat)}
+                            {player.isBot && (
+                              <span
+                                style={{
+                                  fontSize: 10.5,
+                                  fontWeight: 700,
+                                  padding: '2px 7px',
+                                  borderRadius: 999,
+                                  background: 'rgba(100,116,139,0.14)',
+                                  color: 'var(--text-secondary)',
+                                }}
+                              >
+                                {zh ? '人机' : 'Bot'}
+                              </span>
+                            )}
+                            <span
                               style={{
-                                padding: '4px 8px',
-                                borderRadius: 8,
                                 fontSize: 11,
-                                cursor: 'pointer',
-                                border: '1px solid var(--glass-border)',
-                                background: 'transparent',
-                                color: 'var(--text-muted)',
+                                color: player.ready ? 'var(--success)' : 'var(--text-secondary)',
+                                fontWeight: 600,
                               }}
                             >
-                              {isZh ? '移出' : 'Remove'}
-                            </button>
-                          )}
-                        </>
-                      ) : !disabledByLimit ? (
-                        <button
-                          type="button"
-                          onClick={() => handleJoinEmptySlot(slot.seat)}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            padding: '5px 10px',
-                            borderRadius: 999,
-                            fontSize: 11.5,
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            border: '1px solid var(--accent-border)',
-                            background: 'var(--accent-soft)',
-                            color: 'var(--accent-text)',
-                          }}
-                        >
-                          <Plus size={12} />
-                          {isZh ? '占位加入' : 'Join'}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
+                              {player.isHost ? (zh ? '房主就绪' : 'Host') : player.ready ? (zh ? '已准备' : 'Ready') : (zh ? '未准备' : 'Not Ready')}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                            UID {player.playerId}{player.level > 0 ? ` · Lv.${player.level}` : ''}
+                          </div>
+                        </div>
+
+                        {isRoomHost && !player.isSelf && !player.isHost && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            disabled={busyAction !== null}
+                            style={{ fontSize: 11.5, padding: '4px 9px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                            onClick={() => void handleKickInGame(player.playerId, player.name)}
+                          >
+                            <UserX size={12} />
+                            {zh ? '移出' : 'Kick'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Optional Read-Only Official Lobby Browser */}
+          <section className="card" style={{ padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+                {zh ? '官方实时大厅与房号核查（只读）' : 'Official Lobby Browser (Read-Only)'}
+              </h2>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={!account || lobbyLoading}
+                style={{ fontSize: 12, padding: '5px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                onClick={() => void refreshLobby(lobbyModeId, true)}
+              >
+                <RefreshCw size={13} />
+                {lobbyLoading ? (zh ? '拉取中…' : 'Loading…') : (zh ? '刷新列表' : 'Refresh')}
+              </button>
+            </div>
+
+            <form onSubmit={(e) => void handleSearchRoom(e)} style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder={zh ? '输入官方数字房间号查询…' : 'Enter numeric Room ID…'}
+                value={searchRoomId}
+                onChange={(e) => setSearchRoomId(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: '7px 10px',
+                  borderRadius: 9,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12.5,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              />
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={!account || busyAction !== null}
+                style={{ fontSize: 12.5, padding: '7px 14px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+              >
+                <Search size={14} />
+                {zh ? '查房' : 'Search'}
+              </button>
+            </form>
+
+            {searchResult && (
+              <div
+                style={{
+                  padding: '9px 12px',
+                  borderRadius: 10,
+                  marginBottom: 10,
+                  fontSize: 12.5,
+                  background: searchResult.found ? 'var(--success-bg)' : 'var(--bg-primary)',
+                  color: searchResult.found ? 'var(--success)' : 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                }}
+              >
+                <span>
+                  {searchResult.found
+                    ? `房间 #${searchResult.roomId} 在官方等待大厅中（${searchResult.isPwd ? '设有密码' : '公开无需密码'}）`
+                    : searchResult.error || `未找到房间 #${searchResult.roomId}`}
+                </span>
+                {searchResult.found && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11.5, padding: '3px 9px' }}
+                    onClick={() => void copyText(`search-${searchResult.roomId}`, searchResult.roomId, '房间号')}
+                  >
+                    {zh ? '复制房号' : 'Copy'}
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {OFFICIAL_MODES.map((m) => {
+                const selected = m.id === lobbyModeId;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={!account}
+                    onClick={() => {
+                      setLobbyModeId(m.id);
+                      void refreshLobby(m.id, false);
+                    }}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: selected ? 700 : 500,
+                      padding: '5px 10px',
+                      borderRadius: 999,
+                      border: selected ? '1.5px solid var(--accent-border)' : '1px solid var(--border-color)',
+                      background: selected ? 'var(--accent-soft)' : 'var(--bg-primary)',
+                      color: selected ? 'var(--accent-text)' : 'var(--text-secondary)',
+                      cursor: account ? 'pointer' : 'default',
+                    }}
+                  >
+                    {zh ? m.name : m.enName}
+                  </button>
                 );
               })}
             </div>
 
-            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 10, textAlign: 'right' }}>
-              {room.updatedAtLabel}
-            </div>
-          </section>
-
-          {/* Cross-Platform Link Placeholder Card (Mobile + QQ Bot) */}
-          <section className="card" style={{ marginBottom: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Eye size={17} color="var(--accent)" />
-                <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>
-                  {isZh ? '手机端 / QQ Bot 跨端联动占位' : 'Mobile & QQ Bot Sync Placeholders'}
-                </h2>
+            {!account ? (
+              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                {zh ? '如需查看官方大厅列表，可先在「游戏账号」中绑定账号（不影响游戏内直接建房）。' : 'Optional: bind a game account to browse official waiting rooms.'}
               </div>
-              <button
-                type="button"
-                onClick={() => setShowQqPreview((v) => !v)}
-                style={{
-                  border: '1px solid var(--glass-border)',
-                  background: 'var(--glass-surface-subtle)',
-                  color: 'var(--text-secondary)',
-                  fontSize: 11.5,
-                  fontWeight: 600,
-                  borderRadius: 8,
-                  padding: '4px 9px',
-                  cursor: 'pointer',
-                }}
-              >
-                {showQqPreview ? (isZh ? '收起卡片预览' : 'Hide Card') : (isZh ? '展开卡片预览' : 'Show Card')}
-              </button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: showQqPreview ? 12 : 0 }}>
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 12,
-                  background: 'var(--glass-surface-subtle)',
-                  border: '1px solid var(--glass-border)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700 }}>
-                  <Smartphone size={14} />
-                  {isZh ? '手机助手 · 开房组队页' : 'Android · Room Tab'}
-                </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {isZh
-                    ? '占位接口：待接入 Hub/云端房间同步（当前可在手机端「开房组队」标签页预览相同模板）。'
-                    : 'Placeholder for live cloud room sync; interactive preview available in Android tab.'}
-                </div>
+            ) : lobbyRooms.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', padding: '12px 0' }}>
+                {lobbyLoading
+                  ? (zh ? '正在向官方服务器查询大厅列表…' : 'Querying official lobby…')
+                  : (zh ? '该模式当前暂无正在等待开局的公开房间。' : 'No waiting rooms found in this mode.')}
               </div>
-
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 12,
-                  background: 'var(--glass-surface-subtle)',
-                  border: '1px solid var(--glass-border)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700 }}>
-                  <MessageSquare size={14} />
-                  {isZh ? 'QQ Bot · 趴开房 / 趴房间' : 'QQ Bot · Room Commands'}
-                </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {isZh
-                    ? '占位指令：趴开房、趴房间、趴组队、趴加入（当前仅展示模板消息卡，未改线上逻辑）。'
-                    : 'Planned commands: 趴开房 / 趴房间 / 趴组队 (preview spec staged only).'}
-                </div>
-              </div>
-            </div>
-
-            {showQqPreview && (
-              <div
-                style={{
-                  padding: '12px 14px',
-                  borderRadius: 12,
-                  background: '#faf9f5',
-                  border: '1px solid var(--glass-border)',
-                  fontSize: 12,
-                  lineHeight: 1.6,
-                }}
-              >
-                <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  {isZh ? 'QQ 群 Markdown 卡片消息预览（Mock）' : 'QQ Bot Markdown Card Mockup'}
-                </div>
-                <div style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                  {[
-                    `**🎮 星枢组队大厅 · 房间 #${room.roomCode}**`,
-                    `> 模式：${room.config.mode} ｜ 地图：${activeRoomMap.name}${room.config.difficulty ? `（${room.config.difficulty}）` : ''} ｜ 思考：${room.config.thinkTime}${room.config.roomTag ? ` ｜ 标签：${room.config.roomTag}` : ''} ｜ ${occupiedCount}/${room.config.maxPlayers} 人`,
-                    `> 状态：${badge.label}${activeEffectivePrivacy === 'PASSWORD' ? ` ｜ 密码：${sanitizeNumericPassword(room.config.password)}` : ' ｜ 公开房'}${activeZeroYield ? ' ｜ ⚠️ 0收益（自托管娱乐模式）' : ' ｜ 官方现有模式'}`,
-                    ...room.slots
-                      .filter((s) => s.seat <= room.config.maxPlayers)
-                      .map((s) =>
-                        s.occupied
-                          ? `> P${s.seat} ${s.isHost ? '👑' : s.ready ? '✅' : '⏳'} ${s.playerName}（${s.characterName}）`
-                          : `> P${s.seat} ▫️ 空位待加入`,
-                      ),
-                    `[复制房间号]  [一键加入 #${room.roomCode}]  [刷新队伍状态]`,
-                  ].join('\n')}
-                </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto', paddingRight: 4 }}>
+                {lobbyRooms.map((item) => (
+                  <div
+                    key={item.roomId}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      background: 'var(--bg-primary)',
+                      border: '1px solid var(--border-color)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <strong style={{ fontSize: 13 }}>{item.name || `房间 ${item.roomId}`}</strong>
+                        {item.hasPwd && <Lock size={12} style={{ color: 'var(--text-secondary)' }} />}
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '1px 7px',
+                            borderRadius: 999,
+                            background: 'var(--accent-soft)',
+                            color: 'var(--accent-text)',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {item.playerCount}/{item.maxPlayers}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>
+                        #{item.roomId} · {item.mapName}
+                        {item.difficultyName ? ` · ${item.difficultyName}` : ''}
+                        {item.speedName ? ` · ${item.speedName}局` : ''}
+                        {item.roomLabelName && item.roomLabelName !== '无标签' ? ` · [${item.roomLabelName}]` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: 11.5, padding: '5px 10px', flexShrink: 0 }}
+                      onClick={() => void copyText(`lobby-${item.roomId}`, item.roomId, '房间号')}
+                    >
+                      {copiedKey === `lobby-${item.roomId}` ? (zh ? '已复制' : 'Copied') : (zh ? '复制房号' : 'Copy')}
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </section>

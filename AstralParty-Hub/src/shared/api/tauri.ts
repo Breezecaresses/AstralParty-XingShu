@@ -415,6 +415,8 @@ export const api = {
     safeInvoke<WorkshopInstallResult>('workshop_download_and_install', { request }),
   workshopRestoreMod: (installationId: string, modId: string) =>
     safeInvoke<string>('workshop_restore_mod', { installationId, modId }),
+  workshopToggleMod: (installationId: string, modId: string, enabled: boolean) =>
+    safeInvoke<WorkshopLocalItemState>('workshop_toggle_mod', { installationId, modId, enabled }),
 
   // Drag-and-drop Community Mod / Package Inspector & Installer
   inspectDroppedMod: (installationId: string, sourcePath: string) =>
@@ -423,10 +425,16 @@ export const api = {
     safeInvoke<DroppedModInstallResult>('install_dropped_mod', { installationId, sourcePath, includeCatalog }),
   restoreDroppedMod: (installationId: string, modId: string) =>
     safeInvoke<string>('restore_dropped_mod', { installationId, modId }),
+  toggleDroppedMod: (installationId: string, modId: string, enabled: boolean) =>
+    safeInvoke<DroppedModRecord>('toggle_dropped_mod', { installationId, modId, enabled }),
   listDroppedMods: (installationId: string) =>
     safeInvoke<DroppedModRecord[]>('list_dropped_mods', { installationId }, []),
   stageDroppedModBytes: (fileName: string, bytes: number[]) =>
     safeInvoke<string>('stage_dropped_mod_bytes', { fileName, bytes }),
+  stageDroppedModRaw: (fileName: string, data: Uint8Array) =>
+    invoke<string>('stage_dropped_mod_raw', data, {
+      headers: { 'x-file-name': encodeURIComponent(fileName) },
+    }),
 };
 
 export interface DroppedModTargetMatch {
@@ -494,30 +502,16 @@ export interface DroppedModRecord {
   backupId?: string | null;
 }
 
-export interface WorkshopDownloadFilePayload {
-  target: string;
-  sha256: string;
-  originalSha256?: string;
-  size?: number;
-  payloadUrl?: string | null;
-}
-
 export interface WorkshopInstallRequestPayload {
   installationId: string;
-  apiBase: string;
   modId: string;
-  name: string;
-  installKind: string;
-  gameVersion?: string;
-  platforms?: string[];
-  downloadUrl?: string | null;
-  sha256?: string;
-  sizeBytes?: number;
-  files?: WorkshopDownloadFilePayload[];
 }
 
 export interface WorkshopLocalItemState {
   modId: string;
+  name?: string;
+  source?: 'library' | 'workshop';
+  linkedDropId?: string | null;
   phase: string;
   installKind: string;
   transactionId?: string | null;

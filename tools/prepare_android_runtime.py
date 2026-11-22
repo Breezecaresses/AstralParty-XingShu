@@ -45,7 +45,7 @@ def main():
     bin_dir = out / "bin"
     subprocess.run([str(shared.MSBUILD), str(ROOT / "XingShu-Dev/src/XingShu.Runtime/XingShu.Runtime.csproj"),
                     "/t:Rebuild", "/nologo", "/v:q", "/p:Configuration=Release",
-                    "/p:AdditionalDefineConstants=XINGSHU_ANDROID_PREVIEW",
+                    "/p:AdditionalDefineConstants=XINGSHU_ANDROID_PREVIEW%3BXINGSHU_MODULAR_LAUNCHER",
                     "/p:AstralPartyRuntimePath=" + str(runtime_path),
                     "/p:OutputPath=" + str(bin_dir) + "/",
                     "/p:IntermediateOutputPath=" + str(out / "obj") + "/"], check=True)
@@ -60,19 +60,23 @@ def main():
     shared.OUT.mkdir(exist_ok=True)
     patcher, bootstrap = shared.build_bootstrap()
     boot_path = out / "AstralParty.Runtime.bootstrap.dll"
+    thinking_path = out / "AstralParty.Runtime.thinking.dll"
     patched_path = out / "AstralParty.Runtime.dll"
     subprocess.run([str(patcher), str(runtime_path), str(bootstrap), str(boot_path),
                     shared.sha(runtime_path.read_bytes()), shared.LEGACY['bootstrapType']], check=True)
     subprocess.run([shared.PWSH, "-NoProfile", "-File", str(ROOT / "tools/patch_thinking_time.ps1"),
-                    "-InputDll", str(boot_path), "-OutputDll", str(patched_path),
+                    "-InputDll", str(boot_path), "-OutputDll", str(thinking_path),
                     "-HooksDll", str(hooks_path)], check=True)
     subprocess.run([shared.PWSH, "-NoProfile", "-File", str(ROOT / "tools/verify_thinking_time.ps1"),
-                    "-Before", str(boot_path), "-After", str(patched_path)], check=True)
+                    "-Before", str(boot_path), "-After", str(thinking_path)], check=True)
+    subprocess.run([shared.PWSH, "-NoProfile", "-File", str(ROOT / "tools/patch_modimg_loader.ps1"),
+                    "-InputDll", str(thinking_path), "-OutputDll", str(patched_path),
+                    "-HooksDll", str(hooks_path)], check=True)
     runtime.m_Script = patched_path.read_bytes().decode("utf8", errors="surrogateescape")
     runtime.save()
     shared.put_hooks(env, hooks)
     candidate = out / "__data"
-    candidate.write_bytes(env.file.save())
+    candidate.write_bytes(env.file.save(packer="lz4"))
     verified = UnityPy.load(str(candidate))
     after = shared.assets(verified)
     assert set(before) | {99992000} == set(after), "Unexpected assets added/removed"

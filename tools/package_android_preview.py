@@ -22,6 +22,22 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def verify_apk_payload_binding(phone_apk, candidate_sha256, original_sha256):
+    """Verify the APK pins the exact candidate and vanilla hashes via bundled assets or DEX constants."""
+    with zipfile.ZipFile(phone_apk) as apk:
+        names = set(apk.namelist())
+        if 'assets/candidate.__data' in names or 'assets/vanilla.__data' in names:
+            assert 'assets/candidate.__data' in names and 'assets/vanilla.__data' in names, 'Incomplete bundled APK payloads'
+            assert hashlib.sha256(apk.read('assets/candidate.__data')).hexdigest() == candidate_sha256, 'APK bundled candidate mismatch'
+            assert hashlib.sha256(apk.read('assets/vanilla.__data')).hexdigest() == original_sha256, 'APK bundled vanilla mismatch'
+            return
+        dex_names = sorted(n for n in names if '/' not in n and n.endswith('.dex'))
+        assert dex_names, 'APK lacks both bundled payloads and DEX bytecode'
+        dex_bytes = b''.join(apk.read(n) for n in dex_names)
+        assert candidate_sha256.lower().encode('ascii') in dex_bytes, 'Pure launcher APK lacks candidate SHA-256 binding'
+        assert original_sha256.lower().encode('ascii') in dex_bytes, 'Pure launcher APK lacks vanilla SHA-256 binding'
+
+
 def verify_android_archive(archive, phone_apk):
     """Bind the distribution ZIP, manual payloads and updater APK without extracting anything."""
     with zipfile.ZipFile(archive) as package:
@@ -45,9 +61,7 @@ def verify_android_archive(archive, phone_apk):
             assert hashlib.sha256(read(name)).hexdigest() == manifest[key], 'Manual payload differs: ' + name
         manual = json.loads(read(f'{MANUAL}/文件校验.json'))
         assert manual == {**manifest, 'candidate': '__data', 'vanilla': '官方原版.__data'}, 'Manual metadata differs'
-        with zipfile.ZipFile(phone_apk) as apk:
-            assert hashlib.sha256(apk.read('assets/candidate.__data')).hexdigest() == manifest['candidateSha256']
-            assert hashlib.sha256(apk.read('assets/vanilla.__data')).hexdigest() == manifest['originalSha256']
+        verify_apk_payload_binding(phone_apk, manifest['candidateSha256'], manifest['originalSha256'])
         checksums = {}
         for line in read('SHA256SUMS.txt').decode('utf8').splitlines():
             digest, name = line.split('  ', 1)

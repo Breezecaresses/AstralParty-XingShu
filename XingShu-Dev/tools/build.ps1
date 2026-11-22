@@ -23,8 +23,8 @@ if (-not (Test-Path $msbuild)) {
     Write-Error "MSBuild.exe could not be located."
 }
 
-Write-Host "Starting build for XingShu.Runtime [$Configuration] using MSBuild..." -ForegroundColor Cyan
-& $msbuild $projPath /t:Rebuild /p:Configuration=$Configuration /v:m /nologo
+Write-Host "Starting build for XingShu.Runtime [$Configuration] using MSBuild (Modular Launcher)..." -ForegroundColor Cyan
+& $msbuild $projPath /t:Rebuild /p:Configuration=$Configuration /p:AdditionalDefineConstants=XINGSHU_MODULAR_LAUNCHER /v:m /nologo
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Build failed with exit code $LASTEXITCODE"
 }

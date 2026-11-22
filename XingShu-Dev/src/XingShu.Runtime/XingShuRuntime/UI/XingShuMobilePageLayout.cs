@@ -105,8 +105,8 @@ namespace XingShuRuntime.UI
             }
             RemoveLayout(go);
             var flow = go.AddComponent<VerticalLayoutGroup>();
-            flow.padding = content ? new RectOffset(2, 2, 4, 24) : new RectOffset(18, 18, 16, 16);
-            flow.spacing = content ? 16 : 12;
+            flow.padding = content ? new RectOffset(4, 6, 4, 32) : new RectOffset(16, 16, 14, 14);
+            flow.spacing = content ? 14 : 10;
             flow.childControlWidth = flow.childControlHeight = true;
             flow.childForceExpandWidth = true;
             flow.childForceExpandHeight = false;
@@ -125,6 +125,21 @@ namespace XingShuRuntime.UI
                     continue;
                 }
                 child.SetAsLastSibling();
+                if (item.name.StartsWith("MetricPair_", System.StringComparison.Ordinal) && child.childCount == 2)
+                {
+                    buttonRow = null;
+                    Element(item, 32f);
+                    for (int t = 0; t < child.childCount; t++)
+                    {
+                        var pairText = child.GetChild(t).GetComponent<Text>();
+                        if (pairText != null)
+                        {
+                            Readable(pairText);
+                            pairText.alignment = t == 1 ? TextAnchor.MiddleRight : TextAnchor.MiddleLeft;
+                        }
+                    }
+                    continue;
+                }
                 var button = item.GetComponent<Button>();
                 if (button != null)
                 {
@@ -203,7 +218,7 @@ namespace XingShuRuntime.UI
                 if (label != null)
                 {
                     label.anchorMin = Vector2.zero; label.anchorMax = Vector2.one;
-                    label.offsetMin = new Vector2(4, 0); label.offsetMax = new Vector2(-112, 0);
+                    label.offsetMin = new Vector2(4, 0); label.offsetMax = new Vector2(-58, 0);
                 }
                 var track = go.transform.Find("Background") as RectTransform;
                 if (track != null)
@@ -211,9 +226,15 @@ namespace XingShuRuntime.UI
                     track.anchorMin = track.anchorMax = new Vector2(1, .5f);
                     track.pivot = new Vector2(1, .5f);
                     track.anchoredPosition = new Vector2(-8, 0);
-                    // Scale the track as a unit so existing thumb callbacks keep
-                    // their correct on/off endpoints for both switch variants.
-                    track.localScale = Vector3.one * 1.4f;
+                    track.localScale = Vector3.one;
+                    track.sizeDelta = new Vector2(36f, 36f);
+                    var checkRt = track.Find("Checkmark") as RectTransform;
+                    if (checkRt != null)
+                    {
+                        checkRt.anchorMin = checkRt.anchorMax = checkRt.pivot = new Vector2(0.5f, 0.5f);
+                        checkRt.anchoredPosition = Vector2.zero;
+                        checkRt.sizeDelta = new Vector2(24f, 24f);
+                    }
                 }
                 return;
             }

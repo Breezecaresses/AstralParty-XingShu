@@ -11,6 +11,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.channels.FileLock;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,6 +29,9 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipException;
+import java.util.zip.ZipFile;
 
 /** Multi-channel privileged installer engine running under ADB (UID 2000) or Shizuku. */
 final class InstallerEngine {
@@ -209,14 +214,29 @@ final class InstallerEngine {
             probe(target);
             if (!backups.isDirectory() && !backups.mkdirs()) throw new IOException("无法创建备份目录");
 
-            original = new File(backups, "vanilla.staging");
-            receive(vanilla, original, PayloadSpec.VANILLA);
-            staged = new File(backups, "candidate.staging");
-            if (!restore) receive(candidate, staged, PayloadSpec.PATCH);
-
             File backup = new File(backups, "official.__data");
-            if (!backup.exists()) copy(original, backup);
-            if (!hash(backup).equals(PayloadSpec.VANILLA)) throw new IOException("原版备份校验失败，已停止");
+            if (restore) {
+                original = new File(backups, "vanilla.staging");
+                if (vanilla != null) {
+                    receive(vanilla, original, PayloadSpec.VANILLA);
+                    if (!backup.exists() || !hash(backup).equals(PayloadSpec.VANILLA)) copy(original, backup);
+                } else if (backup.isFile() && hash(backup).equals(PayloadSpec.VANILLA)) {
+                    copy(backup, original);
+                } else {
+                    throw new IOException("缺少官方原版备份，请联网下载后重试还原");
+                }
+                if (!hash(backup).equals(PayloadSpec.VANILLA)) throw new IOException("原版备份校验失败，已停止");
+            } else {
+                staged = new File(backups, "candidate.staging");
+                receive(candidate, staged, PayloadSpec.PATCH);
+                if (vanilla != null) {
+                    original = new File(backups, "vanilla.staging");
+                    receive(vanilla, original, PayloadSpec.VANILLA);
+                    if (!backup.exists() || !hash(backup).equals(PayloadSpec.VANILLA)) copy(original, backup);
+                } else if (before.equals(PayloadSpec.VANILLA) && (!backup.isFile() || !hash(backup).equals(PayloadSpec.VANILLA))) {
+                    copy(target, backup);
+                }
+            }
 
             snapshot = CacheConflict.archive(target, backups, before);
             if (!hash(snapshot).equals(before)) throw new IOException("备份期间缓存发生变化，未安装");
@@ -529,6 +549,696 @@ final class InstallerEngine {
             return "OK";
         } catch (Exception e) {
             return "ERR:" + friendly(e);
+        }
+    }
+
+    private static final int MAX_MOD_ENTRIES = 2000;
+    private static final long MAX_MOD_UNPACKED_BYTES = 256L * 1024L * 1024L;
+    private static final Pattern XSPKG_MODULE_TARGET_PATTERN = Pattern.compile(
+        "^xingshu/plugins/xingshu\\.launcher\\.[a-z0-9-]{1,64}\\.module$"
+    );
+
+    String installModPack(String packageName, String metaJson, InputStream modZip) {
+        File stagedZip = null;
+        try {
+            if (modZip == null) throw new IOException("缺少 Mod 压缩包输入流");
+            String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+            Map<String, Object> metaMap = MiniJson.parseObject(metaJson);
+            String modId = MiniJson.stringField(metaMap, "id");
+            if (!AndroidWorkshopClient.isSafeModId(modId)) throw new IllegalArgumentException("模组 ID 无效");
+            String expectedSha = MiniJson.stringField(metaMap, "sha256").toLowerCase(Locale.ROOT);
+            if (!PayloadDownloadManager.isValidSha256(expectedSha)) throw new IllegalArgumentException("缺少有效的 Mod SHA-256");
+
+            File backups = GamePackageCatalog.backupRoot(pkg);
+            if (!backups.isDirectory() && !backups.mkdirs()) throw new IOException("无法创建模组备份目录");
+            try (RandomAccessFile lockFile = new RandomAccessFile(new File(backups, "install.lock"), "rw");
+                 FileLock ignored = lockFile.getChannel().lock()) {
+                File filesRoot = GamePackageCatalog.filesRoot(pkg);
+                if (!filesRoot.isDirectory()) {
+                    throw new IOException("未找到该渠道游戏数据目录，请先打开一次游戏后再安装 Mod。");
+                }
+                stagedZip = new File(backups, "mod.staging.zip");
+                receive(modZip, stagedZip, expectedSha);
+
+                String requestedKind = MiniJson.stringField(metaMap, "installKind");
+                boolean isXspkg = "xspkg".equalsIgnoreCase(requestedKind) || hasXspkgManifest(stagedZip);
+                String actualKind = isXspkg ? "xspkg" : "modimg";
+
+                List<String> installedFiles;
+                String targetDirDisplay;
+                if (isXspkg) {
+                    installedFiles = installXspkgArchive(stagedZip, filesRoot);
+                    targetDirDisplay = new File(filesRoot, "xingshu/plugins").getAbsolutePath();
+                } else {
+                    File modImgDir = new File(filesRoot, "modimg");
+                    if (!modImgDir.isDirectory() && !modImgDir.mkdirs()) {
+                        throw new IOException("无法创建游戏 modimg 目录：" + modImgDir.getAbsolutePath());
+                    }
+                    installedFiles = extractModPackArchive(stagedZip, modImgDir);
+                    ensureStaticPortraitsModuleEnabled(filesRoot);
+                    targetDirDisplay = modImgDir.getAbsolutePath();
+                }
+
+                File receiptsDir = new File(backups, "mods");
+                if (!receiptsDir.isDirectory() && !receiptsDir.mkdirs()) {
+                    throw new IOException("无法创建模组记录目录");
+                }
+                Map<String, Object> receipt = new LinkedHashMap<>();
+                receipt.put("id", modId);
+                receipt.put("name", MiniJson.stringField(metaMap, "name"));
+                receipt.put("version", MiniJson.stringField(metaMap, "version"));
+                receipt.put("sha256", expectedSha);
+                receipt.put("installKind", actualKind);
+                receipt.put("installedAt", System.currentTimeMillis());
+                receipt.put("files", installedFiles);
+                writeTextFileAtomic(new File(receiptsDir, modId + ".json"), MiniJson.stringify(receipt));
+
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("ok", Boolean.TRUE);
+                resp.put("modId", modId);
+                resp.put("installKind", actualKind);
+                resp.put("fileCount", installedFiles.size());
+                resp.put("modImgDir", targetDirDisplay);
+                return MiniJson.stringify(resp);
+            }
+        } catch (Exception e) {
+            return MiniJson.stringify(Collections.singletonMap("error", friendly(e)));
+        } finally {
+            if (stagedZip != null) stagedZip.delete();
+        }
+    }
+
+    String listInstalledMods(String packageName) {
+        try {
+            String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+            File filesRoot = GamePackageCatalog.filesRoot(pkg);
+            File modImgDir = new File(filesRoot, "modimg");
+            File pluginsDir = new File(filesRoot, "xingshu/plugins");
+            File backups = GamePackageCatalog.backupRoot(pkg);
+            File receiptsDir = new File(backups, "mods");
+
+            List<Map<String, Object>> mods = new ArrayList<>();
+            if (receiptsDir.isDirectory()) {
+                File[] entries = receiptsDir.listFiles();
+                if (entries != null) {
+                    Arrays.sort(entries, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+                    for (File f : entries) {
+                        if (!f.isFile() || !f.getName().endsWith(".json")) continue;
+                        try {
+                            Map<String, Object> rec = MiniJson.parseObject(readUtf8File(f, 1024 * 1024));
+                            String modId = MiniJson.stringField(rec, "id");
+                            if (!AndroidWorkshopClient.isSafeModId(modId)) continue;
+                            String kind = MiniJson.stringField(rec, "installKind");
+                            boolean isXspkg = "xspkg".equalsIgnoreCase(kind);
+                            Object rawFiles = rec.get("files");
+                            int declared = 0;
+                            int present = 0;
+                            if (rawFiles instanceof List<?>) {
+                                for (Object rf : (List<?>) rawFiles) {
+                                    if (rf == null) continue;
+                                    declared++;
+                                    String rel = String.valueOf(rf).replace('\\', '/');
+                                    if (isXspkg) {
+                                        if (isSafeXspkgTarget(rel) && new File(filesRoot, rel).isFile()) {
+                                            present++;
+                                        }
+                                    } else {
+                                        String safeMod = sanitizeModImgRelative(rel);
+                                        if (safeMod != null && new File(modImgDir, safeMod).isFile()) {
+                                            present++;
+                                        }
+                                    }
+                                }
+                            }
+                            Map<String, Object> summary = new LinkedHashMap<>();
+                            summary.put("id", modId);
+                            summary.put("name", MiniJson.stringField(rec, "name"));
+                            summary.put("version", MiniJson.stringField(rec, "version"));
+                            summary.put("sha256", MiniJson.stringField(rec, "sha256"));
+                            summary.put("installKind", isXspkg ? "xspkg" : "modimg");
+                            summary.put("declaredCount", declared);
+                            summary.put("presentCount", present);
+                            mods.add(summary);
+                        } catch (Exception ignored) { }
+                    }
+                }
+            }
+
+            File disabledDir = new File(filesRoot, ".xingshu-mods/disabled-modules");
+            Map<String, String> officialModules = scanOfficialModulesStatus(pluginsDir, disabledDir);
+
+            int totalPng = countPngFiles(modImgDir);
+            int activeModules = countModuleFiles(pluginsDir);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", Boolean.TRUE);
+            out.put("mods", mods);
+            out.put("officialModules", officialModules);
+            out.put("totalPngCount", totalPng);
+            out.put("activeModuleCount", activeModules);
+            out.put("modImgDir", modImgDir.getAbsolutePath());
+            return MiniJson.stringify(out);
+        } catch (Exception e) {
+            return MiniJson.stringify(Collections.singletonMap("error", friendly(e)));
+        }
+    }
+
+    String removeModPack(String packageName, String modId) {
+        try {
+            String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+            if (!AndroidWorkshopClient.isSafeModId(modId)) throw new IllegalArgumentException("模组标识无效");
+            File backups = GamePackageCatalog.backupRoot(pkg);
+            if (!backups.isDirectory() && !backups.mkdirs()) throw new IOException("无法访问备份目录");
+            try (RandomAccessFile lockFile = new RandomAccessFile(new File(backups, "install.lock"), "rw");
+                 FileLock ignored = lockFile.getChannel().lock()) {
+                File filesRoot = GamePackageCatalog.filesRoot(pkg);
+                File modImgDir = new File(filesRoot, "modimg");
+                File receiptsDir = new File(backups, "mods");
+                File targetReceipt = new File(receiptsDir, modId + ".json");
+                if (!targetReceipt.isFile()) {
+                    return MiniJson.stringify(Collections.singletonMap("error", "未找到该模组的安装记录"));
+                }
+
+                Map<String, Object> rec = MiniJson.parseObject(readUtf8File(targetReceipt, 1024 * 1024));
+                boolean isXspkg = "xspkg".equalsIgnoreCase(MiniJson.stringField(rec, "installKind"));
+
+                Set<String> keepByOthers = new LinkedHashSet<>();
+                File[] all = receiptsDir.listFiles();
+                if (all != null) {
+                    for (File other : all) {
+                        if (!other.isFile() || !other.getName().endsWith(".json") || other.equals(targetReceipt)) continue;
+                        try {
+                            Map<String, Object> oRec = MiniJson.parseObject(readUtf8File(other, 1024 * 1024));
+                            boolean oXspkg = "xspkg".equalsIgnoreCase(MiniJson.stringField(oRec, "installKind"));
+                            if (oXspkg != isXspkg) continue;
+                            Object oFiles = oRec.get("files");
+                            if (oFiles instanceof List<?>) {
+                                for (Object rf : (List<?>) oFiles) {
+                                    String raw = rf == null ? "" : String.valueOf(rf).replace('\\', '/');
+                                    String safe = isXspkg ? (isSafeXspkgTarget(raw) ? raw : null) : sanitizeModImgRelative(raw);
+                                    if (safe != null) keepByOthers.add(safe);
+                                }
+                            }
+                        } catch (Exception ignoredEx) { }
+                    }
+                }
+
+                Object rawFiles = rec.get("files");
+                int removed = 0;
+                File baseDir = isXspkg ? filesRoot : modImgDir;
+                if (rawFiles instanceof List<?> && baseDir.isDirectory()) {
+                    String canonRoot = baseDir.getCanonicalPath() + File.separator;
+                    for (Object rf : (List<?>) rawFiles) {
+                        String raw = rf == null ? "" : String.valueOf(rf).replace('\\', '/');
+                        String safe = isXspkg ? (isSafeXspkgTarget(raw) ? raw : null) : sanitizeModImgRelative(raw);
+                        if (safe == null || keepByOthers.contains(safe)) continue;
+                        File disk = new File(baseDir, safe).getCanonicalFile();
+                        if (disk.getPath().startsWith(canonRoot) && disk.isFile() && disk.delete()) {
+                            removed++;
+                        }
+                    }
+                }
+                targetReceipt.delete();
+
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("ok", Boolean.TRUE);
+                out.put("modId", modId);
+                out.put("installKind", isXspkg ? "xspkg" : "modimg");
+                out.put("removedFiles", removed);
+                return MiniJson.stringify(out);
+            }
+        } catch (Exception e) {
+            return MiniJson.stringify(Collections.singletonMap("error", friendly(e)));
+        }
+    }
+
+    String setOfficialModules(String packageName, String moduleIdsCsv, boolean enable, boolean remove) {
+        try {
+            String pkg = GamePackageCatalog.requireValidPackageName(packageName);
+            if (moduleIdsCsv == null || moduleIdsCsv.trim().isEmpty()) {
+                throw new IllegalArgumentException("请选择要操作的官方功能模块");
+            }
+            List<String> ids = new ArrayList<>();
+            for (String raw : moduleIdsCsv.split(",")) {
+                String clean = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+                if (clean.isEmpty()) continue;
+                if (!clean.matches("[a-z0-9-]{2,48}")) {
+                    throw new IllegalArgumentException("包含无效的模块标识：" + clean);
+                }
+                if (!ids.contains(clean)) ids.add(clean);
+            }
+            if (ids.isEmpty()) {
+                throw new IllegalArgumentException("未指定有效的功能模块");
+            }
+
+            File backups = GamePackageCatalog.backupRoot(pkg);
+            if (!backups.isDirectory() && !backups.mkdirs()) throw new IOException("无法访问备份目录");
+            try (RandomAccessFile lockFile = new RandomAccessFile(new File(backups, "install.lock"), "rw");
+                 FileLock ignored = lockFile.getChannel().lock()) {
+                if (running(pkg)) {
+                    throw new IOException("游戏仍在运行，请先退出游戏再调整官方模组。");
+                }
+                File filesRoot = GamePackageCatalog.filesRoot(pkg);
+                File pluginsDir = new File(filesRoot, "xingshu/plugins");
+                File disabledDir = new File(filesRoot, ".xingshu-mods/disabled-modules");
+                if (!remove) {
+                    if (enable && !pluginsDir.isDirectory() && !pluginsDir.mkdirs()) {
+                        throw new IOException("无法创建插件目录：" + pluginsDir.getAbsolutePath());
+                    }
+                    if (!enable && !disabledDir.isDirectory() && !disabledDir.mkdirs()) {
+                        throw new IOException("无法创建停用缓存目录：" + disabledDir.getAbsolutePath());
+                    }
+                }
+
+                int changed = 0;
+                for (String id : ids) {
+                    String fileName = "xingshu.launcher." + id + ".module";
+                    File activeFile = new File(pluginsDir, fileName);
+                    File disabledFile = new File(disabledDir, fileName);
+                    String expectedContent = "xingshu-module-v1:" + id + "\n";
+
+                    if (remove) {
+                        if (activeFile.isFile() && activeFile.delete()) changed++;
+                        if (disabledFile.isFile() && disabledFile.delete()) changed++;
+                    } else if (enable) {
+                        boolean needsWrite = !activeFile.isFile()
+                            || !expectedContent.equals(safeReadSmallUtf8(activeFile));
+                        if (needsWrite) {
+                            writeTextFileAtomic(activeFile, expectedContent);
+                            changed++;
+                        }
+                        if (disabledFile.isFile()) {
+                            disabledFile.delete();
+                        }
+                    } else {
+                        boolean needsWrite = !disabledFile.isFile()
+                            || !expectedContent.equals(safeReadSmallUtf8(disabledFile));
+                        if (needsWrite) {
+                            writeTextFileAtomic(disabledFile, expectedContent);
+                            changed++;
+                        }
+                        if (activeFile.isFile()) {
+                            activeFile.delete();
+                            if (!needsWrite) changed++;
+                        }
+                    }
+                }
+
+                Map<String, String> statusMap = scanOfficialModulesStatus(pluginsDir, disabledDir);
+                List<String> enabledIds = new ArrayList<>();
+                List<String> disabledIds = new ArrayList<>();
+                for (Map.Entry<String, String> entry : statusMap.entrySet()) {
+                    if ("enabled".equals(entry.getValue())) enabledIds.add(entry.getKey());
+                    else disabledIds.add(entry.getKey());
+                }
+
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("ok", Boolean.TRUE);
+                out.put("changedCount", changed);
+                out.put("activeModuleCount", countModuleFiles(pluginsDir));
+                out.put("officialModules", statusMap);
+                out.put("enabledIds", enabledIds);
+                out.put("disabledIds", disabledIds);
+                return MiniJson.stringify(out);
+            }
+        } catch (Exception e) {
+            return MiniJson.stringify(Collections.singletonMap("error", friendly(e)));
+        }
+    }
+
+    private static String safeReadSmallUtf8(File file) {
+        try {
+            if (!file.isFile() || file.length() > 4096) return "";
+            return readUtf8File(file, 4096);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static Map<String, String> scanOfficialModulesStatus(File pluginsDir, File disabledDir) {
+        Map<String, String> status = new LinkedHashMap<>();
+        collectModuleDir(disabledDir, "disabled", status);
+        collectModuleDir(pluginsDir, "enabled", status);
+        return status;
+    }
+
+    private static void collectModuleDir(File dir, String state, Map<String, String> out) {
+        if (dir == null || !dir.isDirectory()) return;
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        Arrays.sort(files, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+        String prefix = "xingshu.launcher.";
+        String suffix = ".module";
+        for (File f : files) {
+            if (!f.isFile()) continue;
+            String name = f.getName();
+            if (name.startsWith(prefix) && name.endsWith(suffix) && name.length() > prefix.length() + suffix.length()) {
+                String id = name.substring(prefix.length(), name.length() - suffix.length());
+                if (id.matches("[a-z0-9-]{2,48}")) {
+                    out.put(id, state);
+                }
+            }
+        }
+    }
+
+    static boolean isSafeXspkgTarget(String target) {
+        if (target == null || target.isEmpty()) return false;
+        String norm = target.replace('\\', '/');
+        return XSPKG_MODULE_TARGET_PATTERN.matcher(norm).matches();
+    }
+
+    private static boolean hasXspkgManifest(File zipFile) {
+        try (ZipFile zip = openModZip(zipFile)) {
+            return zip.getEntry("manifest.json") != null;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static void ensureStaticPortraitsModuleEnabled(File filesRoot) {
+        try {
+            File target = new File(filesRoot, "xingshu/plugins/xingshu.launcher.static-portraits.module");
+            if (target.isFile()) return;
+            File dir = target.getParentFile();
+            if (dir != null && !dir.isDirectory()) dir.mkdirs();
+            writeTextFileAtomic(target, "xingshu-module-v1:static-portraits\n");
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * Verifies manifest.json inside an official .xspkg optimization archive (schemaVersion, target allowlist,
+     * declared file size, and SHA-256 digest) and atomically writes validated .module descriptors to filesRoot.
+     */
+    static List<String> installXspkgArchive(File xspkgFile, File filesRoot) throws Exception {
+        if (!filesRoot.isDirectory() && !filesRoot.mkdirs()) {
+            throw new IOException("无法创建游戏数据根目录：" + filesRoot.getAbsolutePath());
+        }
+        String canonPluginsRoot = new File(filesRoot, "xingshu/plugins").getCanonicalPath() + File.separator;
+        List<String> writtenTargets = new ArrayList<>();
+        try (ZipFile zip = openModZip(xspkgFile)) {
+            ZipEntry manifestEntry = zip.getEntry("manifest.json");
+            if (manifestEntry == null || manifestEntry.isDirectory()) {
+                throw new IOException(".xspkg 缺少 manifest.json");
+            }
+            byte[] manifestBytes = readZipEntryBounded(zip, manifestEntry, 256 * 1024);
+            Map<String, Object> manifest = MiniJson.parseObject(new String(manifestBytes, StandardCharsets.UTF_8));
+            if (MiniJson.longField(manifest, "schemaVersion", 0L) != 1L) {
+                throw new IOException("不支持的 .xspkg 清单版本");
+            }
+            Object rawFiles = manifest.get("files");
+            if (!(rawFiles instanceof List<?>) || ((List<?>) rawFiles).isEmpty()) {
+                throw new IOException(".xspkg 清单缺少 files 条目");
+            }
+            List<?> filesList = (List<?>) rawFiles;
+            if (filesList.size() > 32) {
+                throw new IOException(".xspkg 包含文件数过多");
+            }
+            for (Object obj : filesList) {
+                if (!(obj instanceof Map<?, ?>)) throw new IOException(".xspkg files 条目格式无效");
+                @SuppressWarnings("unchecked")
+                Map<String, Object> entry = (Map<String, Object>) obj;
+                String srcRel = MiniJson.stringField(entry, "source").replace('\\', '/').replaceFirst("^\\./", "");
+                String targetRel = MiniJson.stringField(entry, "target").replace('\\', '/');
+                String sha = MiniJson.stringField(entry, "sha256").toLowerCase(Locale.ROOT);
+                long declaredSize = MiniJson.longField(entry, "size", 0L);
+
+                if (srcRel.isEmpty() || srcRel.contains("..") || srcRel.startsWith("/")) {
+                    throw new SecurityException("非法的 .xspkg source 路径：" + srcRel);
+                }
+                if (!isSafeXspkgTarget(targetRel)) {
+                    throw new SecurityException("非法的 .xspkg 目标路径（仅允许官方模块白名单）：" + targetRel);
+                }
+                if (!PayloadDownloadManager.isValidSha256(sha)) {
+                    throw new IOException(".xspkg 缺少有效的目标 SHA-256");
+                }
+                if (declaredSize <= 0L || declaredSize > 16384L) {
+                    throw new IOException(".xspkg 文件声明大小超出限制：" + declaredSize);
+                }
+
+                ZipEntry payloadEntry = zip.getEntry(srcRel);
+                if (payloadEntry == null || payloadEntry.isDirectory()) {
+                    throw new IOException(".xspkg 缺少源载荷：" + srcRel);
+                }
+                byte[] payloadBytes = readZipEntryBounded(zip, payloadEntry, 16384);
+                if (payloadBytes.length != declaredSize) {
+                    throw new IOException(".xspkg 文件实际大小与清单不符");
+                }
+                String actualSha = PayloadDownloadManager.hex(MessageDigest.getInstance("SHA-256").digest(payloadBytes));
+                if (!sha.equals(actualSha)) {
+                    throw new SecurityException(".xspkg 载荷 SHA-256 校验未通过");
+                }
+
+                File outFile = new File(filesRoot, targetRel).getCanonicalFile();
+                if (!outFile.getPath().startsWith(canonPluginsRoot)) {
+                    throw new SecurityException("目标路径越界：" + targetRel);
+                }
+                File parent = outFile.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("无法创建插件目录：" + parent.getAbsolutePath());
+                }
+                writeBytesAtomic(outFile, payloadBytes);
+                writtenTargets.add(targetRel);
+            }
+        }
+        return writtenTargets;
+    }
+
+    private static byte[] readZipEntryBounded(ZipFile zip, ZipEntry entry, int maxBytes) throws IOException {
+        try (InputStream in = zip.getInputStream(entry)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int total = 0;
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                total += n;
+                if (total > maxBytes) throw new IOException("压缩包内条目超出安全大小上限");
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        }
+    }
+
+    private static int countModuleFiles(File pluginsDir) {
+        if (pluginsDir == null || !pluginsDir.isDirectory()) return 0;
+        File[] files = pluginsDir.listFiles();
+        if (files == null) return 0;
+        int n = 0;
+        for (File f : files) {
+            if (f.isFile() && f.getName().endsWith(".module")) n++;
+        }
+        return n;
+    }
+
+    private static void writeBytesAtomic(File target, byte[] bytes) throws IOException {
+        File tmp = new File(target.getParentFile(), target.getName() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(bytes);
+            out.flush();
+            try { out.getFD().sync(); } catch (IOException ignored) { }
+        }
+        if (target.exists()) target.delete();
+        if (!tmp.renameTo(target)) {
+            copy(tmp, target);
+            tmp.delete();
+        }
+    }
+
+    static ZipFile openModZip(File zipFile) throws IOException {
+        ZipFile utf8 = null;
+        boolean needsGbk = false;
+        try {
+            utf8 = new ZipFile(zipFile, StandardCharsets.UTF_8);
+            Enumeration<? extends ZipEntry> en = utf8.entries();
+            while (en.hasMoreElements()) {
+                ZipEntry e = en.nextElement();
+                if (e.getName().indexOf('\uFFFD') >= 0) {
+                    needsGbk = true;
+                    break;
+                }
+            }
+            if (!needsGbk) return utf8;
+        } catch (ZipException | IllegalArgumentException malformed) {
+            needsGbk = true;
+        }
+        if (utf8 != null) {
+            try { utf8.close(); } catch (IOException ignored) { }
+        }
+        return new ZipFile(zipFile, Charset.forName("GBK"));
+    }
+
+    /**
+     * Normalizes an archive entry name such as "PE手机端(星枢)/modimg/UT_Event_30002.png"
+     * to a safe path relative to modimg/ ("UT_Event_30002.png"). Rejects Zip-Slip traversal,
+     * macOS metadata, and entries outside a modimg/ directory.
+     */
+    static String sanitizeModImgEntry(String rawEntryName) {
+        if (rawEntryName == null || rawEntryName.isEmpty()) return null;
+        if (rawEntryName.indexOf('\0') >= 0 || rawEntryName.indexOf(':') >= 0
+                || rawEntryName.indexOf('\r') >= 0 || rawEntryName.indexOf('\n') >= 0) {
+            return null;
+        }
+        String norm = rawEntryName.replace('\\', '/');
+        if (norm.endsWith("/")) return null;
+        String[] parts = norm.split("/");
+        int modimgIdx = -1;
+        for (int i = 0; i < parts.length; i++) {
+            String seg = parts[i];
+            if (seg.equals("..") || "__MACOSX".equalsIgnoreCase(seg)) return null;
+            if (seg.isEmpty() || seg.equals(".")) continue;
+            if ("modimg".equalsIgnoreCase(seg)) {
+                modimgIdx = i;
+            }
+        }
+        if (modimgIdx < 0 || modimgIdx >= parts.length - 1) return null;
+        StringBuilder rel = new StringBuilder();
+        int count = 0;
+        for (int i = modimgIdx + 1; i < parts.length; i++) {
+            String seg = parts[i];
+            if (seg.isEmpty() || seg.equals(".")) continue;
+            if (seg.equals("..") || seg.startsWith("._")) return null;
+            if (rel.length() > 0) rel.append('/');
+            rel.append(seg);
+            count++;
+        }
+        if (count == 0 || count > 4 || rel.length() > 200) return null;
+        String res = rel.toString();
+        if (!res.toLowerCase(Locale.ROOT).endsWith(".png")) return null;
+        return res;
+    }
+
+    static String sanitizeModImgRootFallback(String rawEntryName) {
+        if (rawEntryName == null || rawEntryName.isEmpty()) return null;
+        if (rawEntryName.indexOf('\0') >= 0 || rawEntryName.indexOf(':') >= 0
+                || rawEntryName.indexOf('\r') >= 0 || rawEntryName.indexOf('\n') >= 0) {
+            return null;
+        }
+        String norm = rawEntryName.replace('\\', '/');
+        if (norm.endsWith("/")) return null;
+        String[] parts = norm.split("/");
+        List<String> clean = new ArrayList<>();
+        for (String seg : parts) {
+            if (seg.equals("..") || "__MACOSX".equalsIgnoreCase(seg)) return null;
+            if (seg.isEmpty() || seg.equals(".")) continue;
+            if (seg.startsWith("._")) return null;
+            clean.add(seg);
+        }
+        if (clean.isEmpty() || clean.size() > 2) return null;
+        String leaf = clean.get(clean.size() - 1);
+        if (!leaf.toLowerCase(Locale.ROOT).endsWith(".png") || leaf.length() > 160) return null;
+        return leaf;
+    }
+
+    private static String sanitizeModImgRelative(String rel) {
+        if (rel == null || rel.isEmpty() || rel.indexOf('\0') >= 0 || rel.indexOf(':') >= 0) return null;
+        String norm = rel.replace('\\', '/');
+        String[] parts = norm.split("/");
+        if (parts.length == 0 || parts.length > 4) return null;
+        for (String seg : parts) {
+            if (seg.isEmpty() || seg.equals(".") || seg.equals("..") || seg.startsWith("._")) return null;
+        }
+        return norm.toLowerCase(Locale.ROOT).endsWith(".png") ? norm : null;
+    }
+
+    static List<String> extractModPackArchive(File zipFile, File modImgDir) throws IOException {
+        if (!modImgDir.isDirectory() && !modImgDir.mkdirs()) {
+            throw new IOException("无法创建目标目录：" + modImgDir.getAbsolutePath());
+        }
+        String canonRoot = modImgDir.getCanonicalPath() + File.separator;
+        List<String> extracted = new ArrayList<>();
+        try (ZipFile zip = openModZip(zipFile)) {
+            List<Map.Entry<ZipEntry, String>> chosen = new ArrayList<>();
+            Enumeration<? extends ZipEntry> scan = zip.entries();
+            int seen = 0;
+            while (scan.hasMoreElements()) {
+                seen++;
+                if (seen > MAX_MOD_ENTRIES * 2) throw new IOException("压缩包内文件过多");
+                ZipEntry entry = scan.nextElement();
+                String rel = sanitizeModImgEntry(entry.getName());
+                if (rel != null) {
+                    chosen.add(new java.util.AbstractMap.SimpleEntry<>(entry, rel));
+                }
+            }
+            if (chosen.isEmpty()) {
+                Enumeration<? extends ZipEntry> fb = zip.entries();
+                while (fb.hasMoreElements()) {
+                    ZipEntry entry = fb.nextElement();
+                    String rel = sanitizeModImgRootFallback(entry.getName());
+                    if (rel != null) {
+                        chosen.add(new java.util.AbstractMap.SimpleEntry<>(entry, rel));
+                    }
+                }
+            }
+            if (chosen.isEmpty()) {
+                throw new IOException("压缩包中未检测到可用的 modimg/*.png 贴图");
+            }
+            if (chosen.size() > MAX_MOD_ENTRIES) {
+                throw new IOException("Mod 贴图数量超出上限（" + MAX_MOD_ENTRIES + "）");
+            }
+
+            long totalBytes = 0L;
+            byte[] buf = new byte[32768];
+            for (Map.Entry<ZipEntry, String> item : chosen) {
+                ZipEntry entry = item.getKey();
+                String rel = item.getValue();
+                File outFile = new File(modImgDir, rel).getCanonicalFile();
+                if (!outFile.getPath().startsWith(canonRoot)) {
+                    throw new SecurityException("拦截非法压缩包路径：" + entry.getName());
+                }
+                File parent = outFile.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("无法创建子目录：" + parent.getAbsolutePath());
+                }
+                try (InputStream in = zip.getInputStream(entry);
+                     FileOutputStream out = new FileOutputStream(outFile)) {
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        totalBytes += n;
+                        if (totalBytes > MAX_MOD_UNPACKED_BYTES) {
+                            throw new IOException("Mod 解压总大小超出 256 MB 安全上限");
+                        }
+                        out.write(buf, 0, n);
+                    }
+                    out.flush();
+                }
+                extracted.add(rel);
+            }
+        }
+        return extracted;
+    }
+
+    private static int countPngFiles(File dir) {
+        if (dir == null || !dir.isDirectory()) return 0;
+        File[] children = dir.listFiles();
+        if (children == null) return 0;
+        int count = 0;
+        for (File c : children) {
+            if (c.isDirectory()) count += countPngFiles(c);
+            else if (c.isFile() && c.getName().toLowerCase(Locale.ROOT).endsWith(".png")) count++;
+        }
+        return count;
+    }
+
+    private static String readUtf8File(File file, int maxBytes) throws IOException {
+        if (file.length() > maxBytes) throw new IOException("文件过大");
+        try (InputStream in = new FileInputStream(file)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static void writeTextFileAtomic(File target, String content) throws IOException {
+        File tmp = new File(target.getParentFile(), target.getName() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(content.getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            try { out.getFD().sync(); } catch (IOException ignored) { }
+        }
+        if (target.exists()) target.delete();
+        if (!tmp.renameTo(target)) {
+            copy(tmp, target);
+            tmp.delete();
         }
     }
 
