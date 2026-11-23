@@ -1,9 +1,9 @@
 {
   "FormatVersion": 1,
-  "Version": "0.1.8",
+  "Version": "0.1.9",
   "HubSha256": "dd399223cb1ea395a0c02787905d9ddd4b1b4a70b4cfd0349a0c1a2e3adc8b25",
   "RuntimeVersion": "1.0.0-game-ui-r8.44",
-  "HubVersion": "0.1.8",
+  "HubVersion": "0.1.9",
   "ExtensionManagementChannels": [
     "STEAM_CN",
     "STEAM_GLOBAL",
@@ -143,7 +143,7 @@
       ]
     }
   ],
-  "HubBuildVersion": "0.1.8",
-  "HubBuildSequence": 2026112302,
+  "HubBuildVersion": "0.1.9",
+  "HubBuildSequence": 2026112401,
   "BaseCommit": "44fa74368252cad957e72fa31d10dd4f79e5044f"
 }

@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8">Download v0.1.8</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.9">Download v0.1.9</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">Web Edition</a> ·
   <a href="docs/README.md">Docs &amp; Validation Records</a> ·
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
@@ -35,16 +35,16 @@
 
 ## Stable Release
 
-[Download stable v0.1.8](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8) ([release notes](docs/records/RELEASE_0.1.8.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
+[Download stable v0.1.9](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.9) ([release notes](docs/records/RELEASE_0.1.9.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
 
 | Target | Package / Access | Highlights |
 | --- | --- | --- |
-| **Windows Desktop** | `XingShu_Hub_0.1.8_x64-setup.exe` / `XingShu_Desktop_0.1.8.zip` | One-click Windows installer or streamlined portable pure-launcher Hub (contains only `Hub/xingshu-hub.exe` + readme). Decoupled from core runtime via remote `core-manifest.json` hot-updates, integrated conflict scan/restore, 4-way concurrent SHA-256 mod caching, redesigned Mod detail modal with in-game emoji reactions, and on-demand installation of **XingShu Official Plugin Mod** (`r8.41` LZ4) + **19 modules**. |
+| **Windows Desktop** | `XingShu_Hub_0.1.9_x64-setup.exe` / `XingShu_Desktop_0.1.9.zip` | One-click Windows installer or streamlined portable pure-launcher Hub with the new **Universal Local Mod Compatibility Engine**: automatic cross-version `catalog_3.3.0.json` resolution, lossless `Texture2D -> modimg` conversion & one-click Android export, `MonoBehaviour` payload migration, `.rar` + encrypted archive password retry, rogue DLL blocking, remote `core-manifest.json` hot-updates, and **19 modules** (`r8.44`). |
 | **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop** discovery & creator uploads, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
-| **Android Launcher** | `XingShu_Android_0.1.8.apk` / `XingShu_Android_0.1.8.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.8.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Now loads remote `android-core-manifest.json` (`CoreRuntimeSpec`) over Shizuku & Wireless/USB ADB so core updates (`android-preview8.36` and beyond) install without reinstalling the APK. |
+| **Android Launcher** | `XingShu_Android_0.1.9.apk` / `XingShu_Android_0.1.9.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.9.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Features refined layout density, symmetric `3×2` theme swatches, horizontal channel/filter chips, and remote `android-core-manifest.json` (`android-preview8.44`) over Shizuku & Wireless/USB ADB. |
 
 > [!NOTE]
-> The Core Framework (`XingShu Official Plugin Mod`) is now completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.8 release record](docs/records/RELEASE_0.1.8.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
+> The Core Framework (`XingShu Official Plugin Mod`) is completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.9 release record](docs/records/RELEASE_0.1.9.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
 
 ---
 
@@ -52,18 +52,18 @@
 
 **AstralParty-XingShu (星枢)** is an open-source multi-platform launcher, mod workshop, replay workstation, and modular in-game runtime suite built for *Astral Party* (吉星派对):
 
-1. **AstralParty-Hub (Desktop & Web)**: Built with Tauri 2 + Rust + React 19 + TypeScript. Launches vanilla clients out of the box or installs modular official/community `.xspkg`/`.zip` mods with single-flight locking, 4-way concurrent EdgeOne-cached downloads, local SHA-256 verification, and atomic backups. Features built-in conflict inspection and vanilla restoration, live in-game room management, `.rep` frame-by-frame replay & board topology playback, platform accounts, and an offline encyclopedia displaying active mod overrides.
-2. **XingShu Official Plugin Mod (`r8.41` PC / `android-preview8.36` Android, C# / Unity)**: Independent hot-updatable in-game runtime featuring **19 independently toggleable official modules** (including **Custom Lobby Background**, teammate hand overlay, defense/dodge prediction, battle card point hints, character-select map name display, discard hitbox guard, monster cooldown tracker, free camera zoom, match stats HUD, quick thanks, and FairyGUI-styled native UI center).
-3. **Android Pure Launcher (`AndroidInstaller`, Kotlin / Jetpack Compose)**: Rebuilt Material 3 companion app featuring remote `CoreRuntimeSpec` hot-updates, custom XingShu bottom navigation bar, dynamic theme palettes & wallpaper support, Shizuku / ADB runtime installation & restoration, and PE Mod Workshop / card-pack management.
+1. **AstralParty-Hub (Desktop & Web)**: Built with Tauri 2 + Rust + React 19 + TypeScript. Launches vanilla clients out of the box and embeds a universal local mod compatibility engine alongside single-flight locking, 4-way concurrent EdgeOne-cached downloads, local SHA-256 verification, atomic backups, live room management, `.rep` replay playback, platform accounts, and an offline encyclopedia.
+2. **XingShu Official Plugin Mod (`r8.44` PC / `android-preview8.44` Android, C# / Unity)**: Independent hot-updatable in-game runtime featuring **19 independently toggleable official modules** (including **Custom Lobby Background** with native Android `BitmapFactory` universal decoding fallback, `xingshu_dynamic_cards/` video card loader, actual damage match statistics, teammate hand overlay, battle hints, discard guard, and FairyGUI-styled native UI center).
+3. **Android Pure Launcher (`AndroidInstaller`, Kotlin / Jetpack Compose)**: Polished Material 3 companion app with symmetric `3×2` color palette, compact first-screen density, remote `CoreRuntimeSpec` hot-updates, custom XingShu bottom navigation bar, dynamic wallpaper support, Shizuku / ADB management, and PE Mod Workshop.
 
 ---
 
-## Key Capabilities in v0.1.8
+## Key Capabilities in v0.1.9
 
-- **Independent Hot-Updatable Core Framework (No Launcher Reinstall Required)**: Both Desktop (`core-manifest.json`) and Android (`android-core-manifest.json` synced via Shizuku IPC & Wireless ADB) treat **XingShu Official Plugin Mod** as an independent hot-updatable core mod alongside custom mods, with strict HTTPS/path/SHA-256 checks and offline baseline fallbacks.
-- **Pure Launcher + 19 Official Modules (New: Custom Lobby Background)**: Added module #19 `xingshu.launcher.custom-lobby-bg` for one-click persistent in-game lobby background customization; toggle any module or batch-install all 19 with live progress.
-- **EdgeOne CDN Acceleration, LZ4 Compression & Download Reliability**: PC `r8.41` uses LZ4 compression (~`9.3 MB`), backed by EdgeOne CDN caching + BBR, Rust single-flight install locks (fixing repeat-click state oscillation), tab-switch progress rehydration, 4-way concurrent payload fetch, and local SHA-256 caching.
-- **Redesigned Mod Detail Modal, Emoji Reactions & Native Official Logo**: Fixed Portal scoping/z-index stacking in Desktop Mods detail modal with animated `EmoteReactionBar` reactions and gallery lightbox, and upgraded LauncherHome with the native transparent dual-language *Astral Party* official logo.
+- **Desktop Universal Local Mod Compatibility Engine**: Automatically resolves legacy unindexed archives against `catalog_3.3.0.json` by `Texture2D` / `MonoBehaviour` asset names, converts `Texture2D` overrides to `modimg/*.png` with one-click Android pack export, migrates `MonoBehaviour` payloads back onto current 3.3.0 vanilla bundles, supports `.rar` & password-protected archives, and blocks modified `AstralParty.Runtime.dll` containers.
+- **Mobile Custom Lobby Background Fix & `r8.44` / `android-preview8.44`**: Added `.webp` / `.bmp` support and safe Android `BitmapFactory` decoding/scaling fallback so gallery WebP/HEIC or large images apply reliably in-game, paired with single-column full-width list layout and inline status feedback.
+- **Android Launcher Compose UI Polish**: Fixed wireless-debugging modal button wrapping, flattened theme preview card, aligned `3×2` color swatches, and switched channel/filter bars to compact horizontal `LazyRow`s.
+- **EdgeOne CDN Acceleration & Workshop Coverage**: Backed by EdgeOne CDN + BBR + local SHA-256 payload caching; Workshop updated with full 106-file `BA Music Pack (3.3.0-r2)` covering all remote `AssetBundles` BGM banks plus additional PE `modimg` packages.
 - **Unified Native In-Game Control Center & Replay Analyzer**: Press `F1` (or tap the floating orb) for consistent PC/mobile native FairyGUI controls and 12 remappable hotkeys ([HOTKEYS.md](docs/guides/HOTKEYS.md)); analyze `.rep` or match-ID replays with interactive round charts and step-by-step board playback.
 
 ---
@@ -185,6 +185,7 @@ python tools/build_android_installer.py --help
 ## Detailed Documentation
 
 - [docs/README.md](docs/README.md) — Documentation Index & Release / Validation Records
+- [RELEASE_0.1.9.md](docs/records/RELEASE_0.1.9.md) — v0.1.9 Release Notes (Universal Local Mod Compat & Mobile UI Polish)
 - [RELEASE_0.1.8.md](docs/records/RELEASE_0.1.8.md) — v0.1.8 Release Notes & Independent Core Architecture
 - [RELEASE_0.1.7.md](docs/records/RELEASE_0.1.7.md) — v0.1.7 Release Notes & Architecture Changes
 - [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md) — Android Installation & Recovery Guide

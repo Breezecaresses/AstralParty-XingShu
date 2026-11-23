@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8">下载 v0.1.8</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.9">下载 v0.1.9</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">在线网页版</a> ·
   <a href="docs/README.md">文档与验证记录</a> ·
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
@@ -35,16 +35,16 @@
 
 ## 正式版本
 
-[下载星枢 v0.1.8](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8)（详见[发布记录](docs/records/RELEASE_0.1.8.md)），电脑端与安卓手机端同步适配《吉星派对》`3.3.0`（资源版本 `160`）。
+[下载星枢 v0.1.9](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.9)（详见[发布记录](docs/records/RELEASE_0.1.9.md)），电脑端与安卓手机端同步适配《吉星派对》`3.3.0`（资源版本 `160`）。
 
 | 平台 | 获取方式 | 说明 |
 | --- | --- | --- |
-| **Windows 桌面端** | `XingShu_Hub_0.1.8_x64-setup.exe` / `XingShu_Desktop_0.1.8.zip` | **极简纯启动器 + 完全独立热更新核心**：提供一键安装包与便携包（仅含 `Hub/xingshu-hub.exe` 与说明文档）。通过远端 `core-manifest.json` 热更新核心插件而无需升级启动器，集成 4 路并发 SHA-256 缓存下载、重排 Mod 详情与表情回应，并可按需安装**星枢官方插件 Mod**（`r8.41` LZ4）与 **19 项官方模块**。 |
+| **Windows 桌面端** | `XingShu_Hub_0.1.9_x64-setup.exe` / `XingShu_Desktop_0.1.9.zip` | **极简纯启动器 + 万能本地 Mod 自动适配引擎**：提供一键安装包与便携包（仅含 `Hub/xingshu-hub.exe` 与说明文档）。支持旧版 Mod Catalog 跨版本反查转换、`modimg` 一键导出手机包、`.rar` 与加密压缩包解压、`core-manifest.json` 独立热更新与 **19 项官方模块**（`r8.44`）。 |
 | **在线网页版** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | 免安装打开即用：Modrinth 风格社区**模组 / 卡牌 / 皮肤工坊**浏览下载与作者投稿、星枢平台账号体系、UID 战绩查询、`.rep` / 对局编号回放深度分析与离线全量图鉴。 |
-| **安卓手机端** | `XingShu_Android_0.1.8.apk` / `XingShu_Android_0.1.8.zip` | 全新 Kotlin + Jetpack Compose Material 3 **轻量纯启动器**：支持直装 APK 或极简 ZIP（仅含 `星枢启动器.apk` 与说明文件）。新增独立 `CoreRuntimeSpec`（`android-core-manifest.json`）与 Shizuku/ADB 同步，后续核心框架与游戏新版本更新无需重装 APK 即可在线热更。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
+| **安卓手机端** | `XingShu_Android_0.1.9.apk` / `XingShu_Android_0.1.9.zip` | 全新排版优化的 Kotlin + Jetpack Compose Material 3 **轻量纯启动器**：支持直装 APK 或极简 ZIP（仅含 `星枢启动器.apk` 与说明文件）。新增对称 `3×2` 色板、紧凑首屏与横向筛选栏，支持独立 `android-core-manifest.json`（`android-preview8.44`）与 Shizuku/ADB 同步，内置工坊实时更新。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
 
 > [!NOTE]
-> 自 `0.1.8` 起，核心框架（**星枢官方插件 Mod**）已彻底解耦并独立托管：未来发布新版核心插件或适配游戏新版本时，老版本电脑 Hub 与手机 APK 均可在「模组」页直接在线热更核心插件，无需重装启动器。详见[v0.1.8 发布记录](docs/records/RELEASE_0.1.8.md)与[发布打包说明](docs/guides/RELEASE_PACKAGING.md)。
+> 自 `0.1.8` 起，核心框架（**星枢官方插件 Mod**）已彻底解耦并独立托管：未来发布新版核心插件或适配游戏新版本时，老版本电脑 Hub 与手机 APK 均可在「模组」页直接在线热更核心插件，无需重装启动器。详见[v0.1.9 发布记录](docs/records/RELEASE_0.1.9.md)与[发布打包说明](docs/guides/RELEASE_PACKAGING.md)。
 
 ---
 
@@ -52,18 +52,18 @@
 
 **AstralParty-XingShu（星枢）** 是面向《Astral Party》（吉星派对）的多端纯启动器、模组工坊、回放分析平台与模块化游戏增强套件：
 
-1. **AstralParty-Hub（桌面端 & 网页版）**：基于 Tauri 2 + Rust + React 19 + TypeScript 构建。桌面端默认以纯净启动器运行，支持远端核心清单独立热更新、Rust 单飞锁防连点与 4 路并发 SHA-256 缓存下载、内置冲突检测与跨版本备份还原、PCL 风格启动体验与《星引擎 PARTY》官方徽标、在线大厅房间管理、`.rep` 逐帧回放复盘与表情回应工坊。
-2. **星枢官方插件 Mod（`r8.41` 电脑端 / `android-preview8.36` 手机端，C# / Unity）**：独立可热更新游戏内插件核心，现提供 **19 项**可单独开关或一键安装的官方功能模块（新增**自定义大厅背景**，并含队友手牌监视、防御/击飞预测、战斗卡牌点数提示、选人界面地图显示、弃牌防误触、怪物技能冷却追踪、自由缩放镜头、对局统计与原生游戏内功能中心）。
-3. **全新安卓纯启动器（`AndroidInstaller`，Kotlin / Jetpack Compose）**：采用 Material 3 与原创顶部指示线底部导航栏，支持远端 `CoreRuntimeSpec` 独立核心热更、动态配色/壁纸、Shizuku/无线 ADB 双通道、19 项官方模块管理、PE 模组工坊与 Windows 卡牌方案 ZIP 导入。
+1. **AstralParty-Hub（桌面端 & 网页版）**：基于 Tauri 2 + Rust + React 19 + TypeScript 构建。桌面端默认以纯净启动器运行，内置万能本地 Mod 自动适配引擎（跨版本 Catalog 反查、贴图无损转 `modimg`、`.rar`/加密包解压与危险 DLL 拦截）、远端核心清单独立热更新、Rust 单飞锁防连点与 4 路并发 SHA-256 缓存下载、跨版本备份还原与 `.rep` 逐帧回放复盘。
+2. **星枢官方插件 Mod（`r8.44` 电脑端 / `android-preview8.44` 手机端，C# / Unity）**：独立可热更新游戏内插件核心，提供 **19 项**可单独开关或一键安装的官方功能模块（含**自定义大厅背景万能解码修复**、动态立绘加载器 `xingshu_dynamic_cards/`、对局实际造成伤害统计、队友手牌监视、防御预测、战斗点数提示、弃牌防误触与原生游戏内功能中心）。
+3. **全新安卓纯启动器（`AndroidInstaller`，Kotlin / Jetpack Compose）**：采用 Material 3 与原创顶部指示线底部导航栏，优化了各页首屏密度与对称色板布局，支持远端 `CoreRuntimeSpec` 独立核心热更、动态配色/壁纸、Shizuku/无线 ADB 双通道、19 项官方模块管理、PE 模组工坊与 Windows 卡牌方案 ZIP 导入。
 
 ---
 
-## v0.1.8 核心功能亮点
+## v0.1.9 核心功能亮点
 
-- **双端完全独立热更新核心框架**：桌面端接入 `core-manifest.json`，安卓端新增 `CoreRuntimeSpec` 对接 `android-core-manifest.json` 并通过 Shizuku IPC 与无线调试同步，核心框架与游戏适配信息脱离启动器发布周期独立热更。
-- **19 项模块化官方功能（新增「自定义大厅背景」）**：上线第 19 项官方模块 `xingshu.launcher.custom-lobby-bg`，支持局内自定义大厅背景并零依赖持久化恢复；双端保持默认纯净启动官方原版。
-- **EdgeOne CDN 加速 + LZ4 瘦身 + 并发缓存防错乱**：全站接入 EdgeOne CDN 加速并开启服务端 `tcp_bbr`，PC `r8.41` 开启 LZ4 压缩降至 ~`9.3 MB`；桌面端新增目录单飞锁与切页进度恢复、4 路并发分片与 `.xingshu-mods/payload-cache/` SHA-256 缓存，彻底根治连点下载反复横跳。
-- **桌面端 Mod 详情重排 + 表情回应 + 官方高清图标**：修复细节弹窗样式与登录框层级遮挡，新增多图灯箱与游戏内动态角色表情回应（`EmoteReactionBar`）；启动页左侧替换为游戏内提取的原生透明底《星引擎 PARTY》高清官方图标。
+- **桌面端「万能本地 Mod 自动适配引擎」**：旧版包 32 位哈希失效时自动解析 UnityFS 内 `Texture2D` / `MonoBehaviour` 并反查 `catalog_3.3.0.json` 适配（`Texture2D` 转 `modimg` 并支持导出安卓通用包、`MonoBehaviour` 迁移载荷回 3.3.0 原版容器），新增 `.rar` / 加密包弹窗解压与 `AstralParty.Runtime.dll` 篡改拦截。
+- **双端核心热更新 `r8.44` / `android-preview8.44`**：新增安卓原生 `BitmapFactory` 万能解码/安全缩放兜底，解决相册 WebP/HEIC 伪装扩展与超大图导致的游戏内「自定义大厅背景」无法应用问题；同步修复移动端单列列表排版与顶部状态回显。
+- **安卓启动器 Compose 界面全面打磨**：修复授权弹窗按钮 3 行挤压，重排自定义页 `3×2` 对称色板与扁平预览卡，渠道/筛选项改用横向单排 `LazyRow`，释放垂直高度使模组列表首屏直达。
+- **EdgeOne CDN 加速 + 4 路并发缓存与工坊扩展**：全站接入 EdgeOne CDN 与 `tcp_bbr`，本地 `.xingshu-mods/payload-cache/` 全量 SHA-256 校验；工坊同步升级《BA 音乐替换》`3.3.0-r2`（`106` 文件全曲库）与多款 PE `modimg` 包。
 - **游戏内原生功能中心 & 回放复盘**：局内按 `F1` 或点击悬浮球呼出统一 UI（支持 12 项快捷键自定义，见[快捷键说明](docs/guides/HOTKEYS.md)）；导入 `.rep` 或对局编号即可进行逐轮伤害/星币曲线分析与棋盘步进复盘。
 
 ---
@@ -185,6 +185,7 @@ python tools/build_android_installer.py --help
 ## 详细文档与验证记录
 
 - [项目文档与验证记录](docs/README.md) — 文档总索引与历史发布验证记录
+- [RELEASE_0.1.9.md](docs/records/RELEASE_0.1.9.md) — v0.1.9 正式版更新（万能本地 Mod 适配与移动端优化）
 - [RELEASE_0.1.8.md](docs/records/RELEASE_0.1.8.md) — v0.1.8 正式版更新与核心框架独立热更新记录
 - [RELEASE_0.1.7.md](docs/records/RELEASE_0.1.7.md) — v0.1.7 正式版更新与架构重构记录
 - [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md) — 安卓手机安装与还原指南
