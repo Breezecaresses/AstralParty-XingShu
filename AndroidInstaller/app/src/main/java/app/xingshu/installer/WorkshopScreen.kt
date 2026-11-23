@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
@@ -34,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -62,19 +64,30 @@ internal fun WorkshopScreen(controller: AppController) {
     var searchQuery by remember { mutableStateOf("") }
     var kindFilter by remember { mutableStateOf("all") }
 
-    val filteredMods = remember(controller.workshopMods.toList(), searchQuery, kindFilter) {
+    LaunchedEffect(Unit) {
+        controller.refreshWorkshopAsync(userInitiated = false)
+    }
+
+    val allMods = controller.workshopMods.toList()
+    val installableCount = remember(allMods) { allMods.count { it.androidInstallable } }
+    val communityCount = remember(allMods) { allMods.count { !it.isXspkgModule() } }
+    val xspkgCount = remember(allMods) { allMods.count { it.isXspkgModule() } }
+
+    val filteredMods = remember(allMods, searchQuery, kindFilter) {
         val q = searchQuery.trim().lowercase()
-        controller.workshopMods.filter { mod ->
+        allMods.filter { mod ->
             val kindOk = when (kindFilter) {
+                "android" -> mod.androidInstallable
+                "community" -> !mod.isXspkgModule()
                 "xspkg" -> mod.isXspkgModule()
-                "modimg" -> !mod.isXspkgModule()
                 else -> true
             }
             val queryOk = q.isEmpty() ||
                 mod.name.lowercase().contains(q) ||
                 mod.author.lowercase().contains(q) ||
                 mod.description.lowercase().contains(q) ||
-                mod.categoryLabel.lowercase().contains(q)
+                mod.categoryLabel.lowercase().contains(q) ||
+                mod.platformLabel.lowercase().contains(q)
             kindOk && queryOk
         }
     }
@@ -92,7 +105,7 @@ internal fun WorkshopScreen(controller: AppController) {
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                placeholder = { Text("搜索 PE 模组名称、作者或说明…") },
+                placeholder = { Text("搜索工坊 Mod 名称、作者、平台或说明…") },
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -106,30 +119,70 @@ internal fun WorkshopScreen(controller: AppController) {
         }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = kindFilter == "all",
-                        onClick = { kindFilter = "all" },
-                        label = { Text("全部 (${controller.workshopMods.size})") },
-                    )
-                    FilterChip(
-                        selected = kindFilter == "xspkg",
-                        onClick = { kindFilter = "xspkg" },
-                        label = { Text("官方优化") },
-                    )
-                    FilterChip(
-                        selected = kindFilter == "modimg",
-                        onClick = { kindFilter = "modimg" },
-                        label = { Text("贴图与卡面") },
-                    )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FlowRow(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        FilterChip(
+                            selected = kindFilter == "all",
+                            onClick = { kindFilter = "all" },
+                            label = { Text("全部 (${allMods.size})") },
+                        )
+                        FilterChip(
+                            selected = kindFilter == "android",
+                            onClick = { kindFilter = "android" },
+                            label = { Text("手机可装 ($installableCount)") },
+                        )
+                        FilterChip(
+                            selected = kindFilter == "community",
+                            onClick = { kindFilter = "community" },
+                            label = { Text("社区模组 ($communityCount)") },
+                        )
+                        FilterChip(
+                            selected = kindFilter == "xspkg",
+                            onClick = { kindFilter = "xspkg" },
+                            label = { Text("官方优化 ($xspkgCount)") },
+                        )
+                    }
+                    IconButton(
+                        onClick = { controller.refreshWorkshopAsync(userInitiated = true) },
+                        enabled = !controller.workshopLoading,
+                    ) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "刷新工坊")
+                    }
                 }
-                IconButton(onClick = { controller.refreshWorkshopAsync() }) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = "刷新工坊")
+
+                if (controller.workshopLoading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+
+                Text(
+                    text = buildString {
+                        append("实时工坊 · 共 ${allMods.size} 项（手机可直装 $installableCount 项）")
+                        if (controller.workshopLastSyncTime.isNotEmpty()) {
+                            append(" · 同步于 ${controller.workshopLastSyncTime}")
+                        }
+                        if (controller.workshopLoading) {
+                            append(" · 同步中…")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                if (controller.workshopError.isNotEmpty() && allMods.isNotEmpty()) {
+                    Text(
+                        text = "同步提示：${controller.workshopError}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
         }
@@ -144,7 +197,7 @@ internal fun WorkshopScreen(controller: AppController) {
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         CircularProgressIndicator()
-                        Text("正在加载星枢 PE 工坊目录…", style = MaterialTheme.typography.bodySmall)
+                        Text("正在实时同步星枢工坊目录…", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -154,7 +207,7 @@ internal fun WorkshopScreen(controller: AppController) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("工坊加载失败", style = MaterialTheme.typography.titleMedium)
                         Text(controller.workshopError, style = MaterialTheme.typography.bodySmall)
-                        FilledTonalButton(onClick = { controller.refreshWorkshopAsync() }) {
+                        FilledTonalButton(onClick = { controller.refreshWorkshopAsync(userInitiated = true) }) {
                             Text("重新加载")
                         }
                     }
@@ -164,7 +217,7 @@ internal fun WorkshopScreen(controller: AppController) {
             item {
                 OutlinedCard {
                     Text(
-                        text = "没有找到匹配的 PE 模组条目。",
+                        text = "没有找到匹配的工坊模组条目。",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(18.dp),
                     )
@@ -230,20 +283,32 @@ internal fun WorkshopScreen(controller: AppController) {
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = "${mod.author} · v${mod.version} · ${PayloadDownloadManager.formatBytes(mod.sizeBytes)}",
+                                    text = buildString {
+                                        append("${mod.author} · v${mod.version}")
+                                        if (mod.sizeBytes > 0L) {
+                                            append(" · ${PayloadDownloadManager.formatBytes(mod.sizeBytes)}")
+                                        }
+                                        append(" · ${mod.downloads} 下载")
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                Row(
+                                FlowRow(
                                     modifier = Modifier.padding(top = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    BadgeChip(mod.categoryLabel.ifEmpty { if (isXspkg) "官方优化" else "PE 贴图" })
-                                    BadgeChip(mod.platformLabel)
-                                    if (sameInstalled) BadgeChip("已安装")
-                                    else if (cached) BadgeChip("已缓存")
+                                    BadgeChip(mod.categoryLabel.ifEmpty { if (isXspkg) "官方优化" else "社区模组" })
+                                    BadgeChip(
+                                        if (mod.androidInstallable) mod.platformLabel.ifEmpty { "手机端 (PE)" }
+                                        else "仅 PC 端"
+                                    )
+                                    if (mod.androidInstallable) {
+                                        if (sameInstalled) BadgeChip("已安装")
+                                        else if (cached) BadgeChip("已缓存")
+                                    }
                                 }
                             }
                         }
@@ -283,13 +348,23 @@ internal fun WorkshopScreen(controller: AppController) {
                                 Text("详情")
                             }
                             Spacer(modifier = Modifier.width(6.dp))
-                            FilledTonalButton(
-                                onClick = { controller.pendingWorkshopPromptMod = mod },
-                                enabled = !controller.modTaskBusy && !controller.busy,
-                            ) {
-                                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(if (sameInstalled) "重装" else if (cached) "立即安装" else "下载并安装")
+                            if (mod.androidInstallable) {
+                                FilledTonalButton(
+                                    onClick = { controller.pendingWorkshopPromptMod = mod },
+                                    enabled = !controller.modTaskBusy && !controller.busy,
+                                ) {
+                                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(if (sameInstalled) "重装" else if (cached) "立即安装" else "下载并安装")
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { controller.openExternalBrowser(mod.webDetailUrl()) },
+                                ) {
+                                    Icon(Icons.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("网页查看")
+                                }
                             }
                         }
                     }
@@ -308,8 +383,19 @@ internal fun WorkshopScreen(controller: AppController) {
             title = { Text(detailMod.name) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("作者：${detailMod.author} · 版本：v${detailMod.version}")
-                    Text("适用：${detailMod.platformLabel} · 体积：${PayloadDownloadManager.formatBytes(detailMod.sizeBytes)}")
+                    Text("作者：${detailMod.author} · 版本：v${detailMod.version} · ${detailMod.downloads} 次下载")
+                    Text(
+                        buildString {
+                            append("适用：")
+                            append(
+                                if (detailMod.androidInstallable) detailMod.platformLabel.ifEmpty { "手机端 (PE)" }
+                                else "仅 PC 端（请在电脑端星枢或网页工坊下载）"
+                            )
+                            if (detailMod.sizeBytes > 0L) {
+                                append(" · 体积：${PayloadDownloadManager.formatBytes(detailMod.sizeBytes)}")
+                            }
+                        }
+                    )
                     if (detailMod.targetInfo.isNotBlank()) {
                         Text("目标路径：${detailMod.targetInfo}", style = MaterialTheme.typography.bodySmall)
                     }
@@ -327,14 +413,28 @@ internal fun WorkshopScreen(controller: AppController) {
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        controller.workshopDetailMod = null
-                        controller.pendingWorkshopPromptMod = detailMod
-                    },
-                    enabled = !controller.modTaskBusy && !controller.busy,
-                ) {
-                    Text("下载并安装")
+                if (detailMod.androidInstallable) {
+                    Button(
+                        onClick = {
+                            controller.workshopDetailMod = null
+                            controller.pendingWorkshopPromptMod = detailMod
+                        },
+                        enabled = !controller.modTaskBusy && !controller.busy,
+                    ) {
+                        Text("下载并安装")
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            val url = detailMod.webDetailUrl()
+                            controller.workshopDetailMod = null
+                            controller.openExternalBrowser(url)
+                        },
+                    ) {
+                        Icon(Icons.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("网页查看")
+                    }
                 }
             },
         )

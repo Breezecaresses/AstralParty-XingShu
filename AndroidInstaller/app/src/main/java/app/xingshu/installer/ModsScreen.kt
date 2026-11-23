@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Refresh
@@ -47,13 +48,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ModsScreen(controller: AppController) {
+internal fun ModsScreen(
+    controller: AppController,
+    onOpenWorkshop: () -> Unit = {},
+) {
     var selectedGroup by remember { mutableStateOf("全部") }
     val selected = controller.selectedChannel()
     val privReady = controller.isPrivilegeReady()
@@ -218,8 +224,122 @@ internal fun ModsScreen(controller: AppController) {
             }
         }
 
-        // Batch One-Click Card: 19 Official Modules
+        // Prominent First-Screen Local Mod Import Card
         item {
+            ElevatedCard(
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f),
+                ),
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column {
+                        Text(
+                            text = "导入本地 Mod 包（.zip / .xspkg）",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        Text(
+                            text = "已安装外部包 ${controller.installedMods.size} 项 · 当前 modimg 贴图 ${controller.totalModPngCount} 张",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.86f),
+                        )
+                    }
+
+                    if (controller.modTaskBusy && controller.modProgress.stage.isNotBlank()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = controller.modProgress.stage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = { controller.requestImportLocalArchive() },
+                            enabled = !controller.modTaskBusy && !controller.busy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("导入本地 Mod")
+                        }
+                        FilledTonalButton(
+                            onClick = onOpenWorkshop,
+                        ) {
+                            Icon(Icons.Rounded.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("去工坊")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Top Sub-Tab Switcher: Official Modules vs Local & External Mods
+        item {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val officialSelected = controller.modsSubTab != "local"
+                    Surface(
+                        onClick = { controller.modsSubTab = "official" },
+                        color = if (officialSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = "官方模块 (${OfficialModulesCatalog.ALL.size})",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (officialSelected) FontWeight.Bold else FontWeight.Medium,
+                            ),
+                            color = if (officialSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                        )
+                    }
+                    val localSelected = controller.modsSubTab == "local"
+                    Surface(
+                        onClick = { controller.modsSubTab = "local" },
+                        color = if (localSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = "本地与外部 Mod (${controller.installedMods.size})",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (localSelected) FontWeight.Bold else FontWeight.Medium,
+                            ),
+                            color = if (localSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (controller.modsSubTab != "local") {
+            // Batch One-Click Card: 19 Official Modules
+            item {
             OutlinedCard(
                 colors = CardDefaults.outlinedCardColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -357,7 +477,7 @@ internal fun ModsScreen(controller: AppController) {
                 }
             }
         }
-
+        } else {
         // Community & Local Installed Packs Header
         item {
             Spacer(modifier = Modifier.height(6.dp))
@@ -439,6 +559,7 @@ internal fun ModsScreen(controller: AppController) {
                     }
                 }
             }
+        }
         }
 
         item { Spacer(modifier = Modifier.height(14.dp)) }

@@ -5,7 +5,7 @@
 ## 版本信息与下载
 
 - **适用游戏版本**：《吉星派对》`3.3.0 / 资源 160`（Steam 国服、TapTap Windows、哔哩哔哩、WeGame、安卓国服）
-- **版本号**：桌面端 Hub 与安卓启动器 `0.1.8`（更新序号 `2026112301`），电脑端核心框架插件 `1.0.0-game-ui-r8.41`，安卓端核心框架插件 `1.0.0-android-preview8.36`
+- **版本号**：桌面端 Hub 与安卓启动器 `0.1.8`（更新序号 `2026112302`），电脑端核心框架插件 `1.0.0-game-ui-r8.41`，安卓端核心框架插件 `1.0.0-android-preview8.36`
 - [电脑端一键安装包](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.8/XingShu_Hub_0.1.8_x64-setup.exe)：Windows 安装程序，一步安装「星枢 Hub」（`xingshu-hub.exe`）。
 - [电脑端便携版 ZIP](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.8/XingShu_Desktop_0.1.8.zip)：极简纯启动器绿色版，仅含 `Hub/xingshu-hub.exe` 与使用说明。
 - [直接安装安卓 APK](https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.8/XingShu_Android_0.1.8.apk)：轻量纯启动器 APK，支持覆盖安装、应用内自更新与动态热更核心框架。
@@ -24,8 +24,12 @@
 - **桌面端 Mod 详情重排 + 表情回应 + 官方高清 Logo**：
   - 修复详情弹窗在 Portal 下丢失尺寸与登录弹窗层级遮挡问题，重排为「固定顶栏 + 纵向滚动区 + 固定底栏」三段式结构（适配 6 套启动器主题），支持多图灯箱与游戏内动态角色表情回应（`EmoteReactionBar`）。
   - 启动页左侧品牌徽标替换为从游戏内提取的原生透明底《星引擎 PARTY》双语高清官方 Logo（`276×156` 放大展示），同时移除此前缺失白名单资源造成的裂图。
-- **安卓端协同优化**：
+- **安卓端协同与实时工坊升级**：
   - 初始化、连接授权、刷新检测及「一键安装全部官方模组」自动拉取最新远端核心清单；修正 19 项模块计数文案与 1 GB 分片提示上限。
+  - **工坊实时同步 & 全量目录**：切换至「工坊」页、回前台或点击刷新时携带防缓存参数实时同步全量工坊（展示同步进度与时间）；PE 可直装社区包置顶展示，其余 PC 端社区 Mod 同步显示（带「仅 PC 端」标识与网页详情直达）并提供 `全部 / 手机可装 / 社区模组 / 官方优化` 筛选。
+  - **「模组」页首屏显眼本地导入 + 双分栏**：将「导入本地 Mod 包（.zip / .xspkg）」与「去工坊」主卡片置顶到核心插件卡下方首屏位置，并将下方拆分为「官方模块 (19)」与「本地与外部 Mod」顶部切换分栏，导入后自动切换查看。
+- **网页端工坊 SEO 与官方图标上线**：
+  - 线上部署多尺寸 `/favicon.ico`、`apple-touch-icon.png` 及更新后的标题/摘要与 JSON-LD 结构化数据，适配搜索引擎站点图标与卡片展示。
 
 ## 安装与更新说明
 

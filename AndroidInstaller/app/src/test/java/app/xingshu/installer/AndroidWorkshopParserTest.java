@@ -81,4 +81,53 @@ public final class AndroidWorkshopParserTest {
             mod.downloadUrl);
         assertEquals(Collections.singletonList("xingshu.community.nunnan-cards"), multiIds);
     }
+
+    @Test public void parsesAllLiveModsIncludingPcBrowseAndSortsCommunityFirst() throws Exception {
+        String shaOfficial = "32b40b282dbfabfa390ce98b0d259fadeb458be3597633223415c73f5c9257cf";
+        String shaPe = "bc7dd5bd9040dbd4d5f64ce2d139cc7128d32858b818e4d3685b78e59684d9ef";
+        String listJson = "{"
+            + "\"items\":["
+            + "  {\"id\":\"xingshu.launcher.hand-monitor\",\"slug\":\"hand-monitor\",\"name\":\"手牌监视\","
+            + "   \"author\":\"星枢官方\",\"category\":\"optimization\",\"categoryLabel\":\"优化 Mod\","
+            + "   \"description\":\"官方模块\",\"version\":\"1.0.0\",\"versionCount\":1,\"installKind\":\"xspkg\","
+            + "   \"platforms\":[\"STEAM_CN\",\"ANDROID_CN\"],\"platformLabels\":[\"PC · 手机端\"],"
+            + "   \"sizeBytes\":730,\"sha256\":\"" + shaOfficial + "\","
+            + "   \"downloadUrl\":\"/api/workshop/mods/xingshu.launcher.hand-monitor/download\",\"downloads\":50},"
+            + "  {\"id\":\"xingshu.pc.voice\",\"slug\":\"pc-voice\",\"name\":\"PC 语音包\","
+            + "   \"author\":\"社区作者\",\"category\":\"voice\",\"categoryLabel\":\"语音·音效\","
+            + "   \"description\":\"仅 PC 端语音包\",\"version\":\"1.0.0\",\"versionCount\":1,\"installKind\":\"bundle_mod\","
+            + "   \"platforms\":[\"STEAM_CN\"],\"platformLabels\":[\"PC 端\"],"
+            + "   \"sizeBytes\":4096,\"sha256\":\"" + shaOfficial + "\","
+            + "   \"downloadUrl\":\"/api/workshop/mods/xingshu.pc.voice/download\",\"downloads\":25},"
+            + "  {\"id\":\"xingshu.pe.skin\",\"slug\":\"pe-skin\",\"name\":\"PE 卡面贴图\","
+            + "   \"author\":\"社区画师\",\"category\":\"card\",\"categoryLabel\":\"卡牌替换\","
+            + "   \"description\":\"手机直装贴图包\",\"version\":\"1.1.0\",\"versionCount\":1,\"installKind\":\"modimg\","
+            + "   \"platforms\":[\"ANDROID_CN\"],\"platformLabels\":[\"手机端 (PE)\"],"
+            + "   \"sizeBytes\":2048,\"sha256\":\"" + shaPe + "\","
+            + "   \"downloadUrl\":\"/api/workshop/mods/xingshu.pe.skin/download\",\"downloads\":12},"
+            + "  {\"id\":\"xingshu.community.nunnan-cards\",\"slug\":\"nunnan-cards\",\"name\":\"NunNan\","
+            + "   \"versionCount\":2,\"installKind\":\"bundle_mod\",\"platforms\":[\"STEAM_CN\",\"ANDROID_CN\"],"
+            + "   \"platformLabels\":[\"PC 端\",\"手机端 (PE)\"]}"
+            + "]}";
+
+        List<String> multiIds = new ArrayList<>();
+        List<AndroidWorkshopClient.WorkshopMod> parsed = AndroidWorkshopClient.parseAllLiveModsFromList(listJson, multiIds);
+        assertEquals(Collections.singletonList("xingshu.community.nunnan-cards"), multiIds);
+        assertEquals(3, parsed.size());
+
+        List<AndroidWorkshopClient.WorkshopMod> sorted = AndroidWorkshopClient.sortLiveWorkshopMods(parsed);
+        assertEquals("xingshu.pe.skin", sorted.get(0).id);
+        assertTrue(sorted.get(0).androidInstallable);
+
+        assertEquals("xingshu.pc.voice", sorted.get(1).id);
+        assertFalse(sorted.get(1).androidInstallable);
+        assertEquals("仅 PC 端", sorted.get(1).platformLabel);
+        assertEquals(
+            "https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/extensions/mods/pc-voice",
+            sorted.get(1).webDetailUrl());
+
+        assertEquals("xingshu.launcher.hand-monitor", sorted.get(2).id);
+        assertTrue(sorted.get(2).androidInstallable);
+        assertTrue(sorted.get(2).isXspkgModule());
+    }
 }

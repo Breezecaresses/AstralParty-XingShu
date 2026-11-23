@@ -169,10 +169,13 @@ internal class AppController(private val activity: Activity) {
     var activeModuleCount by mutableIntStateOf(0)
     var totalModPngCount by mutableIntStateOf(0)
 
-    // Workshop state
+    // Workshop & Mods sub-tab state
     val workshopMods = mutableStateListOf<AndroidWorkshopClient.WorkshopMod>()
     var workshopLoading by mutableStateOf(false)
     var workshopError by mutableStateOf("")
+    var workshopLastSyncTime by mutableStateOf("")
+    @Volatile private var lastWorkshopFetchMs: Long = 0L
+    var modsSubTab by mutableStateOf("official")
     var modProgress by mutableStateOf(ModProgressState())
     val thumbnails = mutableStateMapOf<String, ImageBitmap>()
     var pendingWorkshopPromptMod by mutableStateOf<AndroidWorkshopClient.WorkshopMod?>(null)
@@ -316,6 +319,9 @@ internal class AppController(private val activity: Activity) {
             requestInstallPendingUpdateApk()
         }
         resumePendingWebAuthIfNeeded()
+        if (activeTab == NavTab.WORKSHOP) {
+            refreshWorkshopIfStale(10_000L)
+        }
     }
 
     fun dispose() {
@@ -1202,6 +1208,7 @@ internal class AppController(private val activity: Activity) {
                     if (disposed) return@runOnUiThread
                     applyListedMods(listJson)
                     if (parsed["ok"] == true) {
+                        modsSubTab = "local"
                         val fileCount = MiniJson.longField(parsed, "fileCount", 0L)
                         toast("本地 Mod 导入成功：$cleanName（写入 $fileCount 个文件）")
                     } else {
@@ -1221,26 +1228,43 @@ internal class AppController(private val activity: Activity) {
 
     // ---- Workshop & Lightweight Thumbnail Cache ----
 
-    fun refreshWorkshopAsync() {
+    fun refreshWorkshopAsync(userInitiated: Boolean = false) {
         if (workshopLoading) return
         workshopLoading = true
         workshopError = ""
         workshopWorker.execute {
             try {
                 val items = AndroidWorkshopClient.fetchAndroidMods()
+                val stamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 activity.runOnUiThread {
                     if (disposed) return@runOnUiThread
                     workshopLoading = false
                     workshopMods.clear()
                     workshopMods.addAll(items)
+                    workshopLastSyncTime = stamp
+                    lastWorkshopFetchMs = SystemClock.elapsedRealtime()
+                    if (userInitiated) {
+                        val mobileCount = items.count { it.androidInstallable }
+                        toast("工坊已实时同步：共 ${items.size} 项（手机可直装 $mobileCount 项）")
+                    }
                 }
             } catch (e: Exception) {
                 activity.runOnUiThread {
                     if (disposed) return@runOnUiThread
                     workshopLoading = false
                     workshopError = e.message ?: "无法连接工坊"
+                    if (userInitiated) {
+                        toast("工坊同步失败：$workshopError")
+                    }
                 }
             }
+        }
+    }
+
+    fun refreshWorkshopIfStale(maxAgeMs: Long = 10_000L) {
+        if (workshopLoading) return
+        if (workshopMods.isEmpty() || SystemClock.elapsedRealtime() - lastWorkshopFetchMs >= maxAgeMs) {
+            refreshWorkshopAsync(userInitiated = false)
         }
     }
 
@@ -1303,6 +1327,10 @@ internal class AppController(private val activity: Activity) {
     }
 
     fun downloadAndInstallWorkshopMod(mod: AndroidWorkshopClient.WorkshopMod) {
+        if (!mod.androidInstallable) {
+            toast("该模组当前仅提供 PC 端资源包，可在网页版查看详情或等待作者发布手机版。")
+            return
+        }
         if (modTaskBusy) {
             toast("已有 Mod 下载安装任务正在进行中。")
             return

@@ -179,7 +179,12 @@ internal fun XingShuMobileApp(controller: AppController) {
                     XingShuBottomNavBar(
                         activeTab = controller.activeTab,
                         hasWallpaper = hasWallpaper,
-                        onSelect = { controller.activeTab = it },
+                        onSelect = { tab ->
+                            controller.activeTab = tab
+                            if (tab == NavTab.WORKSHOP) {
+                                controller.refreshWorkshopIfStale(5_000L)
+                            }
+                        },
                     )
                 },
             ) { innerPadding ->
@@ -194,7 +199,13 @@ internal fun XingShuMobileApp(controller: AppController) {
                             onOpenMods = { controller.activeTab = NavTab.MODS },
                             onOpenCustomize = { controller.activeTab = NavTab.CUSTOMIZE },
                         )
-                        NavTab.MODS -> ModsScreen(controller = controller)
+                        NavTab.MODS -> ModsScreen(
+                            controller = controller,
+                            onOpenWorkshop = {
+                                controller.activeTab = NavTab.WORKSHOP
+                                controller.refreshWorkshopIfStale(5_000L)
+                            },
+                        )
                         NavTab.WORKSHOP -> WorkshopScreen(controller = controller)
                         NavTab.CUSTOMIZE -> CustomizeScreen(controller = controller)
                         NavTab.SETTINGS -> SettingsScreen(controller = controller)

@@ -44,6 +44,7 @@ final class AndroidWorkshopClient {
         final String notes;
         final long downloads;
         final String previewUrl;
+        final boolean androidInstallable;
 
         WorkshopMod(
                 String id,
@@ -67,7 +68,7 @@ final class AndroidWorkshopClient {
                 long downloads) {
             this(id, slug, name, author, category, categoryLabel, description,
                     versionId, version, versionTitle, fileName, sizeBytes, sha256,
-                    downloadUrl, platformLabel, installKind, targetInfo, notes, downloads, "");
+                    downloadUrl, platformLabel, installKind, targetInfo, notes, downloads, "", true);
         }
 
         WorkshopMod(
@@ -91,6 +92,33 @@ final class AndroidWorkshopClient {
                 String notes,
                 long downloads,
                 String previewUrl) {
+            this(id, slug, name, author, category, categoryLabel, description,
+                    versionId, version, versionTitle, fileName, sizeBytes, sha256,
+                    downloadUrl, platformLabel, installKind, targetInfo, notes, downloads, previewUrl, true);
+        }
+
+        WorkshopMod(
+                String id,
+                String slug,
+                String name,
+                String author,
+                String category,
+                String categoryLabel,
+                String description,
+                String versionId,
+                String version,
+                String versionTitle,
+                String fileName,
+                long sizeBytes,
+                String sha256,
+                String downloadUrl,
+                String platformLabel,
+                String installKind,
+                String targetInfo,
+                String notes,
+                long downloads,
+                String previewUrl,
+                boolean androidInstallable) {
             this.id = id == null ? "" : id;
             this.slug = slug == null ? "" : slug;
             this.name = name == null ? "" : name;
@@ -105,32 +133,39 @@ final class AndroidWorkshopClient {
             this.sizeBytes = sizeBytes;
             this.sha256 = sha256 == null ? "" : sha256.toLowerCase(Locale.ROOT);
             this.downloadUrl = downloadUrl == null ? "" : downloadUrl;
-            this.platformLabel = platformLabel == null ? "手机端 (PE)" : platformLabel;
+            this.platformLabel = platformLabel == null ? (androidInstallable ? "手机端 (PE)" : "仅 PC 端") : platformLabel;
             this.installKind = installKind == null ? "" : installKind;
             this.targetInfo = targetInfo == null ? "" : targetInfo;
             this.notes = notes == null ? "" : notes;
             this.downloads = downloads;
             this.previewUrl = previewUrl == null ? "" : previewUrl;
+            this.androidInstallable = androidInstallable;
         }
 
         boolean isXspkgModule() {
             return "xspkg".equalsIgnoreCase(installKind);
+        }
+
+        String webDetailUrl() {
+            String key = slug.isEmpty() ? id : slug;
+            return ORIGIN + "/xingshu-hub/extensions/mods/" + key;
         }
     }
 
     private AndroidWorkshopClient() { }
 
     static List<WorkshopMod> fetchAndroidMods() throws Exception {
-        String listJson = httpGetJson(ORIGIN + "/api/workshop/mods");
+        String bust = "?t=" + System.currentTimeMillis();
+        String listJson = httpGetJson(ORIGIN + "/api/workshop/mods" + bust);
         List<String> multiVersionIds = new ArrayList<>();
-        List<WorkshopMod> resolved = parseAndroidModsFromListFast(listJson, multiVersionIds);
+        List<WorkshopMod> resolved = new ArrayList<>(parseAllLiveModsFromList(listJson, multiVersionIds));
         int detailLimit = Math.min(multiVersionIds.size(), MAX_CANDIDATES);
         for (int i = 0; i < detailLimit; i++) {
             String modId = multiVersionIds.get(i);
             if (!isSafeModId(modId)) continue;
             try {
                 String encoded = URLEncoder.encode(modId, "UTF-8").replace("+", "%20");
-                String detailJson = httpGetJson(ORIGIN + "/api/workshop/mods/" + encoded);
+                String detailJson = httpGetJson(ORIGIN + "/api/workshop/mods/" + encoded + bust);
                 WorkshopMod parsed = parseAndroidVersionFromDetail(detailJson);
                 if (parsed != null) {
                     resolved.add(parsed);
@@ -139,7 +174,7 @@ final class AndroidWorkshopClient {
                 // Skip transient item error without breaking the rest of the catalog.
             }
         }
-        return resolved;
+        return sortLiveWorkshopMods(resolved);
     }
 
     static boolean isSafeModId(String modId) {
@@ -198,12 +233,77 @@ final class AndroidWorkshopClient {
                 && ("xspkg".equalsIgnoreCase(kind) || containsString(item.get("platforms"), "ANDROID_CN"));
 
             if (fastEligible) {
-                direct.add(buildDirectModFromItem(item, id, kind, dlUrl, sha, size));
+                direct.add(buildDirectModFromItem(item, id, kind, dlUrl, sha, size, true));
             } else if (multiVersionIdsOut != null) {
                 multiVersionIdsOut.add(id);
             }
         }
         return direct;
+    }
+
+    /**
+     * Parses ALL live Workshop entries (both PE-installable mods and PC-only community browse mods)
+     * so mobile users immediately see every newly published Workshop project.
+     */
+    @SuppressWarnings("unchecked")
+    static List<WorkshopMod> parseAllLiveModsFromList(String listJson, List<String> multiVersionIdsOut) throws IOException {
+        Map<String, Object> root = MiniJson.parseObject(listJson);
+        Object rawItems = root.get("items");
+        if (!(rawItems instanceof List<?>)) {
+            return Collections.emptyList();
+        }
+        List<WorkshopMod> mods = new ArrayList<>();
+        for (Object obj : (List<?>) rawItems) {
+            if (!(obj instanceof Map<?, ?>)) continue;
+            Map<String, Object> item = (Map<String, Object>) obj;
+            String id = MiniJson.stringField(item, "id");
+            if (!isSafeModId(id)) continue;
+
+            String kind = MiniJson.stringField(item, "installKind");
+            String dlUrl = resolveOfficialWorkshopUrl(MiniJson.stringField(item, "downloadUrl"));
+            String sha = MiniJson.stringField(item, "sha256");
+            long size = MiniJson.longField(item, "sizeBytes", 0L);
+
+            if (isAndroidCandidateMap(item)) {
+                long versionCount = MiniJson.longField(item, "versionCount", 1L);
+                boolean fastEligible = versionCount <= 1L
+                    && dlUrl != null
+                    && PayloadDownloadManager.isValidSha256(sha)
+                    && size > 0L
+                    && ("xspkg".equalsIgnoreCase(kind) || containsString(item.get("platforms"), "ANDROID_CN"));
+                if (fastEligible) {
+                    mods.add(buildDirectModFromItem(item, id, kind, dlUrl, sha, size, true));
+                } else if (multiVersionIdsOut != null) {
+                    multiVersionIdsOut.add(id);
+                }
+            } else {
+                mods.add(buildDirectModFromItem(item, id, kind, dlUrl == null ? "" : dlUrl, sha, size, false));
+            }
+        }
+        return mods;
+    }
+
+    static List<WorkshopMod> sortLiveWorkshopMods(List<WorkshopMod> input) {
+        List<WorkshopMod> indexed = new ArrayList<>(input);
+        indexed.sort((a, b) -> {
+            int rankA = sortBucketRank(a);
+            int rankB = sortBucketRank(b);
+            if (rankA != rankB) {
+                return Integer.compare(rankA, rankB);
+            }
+            if (rankA < 2) {
+                int dlCmp = Long.compare(b.downloads, a.downloads);
+                if (dlCmp != 0) return dlCmp;
+            }
+            return a.name.compareToIgnoreCase(b.name);
+        });
+        return indexed;
+    }
+
+    private static int sortBucketRank(WorkshopMod mod) {
+        if (mod.androidInstallable && !mod.isXspkgModule()) return 0;
+        if (!mod.androidInstallable) return 1;
+        return 2;
     }
 
     private static WorkshopMod buildDirectModFromItem(
@@ -212,12 +312,23 @@ final class AndroidWorkshopClient {
             String kind,
             String dlUrl,
             String sha,
-            long size) {
-        String label = "xspkg".equalsIgnoreCase(kind) ? "PC · 手机端" : "手机端 (PE)";
-        Object rawLabels = item.get("platformLabels");
-        if (rawLabels instanceof List<?> && !((List<?>) rawLabels).isEmpty()) {
-            label = String.valueOf(((List<?>) rawLabels).get(0));
+            long size,
+            boolean androidInstallable) {
+        String label;
+        if (!androidInstallable) {
+            label = "仅 PC 端";
+        } else if ("xspkg".equalsIgnoreCase(kind)) {
+            label = "PC · 手机端";
+        } else {
+            label = "手机端 (PE)";
+            Object rawLabels = item.get("platformLabels");
+            if (rawLabels instanceof List<?> && !((List<?>) rawLabels).isEmpty()) {
+                List<?> lbls = (List<?>) rawLabels;
+                label = lbls.size() > 1 ? "PC · 手机端" : String.valueOf(lbls.get(0));
+            }
         }
+        String ver = MiniJson.stringField(item, "version").trim();
+        if (ver.isEmpty()) ver = "1.0.0";
         return new WorkshopMod(
                 id,
                 MiniJson.stringField(item, "slug"),
@@ -227,7 +338,7 @@ final class AndroidWorkshopClient {
                 MiniJson.stringField(item, "categoryLabel"),
                 MiniJson.stringField(item, "description"),
                 "",
-                MiniJson.stringField(item, "version"),
+                ver,
                 "",
                 MiniJson.stringField(item, "packageFile"),
                 size,
@@ -238,7 +349,8 @@ final class AndroidWorkshopClient {
                 MiniJson.stringField(item, "targetInfo"),
                 "",
                 MiniJson.longField(item, "downloads", 0L),
-                extractPreviewUrl(item));
+                extractPreviewUrl(item),
+                androidInstallable);
     }
 
     static WorkshopMod parseAndroidVersionFromDetail(String detailJson) throws IOException {
@@ -292,7 +404,7 @@ final class AndroidWorkshopClient {
                 return null;
             }
             String kind = MiniJson.stringField(item, "installKind");
-            return buildDirectModFromItem(item, id, kind, dlUrl, sha, size);
+            return buildDirectModFromItem(item, id, kind, dlUrl, sha, size, true);
         }
         return null;
     }
@@ -384,11 +496,14 @@ final class AndroidWorkshopClient {
         URL url = PayloadDownloadManager.validateOfficialUrl(urlStr);
         HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
         conn.setInstanceFollowRedirects(false);
+        conn.setUseCaches(false);
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(20000);
         conn.setRequestMethod("GET");
         conn.setRequestProperty("User-Agent", "XingShu-Android-Launcher/1");
         conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("Cache-Control", "no-cache");
+        conn.setRequestProperty("Pragma", "no-cache");
         try {
             int status = conn.getResponseCode();
             if (status != HttpURLConnection.HTTP_OK) {
