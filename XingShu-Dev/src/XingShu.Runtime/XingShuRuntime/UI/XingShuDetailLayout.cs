@@ -307,8 +307,20 @@ namespace XingShuRuntime.UI
 
         internal static int ReadMask()
         {
-            return StatsWidgetMetricCatalog.NormalizeMask(
-                XingShuConfigService.GetInt(XingShuConfigKeys.StatsWidgetMetrics, StatsWidgetMetricCatalog.DefaultMask));
+            if (XingShuConfigService.HasKey(XingShuConfigKeys.StatsWidgetMetrics))
+            {
+                return StatsWidgetMetricCatalog.NormalizeMask(
+                    XingShuConfigService.GetInt(XingShuConfigKeys.StatsWidgetMetrics, StatsWidgetMetricCatalog.DefaultMask));
+            }
+            if (XingShuConfigService.HasKey(XingShuConfigKeys.StatsWidgetMetricsLegacy))
+            {
+                int migrated = StatsWidgetMetricCatalog.MigrateLegacyMask(
+                    XingShuConfigService.GetInt(XingShuConfigKeys.StatsWidgetMetricsLegacy, StatsWidgetMetricCatalog.DefaultMask));
+                XingShuConfigService.SetInt(XingShuConfigKeys.StatsWidgetMetrics, migrated);
+                XingShuConfigService.Save();
+                return migrated;
+            }
+            return StatsWidgetMetricCatalog.DefaultMask;
         }
 
         internal void SyncFromConfig()

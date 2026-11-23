@@ -27,6 +27,7 @@ internal static class MobileWidgetScaleTests
             Check(larger.Width > bounds.Width && larger.Height > bounds.Height, "Independent widget adjustment remains effective");
         }
         Check(StatsWidgetPreferences.PanelWidth(8) == StatsWidgetPreferences.Width, "Full 8-metric width matches default panel width");
+        Check(StatsWidgetPreferences.PanelWidth(9) > StatsWidgetPreferences.PanelWidth(8), "Adding actual damage expands default 9-metric panel width");
         Check(StatsWidgetPreferences.PanelWidth(4) < StatsWidgetPreferences.PanelWidth(8), "Fewer enabled metrics narrow the horizontal strip");
         Check(StatsWidgetPreferences.PanelHeight(8, false) == StatsWidgetPreferences.Height, "Full 8-metric height matches default panel height");
         Check(StatsWidgetPreferences.PanelHeight(8, true) == StatsWidgetPreferences.HeaderHeight, "Collapsed panel height matches header");

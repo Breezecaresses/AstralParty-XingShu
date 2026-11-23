@@ -24,7 +24,7 @@ internal sealed class StatsWidgetPreferences
 
 	internal static float PanelWidth(int visibleMetricCount)
 	{
-		int clamped = Math.Max(1, Math.Min(8, visibleMetricCount));
+		int clamped = Math.Max(1, Math.Min(9, visibleMetricCount));
 		float metricColWidth = clamped <= 4 ? 56f : 46f;
 		return Math.Max(316f, 146f + clamped * metricColWidth + 18f);
 	}

@@ -175,7 +175,7 @@ namespace XingShuRuntime.UI
 
         private void BuildStatsWidgetCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "Card_StatsWidgetSettings", 492f);
+            GameObject cardGo = CreateCardContainer(parent, "Card_StatsWidgetSettings", 528f);
 
             Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "对局数据挂件设置", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
             RectTransform ctRt = cardTitle.rectTransform;

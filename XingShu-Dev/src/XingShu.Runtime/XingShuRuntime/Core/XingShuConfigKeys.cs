@@ -424,10 +424,12 @@ internal static class XingShuConfigKeys
 	internal const string BattleCardPointLocked = "XINGSHU_BATTLE_CARD_LOCKED";
 	internal const bool BattleCardPointLockedDefault = false;
 
-	// 自定义显示统计项掩码 (8项: 击杀/死亡/输出/承伤/治疗/累计金币/转账/移动步数，默认全选 255)
-	internal const string StatsWidgetMetrics = "XINGSHU_STATS_WIDGET_METRICS";
+	// 自定义显示统计项掩码 (9项: 击杀/死亡/输出/实际伤害/承伤/治疗/累计金币/转账/移动步数，默认全选 511)
+	internal const string StatsWidgetMetricsLegacy = "XINGSHU_STATS_WIDGET_METRICS";
 
-	internal const int StatsWidgetMetricsDefault = 255;
+	internal const string StatsWidgetMetrics = "XINGSHU_STATS_WIDGET_METRICS_V2";
+
+	internal const int StatsWidgetMetricsDefault = 511;
 
 	// 自定义大厅背景 (CustomLobbyBackground)
 	internal const string CustomLobbyBgEnabled = "XINGSHU_CUSTOM_LOBBY_BG_ENABLED";

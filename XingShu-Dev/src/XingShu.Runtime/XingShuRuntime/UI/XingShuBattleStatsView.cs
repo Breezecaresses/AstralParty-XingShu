@@ -29,7 +29,7 @@ namespace XingShuRuntime.UI
             var toggleRt = _floating.GetComponent<RectTransform>();
             toggleRt.anchorMin = toggleRt.anchorMax = toggleRt.pivot = new Vector2(0, 1);
             toggleRt.anchoredPosition = new Vector2(20, -76); toggleRt.sizeDelta = new Vector2(280, 28);
-            var metricsCard = Card(content, "MetricsCustomize", 138);
+            var metricsCard = Card(content, "MetricsCustomize", 174);
             _metricsPanel = new XingShuStatsMetricsPanel(metricsCard, -12f, RefreshCardsNow);
             int mask = XingShuStatsMetricsPanel.ReadMask();
             float cardHeight = XingShuMatchPlayerCard.PreferredHeight(false, XingShuMobileUIHelper.IsMobile, mask);
@@ -39,9 +39,9 @@ namespace XingShuRuntime.UI
                 _playerLayouts[i] = cardGo.GetComponent<LayoutElement>();
                 _players[i] = new XingShuMatchPlayerCard(cardGo, false);
             }
-            var note = Card(content, "RatingSource", 124);
+            var note = Card(content, "RatingSource", 146);
             var text = XingShuDetailLayout.Text(note.transform,
-                "评分与 Hub 相同：取综合、输出、辅助三项最高分，再按死亡次数扣分。\n局内为开启观察后的实时参考；收到服务器结算后替换为整局数据。缺失指标显示 —，不补成 0。\n辅助转账达到 20 时有基础贡献；星枢评分属于项目参考值。",
+                "评分与 Hub 相同：取综合、输出、辅助三项最高分，再按死亡次数扣分。\n输出统计含官方溢伤（以结算为准）；「实际伤害」按目标真实扣血累计，剔除溢伤，需开启局内实时观察。\n收到服务器结算后保留已观测实际伤害，其余切换为整局数据；缺失指标显示 —，不补成 0。\n辅助转账达到 20 时有基础贡献；星枢评分属于项目参考值。",
                 20, 14, 0, 0, 12, true);
             XingShuDetailLayout.Fill(text.rectTransform, 20, 14, 20, 14);
         }

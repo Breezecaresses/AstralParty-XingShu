@@ -247,7 +247,7 @@ namespace XingShuRuntime.Utilities
                 }
             }
 
-            // Pick a representative score/metric ratio for the subtle horizontal bar fill per row (Score -> Damage -> Kills -> Coins -> Steps).
+            // Pick a representative score/metric ratio for the subtle horizontal bar fill per row (Score -> Damage -> ActualDamage -> Steps -> Coins).
             double bestRowStrength = 0d;
             double[] rowStrength = new double[PlayerCount];
             for (int row = 0; row < PlayerCount; row++)
@@ -255,7 +255,7 @@ namespace XingShuRuntime.Utilities
                 var p = frame.Players[row];
                 if (p == null) continue;
                 double s = ParseNumeric(p.Score);
-                if (s <= 0d) s = parsed[row, 2] > 0d ? parsed[row, 2] : (parsed[row, 7] > 0d ? parsed[row, 7] : parsed[row, 5]);
+                if (s <= 0d) s = parsed[row, 2] > 0d ? parsed[row, 2] : (parsed[row, 3] > 0d ? parsed[row, 3] : (parsed[row, 8] > 0d ? parsed[row, 8] : parsed[row, 6]));
                 rowStrength[row] = s;
                 if (s > bestRowStrength) bestRowStrength = s;
             }
@@ -438,7 +438,7 @@ namespace XingShuRuntime.Utilities
 
         private void Load()
         {
-            _metricMask = StatsWidgetMetricCatalog.NormalizeMask(XingShuConfigService.GetInt(XingShuConfigKeys.StatsWidgetMetrics, StatsWidgetMetricCatalog.DefaultMask));
+            _metricMask = XingShuStatsMetricsPanel.ReadMask();
             Preferences.Background = XingShuConfigService.GetFloat(Key(XingShuConfigKeys.StatsWidgetPcBackground, XingShuConfigKeys.StatsWidgetAndroidBackground), .78f);
             Preferences.TextAlpha = XingShuConfigService.GetFloat(Key(XingShuConfigKeys.StatsWidgetPcText, XingShuConfigKeys.StatsWidgetAndroidText), .96f);
             Preferences.Scale = XingShuConfigService.GetFloat(Key(XingShuConfigKeys.StatsWidgetPcScale, XingShuConfigKeys.StatsWidgetAndroidScale),

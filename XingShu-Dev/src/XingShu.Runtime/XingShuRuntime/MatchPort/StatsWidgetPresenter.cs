@@ -93,10 +93,10 @@ internal static class StatsWidgetPresenter
 			{
 				settled |= row.Settled;
 				var player = new StatsWidgetFrame.Player { Name = row.Name, Character = row.Character, HeadUrl = row.HeadUrl, HeroId = row.HeroId, State = row.Settled ? "已结算" : "实时参考" };
-				long[] values = { row.Kills, row.Deaths, row.Damage, row.Taken, row.Healing, row.Coins, row.Transferred, row.Turns, row.Movement };
-				bool[] known = { row.KillsKnown, true, row.DamageKnown, true, row.HealingKnown, true, row.TransferKnown, true, row.MovementKnown };
+				long[] values = { row.Kills, row.Deaths, row.Damage, row.Taken, row.Healing, row.Coins, row.Transferred, row.Turns, row.Movement, row.ActualDamage };
+				bool[] known = { row.KillsKnown, true, row.DamageKnown, true, row.HealingKnown, true, row.TransferKnown, true, row.MovementKnown, row.ActualDamageKnown };
 				for (int c = 0; c < values.Length; c++)
-					player.Metrics[c] = Number(values[c], c == 8 ? row.MovementReady : row.MetricsReady, known[c]);
+					player.Metrics[c] = Number(values[c], c == 8 ? row.MovementReady : (c == 9 ? row.ActualDamageReady : row.MetricsReady), known[c]);
 				if (row.MetricsReady && !row.HealingKnown && !row.Settled)
 				{
 					player.Metrics[4] = "≥" + Number(row.Healing, true, true);
@@ -119,7 +119,7 @@ internal static class StatsWidgetPresenter
 				stringBuilder.Append("P").Append(i + 1).Append(' ')
 					.Append(row.Name)
 					.Append("\n");
-				stringBuilder.Append(Exact(row.Kills, row.HpReady, row.KillsKnown)).Append(" / ").Append(Exact(row.Damage, row.HpReady, row.DamageKnown))
+				stringBuilder.Append(Exact(row.Kills, row.HpReady, row.KillsKnown)).Append(" / ").Append(Exact(row.Damage, row.HpReady, row.DamageKnown)).Append("(").Append(Exact(row.ActualDamage, row.ActualDamageReady, row.ActualDamageKnown)).Append(")")
 					.Append(" / ")
 					.Append(Exact(row.Movement, row.MovementReady, row.MovementKnown))
 					.Append(" / ")
@@ -142,7 +142,7 @@ internal static class StatsWidgetPresenter
 			statsWidgetFrame.Footer = "治疗 ≥ 为已确认下限 · 评分 ≈ 为估算 · 结算后校准";
 			statsWidgetFrame.Details += "\n治疗仅累计已确认来源的有效生命恢复；来源缺失时显示下限。评分使用这些已确认值估算，不作为官方结算或确定的 MVP。";
 		}
-		statsWidgetFrame.Details = statsWidgetFrame.Details + "\n\n精确数值（击倒 / 伤害 / 步数 / 转出）\n" + stringBuilder;
+		statsWidgetFrame.Details = statsWidgetFrame.Details + "\n\n精确数值（击倒 / 输出(实伤) / 步数 / 转出）\n" + stringBuilder;
 		return statsWidgetFrame;
 	}
 

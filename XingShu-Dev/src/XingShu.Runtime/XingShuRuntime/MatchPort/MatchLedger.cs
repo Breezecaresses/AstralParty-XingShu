@@ -38,6 +38,12 @@ internal sealed class MatchLedger
 
 		internal bool DamageKnown = true;
 
+		internal long ActualDamage;
+
+		internal bool ActualDamageReady;
+
+		internal bool ActualDamageKnown = true;
+
 		internal bool MovementKnown = true;
 
 		internal bool TransferKnown = true;
@@ -172,6 +178,26 @@ internal sealed class MatchLedger
 				value.DamageKnown = false;
 				Issue("伤害溢出");
 			}
+			if (actualDelta < 0)
+			{
+				if (!currentHp.HasValue || oldHp < 0)
+				{
+					value.ActualDamageKnown = false;
+				}
+				else
+				{
+					long actualHit = Math.Min(-(long)actualDelta, Math.Max(0L, (long)oldHp - currentHp.Value));
+					try
+					{
+						value.ActualDamage += actualHit;
+					}
+					catch (OverflowException)
+					{
+						value.ActualDamageKnown = false;
+						Issue("实际伤害溢出");
+					}
+				}
+			}
 			if (!currentHp.HasValue)
 			{
 				value.KillsKnown = false;
@@ -224,9 +250,11 @@ internal sealed class MatchLedger
 	{
 		Row row;
 		if (!Rows.TryGetValue(id, out row)) return;
+		bool hadLiveHp = row.HpReady || row.ActualDamageReady;
 		row.Kills = kills; row.Deaths = deaths; row.Damage = damage; row.Taken = taken;
 		row.Healing = healing; row.Coins = coins; row.Transferred = transferred; row.Movement = movement;
 		row.HpReady = row.TransferReady = true;
+		row.ActualDamageReady = hadLiveHp;
 		row.MovementReady = row.MovementKnown = movement >= 0;
 		row.KillsKnown = row.DamageKnown = row.HealingKnown = row.TransferKnown = true;
 		row.HealingFromServer = true;

@@ -428,6 +428,7 @@ public sealed class BattleStatsOverlay : MonoBehaviour
 				foreach (MatchLedger.Row value in _ledger.Rows.Values)
 				{
 					value.HpReady |= _hpAttached;
+					value.ActualDamageReady |= _hpAttached;
 					value.TransferReady |= flag;
 					value.MetricsReady = _hpAttached && flag;
 				}
@@ -920,7 +921,7 @@ public sealed class BattleStatsOverlay : MonoBehaviour
 		{
 			GUILayout.Label("观察起点：" + _observedSince.ToString("HH:mm:ss") + "（切局/重连重建/关闭后重开会清零）");
 		}
-		GUILayout.Label("击倒 / 实际伤害 / 确认步数 / 累计转出（不含收款）");
+		GUILayout.Label("击倒 / 输出(实伤) / 确认步数 / 累计转出（不含收款）");
 		GUILayout.Label("击倒指 HP 归零，不代表永久消灭；— 表示来源未知。隐藏窗口不关闭统计。");
 		for (int i = 0; i < 4; i++)
 		{
@@ -935,7 +936,7 @@ public sealed class BattleStatsOverlay : MonoBehaviour
 			}
 			GUILayout.BeginVertical(GUI.skin.box);
 			GUILayout.Label("P" + (i + 1) + "  " + ((row == null) ? "—" : row.Name));
-			GUILayout.Label((row == null) ? "— / — / — / —" : (Metric(row.Kills, row.HpReady, row.KillsKnown) + " / " + Metric(row.Damage, row.HpReady, row.DamageKnown) + " / " + Metric(row.Movement, row.MovementReady, row.MovementKnown) + " / " + Metric(row.Transferred, row.TransferReady, row.TransferKnown)));
+			GUILayout.Label((row == null) ? "— / —(—) / — / —" : (Metric(row.Kills, row.HpReady, row.KillsKnown) + " / " + Metric(row.Damage, row.HpReady, row.DamageKnown) + "(" + Metric(row.ActualDamage, row.ActualDamageReady, row.ActualDamageKnown) + ") / " + Metric(row.Movement, row.MovementReady, row.MovementKnown) + " / " + Metric(row.Transferred, row.TransferReady, row.TransferKnown)));
 			GUILayout.EndVertical();
 		}
 		_diagnostics = GUILayout.Toggle(_diagnostics, "来源诊断" + ((_ledger.Issues.Count > 0) ? "（部分/不完整）" : "（观察累计）"));

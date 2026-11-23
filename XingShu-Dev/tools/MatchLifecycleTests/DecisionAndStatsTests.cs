@@ -122,14 +122,14 @@ class DecisionAndStatsTests
         var row = ledger.Rows[1]; row.MetricsReady = row.HpReady = row.MovementReady = row.TransferReady = true; row.Gold = 27;
         var live = new HashSet<long> { 1, 2 };
         var frame = StatsWidgetPresenter.Build(ledger, live, true, DateTime.Now, "test");
-        Check(frame.Players[0].Metrics.Length == 9 && Array.IndexOf(frame.Players[0].Metrics, "27") == -1,
-            "live card has nine metrics without settlement gold");
+        Check(frame.Players[0].Metrics.Length == 10 && Array.IndexOf(frame.Players[0].Metrics, "27") == -1,
+            "live card has ten metrics without settlement gold");
         row.Settled = true;
         frame = StatsWidgetPresenter.Build(ledger, live, true, DateTime.Now, "test");
         Check(Array.IndexOf(frame.Players[0].Metrics, "27") == -1 && row.Gold == 27 && frame.Status.Contains("服务器结算"), "settlement updates source without exposing or discarding stored gold");
         row.MovementReady = false;
         frame = StatsWidgetPresenter.Build(ledger, live, true, DateTime.Now, "test");
-        Check(frame.Players[0].Metrics.Length == 9 && frame.Players[0].Metrics[8] == "—", "unknown movement remains unknown even when settlement metrics are ready");
+        Check(frame.Players[0].Metrics.Length == 10 && frame.Players[0].Metrics[8] == "—", "unknown movement remains unknown even when settlement metrics are ready");
         row.Movement = 42; row.MovementReady = row.MovementKnown = true;
         frame = StatsWidgetPresenter.Build(ledger, live, true, DateTime.Now, "test");
         Check(frame.Players[0].Metrics[8] == "42", "confirmed movement reaches the shared desktop and Android detail frame");
@@ -222,12 +222,55 @@ class DecisionAndStatsTests
         Check(retained.Read(101, null) == null, "turning off collection can explicitly clear the retained result");
         ledger.Clear("match-b");
         Check(ledger.Rows.Count == 0 && ledger.Issues.Count == 0, "new match clears observed statistics");
-        Check(StatsWidgetMetricCatalog.Count == 8 && Array.IndexOf(StatsWidgetMetricCatalog.Labels, "对局轮数") == -1 && StatsWidgetMetricCatalog.FrameMetricIndices[7] == 8,
-            "metric catalog removes turns and maps movement to Metrics[8]");
+        Check(StatsWidgetMetricCatalog.Count == 9 && Array.IndexOf(StatsWidgetMetricCatalog.Labels, "对局轮数") == -1 && StatsWidgetMetricCatalog.FrameMetricIndices[3] == 9 && StatsWidgetMetricCatalog.FrameMetricIndices[8] == 8,
+            "metric catalog includes actual damage at Metrics[9] and maps movement to Metrics[8]");
         Check(StatsWidgetMetricCatalog.NormalizeMask(0) == StatsWidgetMetricCatalog.DefaultMask && StatsWidgetMetricCatalog.SetEnabled(1, 0, false) == 1,
             "metric catalog enforces at least one enabled metric");
-        Check(StatsWidgetMetricCatalog.CountEnabled(StatsWidgetMetricCatalog.SetEnabled(StatsWidgetMetricCatalog.DefaultMask, 2, false)) == 7,
+        Check(StatsWidgetMetricCatalog.CountEnabled(StatsWidgetMetricCatalog.SetEnabled(StatsWidgetMetricCatalog.DefaultMask, 2, false)) == 8,
             "metric catalog toggles individual metrics cleanly");
+        Check(StatsWidgetMetricCatalog.MigrateLegacyMask(255) == StatsWidgetMetricCatalog.DefaultMask && StatsWidgetMetricCatalog.MigrateLegacyMask(0) == StatsWidgetMetricCatalog.DefaultMask,
+            "legacy full or empty masks migrate cleanly to default 9-metric mask");
+        int partialMigrated = StatsWidgetMetricCatalog.MigrateLegacyMask(1 | (1 << 2));
+        Check(StatsWidgetMetricCatalog.IsEnabled(partialMigrated, 0) && StatsWidgetMetricCatalog.IsEnabled(partialMigrated, 2) && StatsWidgetMetricCatalog.IsEnabled(partialMigrated, 3) &&
+            !StatsWidgetMetricCatalog.IsEnabled(partialMigrated, 1) && !StatsWidgetMetricCatalog.IsEnabled(partialMigrated, 8) && StatsWidgetMetricCatalog.CountEnabled(partialMigrated) == 3,
+            "legacy custom mask preserves existing selections and enables actual damage");
+
+        var dmgLedger = new MatchLedger(); dmgLedger.Clear("match-actual");
+        dmgLedger.Register(1, 0, "Attacker"); dmgLedger.Register(2, 1, "Victim");
+        var attacker = dmgLedger.Rows[1];
+        attacker.MetricsReady = attacker.HpReady = attacker.ActualDamageReady = attacker.TransferReady = attacker.MovementReady = true;
+        // Overkill: 8 raw damage on 3 HP target -> Damage=8, ActualDamage=3
+        dmgLedger.Hp("match-actual", new object(), 2, 1, -8, 3, 0);
+        // Normal hit: 2 raw damage from 5 HP to 3 HP -> Damage=10, ActualDamage=5
+        dmgLedger.Hp("match-actual", new object(), 2, 1, -2, 5, 3);
+        // Blocked/0 HP drop: 4 raw damage with no HP change -> Damage=14, ActualDamage=5
+        dmgLedger.Hp("match-actual", new object(), 2, 1, -4, 5, 5);
+        Check(attacker.Damage == 14 && attacker.ActualDamage == 5 && attacker.ActualDamageKnown,
+            "actual damage clamps overkill and ignores blocked hits while damage keeps protocol delta");
+        var dmgFrame = StatsWidgetPresenter.Build(dmgLedger, new HashSet<long> { 1, 2 }, true, DateTime.Now, "live");
+        Check(dmgFrame.Players[0].Metrics[2] == "14" && dmgFrame.Players[0].Metrics[9] == "5",
+            "presenter exposes both overkill damage and actual damage concurrently");
+        // Settlement with prior live HP preserves observed ActualDamage while updating official Damage
+        dmgLedger.Settlement(1, 2, 0, 50, 10, 0, 30, 5, 20);
+        var settledDmgFrame = StatsWidgetPresenter.Build(dmgLedger, new HashSet<long> { 1, 2 }, true, DateTime.Now, "settled");
+        Check(attacker.Damage == 50 && attacker.ActualDamage == 5 && attacker.ActualDamageReady && settledDmgFrame.Players[0].Metrics[2] == "50" && settledDmgFrame.Players[0].Metrics[9] == "5",
+            "settlement with prior live HP preserves observed actual damage");
+        // Unknown HP invalidates ActualDamage
+        var unknownHpLedger = new MatchLedger(); unknownHpLedger.Clear("match-unknown-hp");
+        unknownHpLedger.Register(1, 0, "A"); unknownHpLedger.Register(2, 1, "B");
+        unknownHpLedger.Rows[1].MetricsReady = unknownHpLedger.Rows[1].HpReady = unknownHpLedger.Rows[1].ActualDamageReady = unknownHpLedger.Rows[1].TransferReady = true;
+        unknownHpLedger.Hp("match-unknown-hp", new object(), 2, 1, -3, 5, null);
+        var unknownHpFrame = StatsWidgetPresenter.Build(unknownHpLedger, new HashSet<long> { 1, 2 }, true, DateTime.Now, "live");
+        Check(!unknownHpLedger.Rows[1].ActualDamageKnown && unknownHpFrame.Players[0].Metrics[9] == "—",
+            "unconfirmed target HP marks actual damage unknown instead of guessing");
+        // Settlement without prior live HP keeps ActualDamage unavailable ("—")
+        var noLiveLedger = new MatchLedger(); noLiveLedger.Clear("match-no-live");
+        noLiveLedger.Register(1, 0, "Late");
+        noLiveLedger.Settlement(1, 1, 0, 20, 5, 0, 10, 0, 15);
+        var noLiveFrame = StatsWidgetPresenter.Build(noLiveLedger, new HashSet<long> { 1 }, true, DateTime.Now, "settled");
+        Check(!noLiveLedger.Rows[1].ActualDamageReady && noLiveFrame.Players[0].Metrics[2] == "20" && noLiveFrame.Players[0].Metrics[9] == "—",
+            "settlement without prior live HP observation leaves actual damage unavailable");
+
         Check(CharacterEmoteRegistry.PickStaticEmote(101, 0).StartsWith("UT_Item_Emoji_101_") && CharacterEmoteRegistry.PickStaticEmote(307, 0) == "",
             "static emote registry picks static emoji for regular heroes and skips preview heroes");
         ledger.Register(1, 0, "Alpha");
