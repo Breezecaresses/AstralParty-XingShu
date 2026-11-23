@@ -62,6 +62,8 @@ namespace XingShuRuntime.Utilities
                 case ".png":
                 case ".jpg":
                 case ".jpeg":
+                case ".webp":
+                case ".bmp":
                     return LobbyBgMediaKind.Image;
                 case ".usm":
                     return LobbyBgMediaKind.CriUsm;
@@ -252,6 +254,51 @@ namespace XingShuRuntime.Utilities
                     ? norm
                     : ("file://" + (norm.StartsWith("/") ? "" : "/") + Uri.EscapeUriString(norm));
             }
+        }
+
+        internal static string DescribeImageHeader(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length < 4)
+            {
+                return "空文件";
+            }
+            if (bytes.Length >= 8
+                && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47
+                && bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A)
+            {
+                return "PNG";
+            }
+            if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+            {
+                return "JPEG";
+            }
+            if (bytes.Length >= 12
+                && bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46
+                && bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50)
+            {
+                return "WebP";
+            }
+            if (bytes.Length >= 12
+                && bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70)
+            {
+                return "HEIF/AVIF";
+            }
+            if (bytes[0] == 0x42 && bytes[1] == 0x4D)
+            {
+                return "BMP";
+            }
+            if (bytes.Length >= 6
+                && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38)
+            {
+                return "GIF";
+            }
+            return "未知格式";
+        }
+
+        internal static bool IsLikelyUnsupportedByUnityLoadImage(byte[] bytes)
+        {
+            string fmt = DescribeImageHeader(bytes);
+            return fmt == "WebP" || fmt == "HEIF/AVIF" || fmt == "BMP" || fmt == "GIF";
         }
     }
 }

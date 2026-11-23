@@ -17,6 +17,7 @@ namespace XingShuRuntime.UI
         private readonly GameObject _root;
         private Text _statusIndicatorText;
         private Text _activeMediaText;
+        private Text _inlineStatusText;
         private Text _countBadgeText;
         private Text _statusMsgText;
 
@@ -50,7 +51,7 @@ namespace XingShuRuntime.UI
 
         private bool _suppressCallbacks;
         private float _lastDirCheckTime = -10f;
-        private string _lastObservedStatus = "";
+        private string _lastObservedStatus = null;
 
         internal GameObject Root => _root;
 
@@ -158,7 +159,7 @@ namespace XingShuRuntime.UI
 
         private void BuildMediaControlCard(GameObject parent)
         {
-            GameObject card = CreateCardContainer(parent, "Card_MediaList", 170f);
+            GameObject card = CreateCardContainer(parent, "Card_MediaList", 190f);
             _fileListCardLe = card.GetComponent<LayoutElement>();
 
             Text title = XingShuUIFactory.CreateText(card, "Title", "2. 素材切换与列表", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
@@ -170,6 +171,10 @@ namespace XingShuRuntime.UI
             _activeMediaText = XingShuUIFactory.CreateText(card, "ActiveLabel", "当前素材：—", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleLeft, FontStyle.Bold);
             PlaceTopFill(_activeMediaText.rectTransform, -42f, 22f);
 
+            _inlineStatusText = XingShuUIFactory.CreateText(card, "InlineStatus", "", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            _inlineStatusText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            PlaceTopFill(_inlineStatusText.rectTransform, -64f, 20f);
+
             // 4 Quick Action Buttons
             Sprite btnSec = XingShuUIAssetService.GetSprite("button_secondary.png");
             Sprite btnPri = XingShuUIAssetService.GetSprite("button_primary.png");
@@ -179,7 +184,7 @@ namespace XingShuRuntime.UI
             brRt.anchorMin = new Vector2(0f, 1f);
             brRt.anchorMax = new Vector2(1f, 1f);
             brRt.pivot = new Vector2(0.5f, 1f);
-            brRt.anchoredPosition = new Vector2(0f, -72f);
+            brRt.anchoredPosition = new Vector2(0f, -90f);
             brRt.sizeDelta = new Vector2(-40f, 34f);
 
             HorizontalLayoutGroup hlg = btnRow.AddComponent<HorizontalLayoutGroup>();
@@ -217,7 +222,7 @@ namespace XingShuRuntime.UI
             flRt.anchorMin = new Vector2(0f, 1f);
             flRt.anchorMax = new Vector2(1f, 1f);
             flRt.pivot = new Vector2(0.5f, 1f);
-            flRt.anchoredPosition = new Vector2(0f, -116f);
+            flRt.anchoredPosition = new Vector2(0f, -134f);
             flRt.sizeDelta = new Vector2(-40f, 40f);
 
             VerticalLayoutGroup flLayout = _fileListContainer.AddComponent<VerticalLayoutGroup>();
@@ -399,7 +404,7 @@ namespace XingShuRuntime.UI
             PlaceTopFill(_dirResolvedText.rectTransform, -146f, 20f);
 
             Text formatTip = XingShuUIFactory.CreateText(card, "FormatTip",
-                "支持格式：MP4 / WebM / MOV / M4V 视频、PNG / JPG 静态图、.usm 及 3.3.0 VKVLoop .bundle",
+                "支持格式：MP4 / WebM / MOV / M4V 视频、PNG / JPG / WebP / BMP 静态图、.usm 及 3.3.0 VKVLoop .bundle",
                 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
             PlaceTopFill(formatTip.rectTransform, -172f, 20f);
         }
@@ -529,6 +534,14 @@ namespace XingShuRuntime.UI
                 {
                     _statusMsgText.text = string.IsNullOrEmpty(msg) ? "就绪" : msg;
                 }
+                if (_inlineStatusText != null)
+                {
+                    _inlineStatusText.text = string.IsNullOrEmpty(msg) ? "点击下方素材行可立即应用替换" : $"状态：{msg}";
+                    bool isErr = msg.Contains("无法解码") || msg.Contains("失败") || msg.Contains("不支持") || msg.Contains("不存在");
+                    _inlineStatusText.color = isErr
+                        ? XingShuUITheme.Danger
+                        : (msg.Contains("已应用") ? XingShuUITheme.Positive : XingShuUITheme.SecondaryText);
+                }
             }
 
             UpdateFillButtonVisuals(bg.FillMode);
@@ -584,10 +597,24 @@ namespace XingShuRuntime.UI
                     "目录暂无素材：请点击下方「打开素材文件夹」或将文件放入 lobbybg 目录后点击「刷新扫描」",
                     12, XingShuUITheme.MutedText, TextAnchor.MiddleCenter).gameObject;
                 emptyObj.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 38f);
-                UpdateFileCardHeight(172f);
+                if (XingShuMobileUIHelper.IsMobile)
+                {
+                    LayoutElement ele = emptyObj.GetComponent<LayoutElement>() ?? emptyObj.AddComponent<LayoutElement>();
+                    ele.minHeight = 48f;
+                    ele.preferredHeight = -1f;
+                    ele.flexibleWidth = 1f;
+                    UpdateFileCardHeight(-1f);
+                }
+                else
+                {
+                    UpdateFileCardHeight(192f);
+                }
                 return;
             }
 
+            bool isMobile = XingShuMobileUIHelper.IsMobile;
+            float rowHeight = isMobile ? 54f : 34f;
+            float mScale = isMobile ? XingShuMobilePageLayout.TextScale : 1f;
             Sprite rowBgSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
             for (int i = 0; i < names.Count; i++)
             {
@@ -597,7 +624,15 @@ namespace XingShuRuntime.UI
                 string badge = CustomLobbyBgPolicy.KindLabel(kind);
 
                 GameObject rowGo = XingShuUIFactory.CreateUIObject("MediaRow_" + i, _fileListContainer);
-                rowGo.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 34f);
+                rowGo.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, rowHeight);
+                if (isMobile)
+                {
+                    LayoutElement rowLe = rowGo.AddComponent<LayoutElement>();
+                    rowLe.minHeight = rowHeight;
+                    rowLe.preferredHeight = rowHeight;
+                    rowLe.flexibleWidth = 1f;
+                    rowLe.flexibleHeight = 0f;
+                }
 
                 Image rowImg = rowGo.AddComponent<Image>();
                 rowImg.sprite = rowBgSprite ?? XingShuUIAssetService.WhiteSprite;
@@ -613,27 +648,52 @@ namespace XingShuRuntime.UI
                     SyncFromRuntime(forceListRebuild: false);
                 });
 
-                Text nameTxt = XingShuUIFactory.CreateText(rowGo, "Name", $"{i + 1}. {fn}", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+                Text nameTxt = XingShuUIFactory.CreateText(
+                    rowGo, "Name", $"{i + 1}. {fn}",
+                    isMobile ? Mathf.RoundToInt(20 * mScale) : 13,
+                    XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+                nameTxt.raycastTarget = false;
+                if (isMobile)
+                {
+                    nameTxt.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    nameTxt.verticalOverflow = VerticalWrapMode.Overflow;
+                }
                 RectTransform nRt = nameTxt.rectTransform;
                 nRt.anchorMin = Vector2.zero;
                 nRt.anchorMax = Vector2.one;
                 nRt.offsetMin = new Vector2(14f, 0f);
-                nRt.offsetMax = new Vector2(-108f, 0f);
+                nRt.offsetMax = new Vector2(isMobile ? -116f : -108f, 0f);
 
-                Text tagTxt = XingShuUIFactory.CreateText(rowGo, "Kind", badge, 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleRight, FontStyle.Bold);
+                Text tagTxt = XingShuUIFactory.CreateText(
+                    rowGo, "Kind", badge,
+                    isMobile ? Mathf.RoundToInt(18 * mScale) : 12,
+                    XingShuUITheme.SecondaryText, TextAnchor.MiddleRight, FontStyle.Bold);
+                tagTxt.raycastTarget = false;
                 RectTransform tRt = tagTxt.rectTransform;
                 tRt.anchorMin = new Vector2(1f, 0f);
                 tRt.anchorMax = new Vector2(1f, 1f);
                 tRt.pivot = new Vector2(1f, 0.5f);
                 tRt.anchoredPosition = new Vector2(-14f, 0f);
-                tRt.sizeDelta = new Vector2(88f, 0f);
+                tRt.sizeDelta = new Vector2(isMobile ? 96f : 88f, 0f);
 
                 _fileRowButtons.Add(rowBtn);
                 _fileRowBgs.Add(rowImg);
             }
 
-            float listHeight = names.Count * 40f;
-            UpdateFileCardHeight(130f + listHeight);
+            if (isMobile)
+            {
+                UpdateFileCardHeight(-1f);
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_fileListContainer.GetComponent<RectTransform>());
+                if (_fileListCardLe != null)
+                {
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(_fileListCardLe.GetComponent<RectTransform>());
+                }
+            }
+            else
+            {
+                float listHeight = names.Count * 40f;
+                UpdateFileCardHeight(150f + listHeight);
+            }
             UpdateFileRowHighlights(bg.CurrentIndex);
         }
 
@@ -642,7 +702,7 @@ namespace XingShuRuntime.UI
             if (_fileListCardLe != null)
             {
                 _fileListCardLe.preferredHeight = totalHeight;
-                _fileListCardLe.minHeight = totalHeight;
+                _fileListCardLe.minHeight = totalHeight < 0f ? 0f : totalHeight;
             }
         }
 

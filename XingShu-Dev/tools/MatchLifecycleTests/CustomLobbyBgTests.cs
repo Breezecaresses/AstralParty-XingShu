@@ -33,6 +33,18 @@ namespace XingShu.Tests
             Assert(CustomLobbyBgPolicy.ClassifyExtension("bg.png") == LobbyBgMediaKind.Image, ".png -> Image");
             Assert(CustomLobbyBgPolicy.ClassifyExtension("bg.jpg") == LobbyBgMediaKind.Image, ".jpg -> Image");
             Assert(CustomLobbyBgPolicy.ClassifyExtension("bg.jpeg") == LobbyBgMediaKind.Image, ".jpeg -> Image");
+            Assert(CustomLobbyBgPolicy.ClassifyExtension("bg.webp") == LobbyBgMediaKind.Image, ".webp -> Image");
+            Assert(CustomLobbyBgPolicy.ClassifyExtension("bg.BMP") == LobbyBgMediaKind.Image, ".BMP -> Image");
+
+            byte[] webpHeader = new byte[] { 0x52, 0x49, 0x46, 0x46, 0x20, 0, 0, 0, 0x57, 0x45, 0x42, 0x50 };
+            byte[] heicHeader = new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63 };
+            byte[] pngHeader = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0 };
+            Assert(CustomLobbyBgPolicy.DescribeImageHeader(webpHeader) == "WebP", "detect WebP");
+            Assert(CustomLobbyBgPolicy.IsLikelyUnsupportedByUnityLoadImage(webpHeader), "WebP needs fallback");
+            Assert(CustomLobbyBgPolicy.DescribeImageHeader(heicHeader) == "HEIF/AVIF", "detect HEIC");
+            Assert(CustomLobbyBgPolicy.IsLikelyUnsupportedByUnityLoadImage(heicHeader), "HEIC needs fallback");
+            Assert(CustomLobbyBgPolicy.DescribeImageHeader(pngHeader) == "PNG", "detect PNG");
+            Assert(!CustomLobbyBgPolicy.IsLikelyUnsupportedByUnityLoadImage(pngHeader), "PNG native");
             Assert(CustomLobbyBgPolicy.ClassifyExtension("movie.usm") == LobbyBgMediaKind.CriUsm, ".usm -> CriUsm");
             Assert(CustomLobbyBgPolicy.ClassifyExtension("vkv.bundle") == LobbyBgMediaKind.UnityBundle, ".bundle -> UnityBundle");
             Assert(CustomLobbyBgPolicy.ClassifyExtension("readme.txt") == LobbyBgMediaKind.Unknown, ".txt -> Unknown");

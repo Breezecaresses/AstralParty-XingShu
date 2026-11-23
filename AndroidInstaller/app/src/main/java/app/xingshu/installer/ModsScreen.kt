@@ -1,18 +1,20 @@
 package app.xingshu.installer
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -29,7 +31,6 @@ import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -54,7 +55,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ModsScreen(
     controller: AppController,
@@ -124,13 +124,13 @@ internal fun ModsScreen(
 
         // Pinned Core Plugin Card: 星枢官方插件 Mod
         item {
-            ElevatedCard(
-                colors = CardDefaults.elevatedCardColors(
+            OutlinedCard(
+                colors = CardDefaults.outlinedCardColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
                 ),
                 shape = MaterialTheme.shapes.large,
             ) {
-                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -157,22 +157,33 @@ internal fun ModsScreen(
                             onClick = { controller.inspectSelectedAsync() },
                             label = {
                                 Text(
-                                    when (coreState) {
+                                    text = when (coreState) {
                                         "installed" -> "已安装"
-                                        "upgrade" -> "有新版可更新"
-                                        "conflict" -> "存在冲突"
-                                        "vanilla" -> "未安装 · 纯净启动"
+                                        "upgrade" -> "可更新"
+                                        "conflict" -> "冲突"
+                                        "vanilla" -> "纯净原版"
                                         else -> "未检测"
-                                    }
+                                    },
+                                    maxLines = 1,
+                                    softWrap = false,
                                 )
                             },
                         )
                     }
 
                     Text(
-                        text = "控制目标：${selected?.label ?: controller.selectedPackageName} · 运行版本 ${controller.coreSpec.runtimeVersion}（适配游戏 ${controller.coreSpec.gameVersion}）\n仅当你需要使用下方 ${OfficialModulesCatalog.ALL.size} 项官方功能模组或游戏内开房时安装此核心插件，可随时无损还原回官方原版。",
+                        text = "目标：${selected?.label ?: controller.selectedPackageName} · ${controller.coreSpec.runtimeVersion}（游戏 ${controller.coreSpec.gameVersion}）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "使用下方 ${OfficialModulesCatalog.ALL.size} 项官方功能或局内开房时按需安装，可随时无损还原原版",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
 
                     if (controller.runtimeProgress.active) {
@@ -199,51 +210,87 @@ internal fun ModsScreen(
                         Button(
                             onClick = { controller.installOrRestoreCorePlugin(restore = false) },
                             enabled = !controller.busy && !controller.batchModsBusy,
-                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp),
                         ) {
-                            Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(17.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                when (coreState) {
+                                text = when (coreState) {
                                     "installed" -> "重新校验安装"
-                                    "upgrade" -> "更新官方插件 Mod"
+                                    "upgrade" -> "更新核心插件"
                                     else -> "安装官方插件 Mod"
-                                }
+                                },
+                                maxLines = 1,
+                                softWrap = false,
                             )
                         }
                         OutlinedButton(
                             onClick = { controller.installOrRestoreCorePlugin(restore = true) },
                             enabled = !controller.busy && !controller.batchModsBusy,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(42.dp),
                         ) {
-                            Icon(Icons.Rounded.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Rounded.Restore, contentDescription = null, modifier = Modifier.size(17.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("还原原版")
+                            Text("还原原版", maxLines = 1, softWrap = false)
                         }
                     }
                 }
             }
         }
 
-        // Prominent First-Screen Local Mod Import Card
+        // Compact First-Screen Local Mod Import Bar
         item {
-            ElevatedCard(
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f),
-                ),
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f),
                 shape = MaterialTheme.shapes.large,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.24f)),
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Column {
-                        Text(
-                            text = "导入本地 Mod 包（.zip / .xspkg）",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
-                        Text(
-                            text = "已安装外部包 ${controller.installedMods.size} 项 · 当前 modimg 贴图 ${controller.totalModPngCount} 张",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.86f),
-                        )
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "本地 Mod 导入 (.zip / .xspkg)",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "外部包 ${controller.installedMods.size} 项 · 贴图 ${controller.totalModPngCount} 张",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.86f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Button(
+                            onClick = { controller.requestImportLocalArchive() },
+                            enabled = !controller.modTaskBusy && !controller.busy,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(36.dp),
+                        ) {
+                            Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("导入", maxLines = 1, softWrap = false)
+                        }
+                        FilledTonalButton(
+                            onClick = onOpenWorkshop,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(36.dp),
+                        ) {
+                            Icon(Icons.Rounded.Explore, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("工坊", maxLines = 1, softWrap = false)
+                        }
                     }
 
                     if (controller.modTaskBusy && controller.modProgress.stage.isNotBlank()) {
@@ -256,37 +303,16 @@ internal fun ModsScreen(
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = { controller.requestImportLocalArchive() },
-                            enabled = !controller.modTaskBusy && !controller.busy,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("导入本地 Mod")
-                        }
-                        FilledTonalButton(
-                            onClick = onOpenWorkshop,
-                        ) {
-                            Icon(Icons.Rounded.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("去工坊")
-                        }
-                    }
                 }
             }
         }
 
-        // Top Sub-Tab Switcher: Official Modules vs Local & External Mods
+        // High-Contrast Sub-Tab Switcher: Official Modules vs Local & External Mods
         item {
             Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
                 shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
@@ -298,7 +324,7 @@ internal fun ModsScreen(
                     val officialSelected = controller.modsSubTab != "local"
                     Surface(
                         onClick = { controller.modsSubTab = "official" },
-                        color = if (officialSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                        color = if (officialSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f),
                     ) {
@@ -307,17 +333,17 @@ internal fun ModsScreen(
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = if (officialSelected) FontWeight.Bold else FontWeight.Medium,
                             ),
-                            color = if (officialSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (officialSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                         )
                     }
                     val localSelected = controller.modsSubTab == "local"
                     Surface(
                         onClick = { controller.modsSubTab = "local" },
-                        color = if (localSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                        color = if (localSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f),
                     ) {
@@ -326,11 +352,11 @@ internal fun ModsScreen(
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = if (localSelected) FontWeight.Bold else FontWeight.Medium,
                             ),
-                            color = if (localSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (localSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                         )
                     }
                 }
@@ -338,15 +364,15 @@ internal fun ModsScreen(
         }
 
         if (controller.modsSubTab != "local") {
-            // Batch One-Click Card: 19 Official Modules
+            // Compact Batch One-Click Card: 19 Official Modules
             item {
             OutlinedCard(
                 colors = CardDefaults.outlinedCardColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
                 ),
-                shape = MaterialTheme.shapes.medium,
+                shape = MaterialTheme.shapes.large,
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -354,13 +380,17 @@ internal fun ModsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "星枢官方功能模组（19 项独立模块）",
+                                text = "星枢官方功能模组（${OfficialModulesCatalog.ALL.size} 项）",
                                 style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = "当前已开启 $enabledCount / ${OfficialModulesCatalog.ALL.size} 项 · 支持一键安装或逐项自由开关",
+                                text = "已开启 $enabledCount / ${OfficialModulesCatalog.ALL.size} 项 · 一键装卸或下方逐项开关",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                         IconButtonBtn(onClick = { controller.refreshInstalledModsAsync() })
@@ -373,31 +403,36 @@ internal fun ModsScreen(
                         FilledTonalButton(
                             onClick = { controller.installAllOfficialModules(includeCore = true) },
                             enabled = !controller.busy && !controller.batchModsBusy,
-                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp),
                         ) {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("一键安装全部 (19 项)")
+                            Text("一键装全 (${OfficialModulesCatalog.ALL.size} 项)", maxLines = 1, softWrap = false)
                         }
                         OutlinedButton(
                             onClick = { controller.uninstallAllOfficialModules() },
                             enabled = !controller.busy && !controller.batchModsBusy && hasAnyOfficial,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(38.dp),
                         ) {
-                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("全部卸载")
+                            Text("全部卸载", maxLines = 1, softWrap = false)
                         }
                     }
 
-                    FlowRow(
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        OfficialModulesCatalog.GROUPS.forEach { grp ->
+                        items(OfficialModulesCatalog.GROUPS) { grp ->
                             FilterChip(
                                 selected = selectedGroup == grp,
                                 onClick = { selectedGroup = grp },
-                                label = { Text(grp) },
+                                label = { Text(grp, maxLines = 1, softWrap = false) },
                             )
                         }
                     }

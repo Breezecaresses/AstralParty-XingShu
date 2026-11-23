@@ -125,6 +125,26 @@ namespace XingShuRuntime.UI
                     continue;
                 }
                 child.SetAsLastSibling();
+                if (item.name == "FileListItems")
+                {
+                    buttonRow = null;
+                    RemoveLayout(item);
+                    var listLayout = item.AddComponent<VerticalLayoutGroup>();
+                    listLayout.spacing = 8f;
+                    listLayout.childAlignment = TextAnchor.UpperCenter;
+                    listLayout.childControlWidth = true;
+                    listLayout.childControlHeight = true;
+                    listLayout.childForceExpandWidth = true;
+                    listLayout.childForceExpandHeight = false;
+                    Element(item);
+                    for (int r = 0; r < child.childCount; r++)
+                    {
+                        GameObject row = child.GetChild(r).gameObject;
+                        Element(row, 54f);
+                        foreach (Text rowText in row.GetComponentsInChildren<Text>(true)) Readable(rowText);
+                    }
+                    continue;
+                }
                 if (item.name.StartsWith("MetricPair_", System.StringComparison.Ordinal) && child.childCount == 2)
                 {
                     buttonRow = null;

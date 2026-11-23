@@ -1,13 +1,13 @@
 package app.xingshu.installer
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,7 +27,6 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -52,7 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CustomizeScreen(controller: AppController) {
     var hexInput by remember(controller.customThemeHex) { mutableStateOf(controller.customThemeHex) }
@@ -62,26 +61,26 @@ internal fun CustomizeScreen(controller: AppController) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Live Theme Preview Card
-        ElevatedCard(
-            colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f),
-            ),
+        // Live Theme Preview Card (flat Surface prevents ElevatedCard translucent tonal artifact)
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.90f),
             shape = MaterialTheme.shapes.large,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(18.dp),
+                    .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.primary,
                     shape = CircleShape,
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(42.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(Icons.Rounded.ColorLens, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
@@ -110,6 +109,7 @@ internal fun CustomizeScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("界面明暗模式", style = MaterialTheme.typography.titleMedium)
@@ -133,47 +133,56 @@ internal fun CustomizeScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("星枢官方色板（与桌面端同步）", style = MaterialTheme.typography.titleMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    ThemePalette.PRESETS.forEach { preset ->
-                        val selected = controller.themeId == preset.id
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { controller.selectThemePreset(preset.id) }
-                                .padding(6.dp),
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemePalette.PRESETS.toList().chunked(3).forEach { rowPresets ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(preset.primary))
-                                    .border(
-                                        width = if (selected) 3.dp else 1.dp,
-                                        color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
-                                        shape = CircleShape,
-                                    ),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (selected) {
-                                    Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White)
+                            rowPresets.forEach { preset ->
+                                val selected = controller.themeId == preset.id
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { controller.selectThemePreset(preset.id) }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(preset.primary))
+                                            .border(
+                                                width = if (selected) 3.dp else 1.dp,
+                                                color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
+                                                shape = CircleShape,
+                                            ),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        if (selected) {
+                                            Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(preset.nameZh, style = MaterialTheme.typography.labelMedium, maxLines = 1)
                                 }
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(preset.nameZh, style = MaterialTheme.typography.labelMedium)
+                            repeat(3 - rowPresets.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
                     }
                 }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedTextField(
@@ -182,10 +191,14 @@ internal fun CustomizeScreen(controller: AppController) {
                         label = { Text("自定义 Hex 主色") },
                         placeholder = { Text("#1370F3") },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.weight(1f),
                     )
                     Button(
                         onClick = { controller.applyCustomHexColor(hexInput) },
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        modifier = Modifier.height(54.dp),
                     ) {
                         Text("应用")
                     }
@@ -198,6 +211,7 @@ internal fun CustomizeScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("自定义启动器背景壁纸", style = MaterialTheme.typography.titleMedium)
@@ -208,11 +222,28 @@ internal fun CustomizeScreen(controller: AppController) {
                 )
 
                 if (controller.wallpaperBitmap != null) {
-                    Column {
-                        Text(
-                            text = "背景可视透明度：${(controller.wallpaperAlpha * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "背景可视透明度",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(999.dp),
+                            ) {
+                                Text(
+                                    text = "${(controller.wallpaperAlpha * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
                         Slider(
                             value = controller.wallpaperAlpha,
                             onValueChange = { controller.updateWallpaperAlpha(it) },
@@ -245,6 +276,6 @@ internal fun CustomizeScreen(controller: AppController) {
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }

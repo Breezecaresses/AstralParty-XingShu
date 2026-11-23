@@ -1,11 +1,11 @@
 package app.xingshu.installer
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -52,7 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun LoaderScreen(
     controller: AppController,
@@ -69,26 +70,26 @@ internal fun LoaderScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         // Pure Vanilla Launcher Hero Card
-        ElevatedCard(
-            colors = CardDefaults.elevatedCardColors(
+        OutlinedCard(
+            colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
             shape = MaterialTheme.shapes.large,
         ) {
-            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_xingshu_brand),
                         contentDescription = "星枢启动器",
                         modifier = Modifier
-                            .size(56.dp)
-                            .clip(RoundedCornerShape(16.dp)),
+                            .size(52.dp)
+                            .clip(RoundedCornerShape(14.dp)),
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -108,13 +109,13 @@ internal fun LoaderScreen(
                     }
                 }
 
-                // Channel selector strip
+                // Channel selector strip (single-row horizontal scroll prevents awkward 2+1 wrapping)
                 if (controller.channels.isNotEmpty()) {
-                    FlowRow(
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        controller.channels.forEach { ch ->
+                        items(controller.channels, key = { it.packageName }) { ch ->
                             val isSelected = ch.packageName == controller.selectedPackageName
                             FilterChip(
                                 selected = isSelected,
@@ -123,6 +124,7 @@ internal fun LoaderScreen(
                                     Text(
                                         text = if (ch.versionName.isNotEmpty()) "${ch.label} ${ch.versionName}" else ch.label,
                                         maxLines = 1,
+                                        softWrap = false,
                                     )
                                 },
                                 leadingIcon = if (isSelected) {
@@ -138,8 +140,8 @@ internal fun LoaderScreen(
                     onClick = { controller.launchSelectedGame() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp),
-                    shape = RoundedCornerShape(16.dp),
+                        .height(50.dp),
+                    shape = RoundedCornerShape(15.dp),
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -151,23 +153,25 @@ internal fun LoaderScreen(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     FilledTonalButton(
                         onClick = onOpenMods,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier.weight(1f),
                     ) {
                         Icon(Icons.Rounded.Extension, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("星枢官方插件 / 模组")
+                        Text("星枢官方插件 / 模组", maxLines = 1, softWrap = false)
                     }
                     FilledTonalButton(
                         onClick = { controller.scanPackagesAndInspect() },
                         enabled = !controller.busy,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                     ) {
                         Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("刷新")
+                        Text("刷新", maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -178,9 +182,9 @@ internal fun LoaderScreen(
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
             ),
-            shape = MaterialTheme.shapes.medium,
+            shape = MaterialTheme.shapes.large,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -266,7 +270,7 @@ internal fun LoaderScreen(
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
-                            text = "默认纯净启动官方原版；仅当你希望开启悬浮球、19 项星枢功能或局内开房时，前往「模组」按需安装「星枢官方插件 Mod」。",
+                            text = "默认纯净启动原版；需开启悬浮球、19 项星枢功能或局内开房时，前往「模组」页按需安装核心插件。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
@@ -282,7 +286,7 @@ internal fun LoaderScreen(
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
             ),
-            shape = MaterialTheme.shapes.medium,
+            shape = MaterialTheme.shapes.large,
         ) {
             Row(
                 modifier = Modifier
@@ -376,6 +380,7 @@ private fun StatusMetricTile(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
     ) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
             Text(

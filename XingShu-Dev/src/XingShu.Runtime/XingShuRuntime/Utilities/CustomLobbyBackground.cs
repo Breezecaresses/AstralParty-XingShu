@@ -740,16 +740,40 @@ namespace XingShuRuntime.Utilities
                 byte[] bytes = File.ReadAllBytes(fullPath);
                 if (bytes == null || bytes.Length < 16)
                 {
+                    ActiveMediaLabel = $"加载失败: {fileName}（数据为空或损坏）";
                     StatusMsg = $"图片数据过小或损坏: {fileName}";
                     return;
                 }
+
+                string detectedFmt = CustomLobbyBgPolicy.DescribeImageHeader(bytes);
+                bool needsNativeFallback = CustomLobbyBgPolicy.IsLikelyUnsupportedByUnityLoadImage(bytes);
                 Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                if (!ImageConversion.LoadImage(tex, bytes, false))
+                bool loaded = !needsNativeFallback && ImageConversion.LoadImage(tex, bytes, false);
+                bool looksLikeErrorPlaceholder = loaded && tex.width == 8 && tex.height == 8 && bytes.Length > 512;
+
+                string diagError = "";
+                if (!loaded || looksLikeErrorPlaceholder)
+                {
+                    if (Application.platform == RuntimePlatform.Android
+                        && TryDecodeImageViaAndroidBitmap(fullPath, out byte[] transcodedPng, out diagError))
+                    {
+                        Destroy(tex);
+                        tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                        loaded = ImageConversion.LoadImage(tex, transcodedPng, false);
+                        looksLikeErrorPlaceholder = loaded && tex.width == 8 && tex.height == 8;
+                    }
+                }
+
+                if (!loaded || looksLikeErrorPlaceholder)
                 {
                     Destroy(tex);
-                    StatusMsg = $"无法解码图片: {fileName}";
+                    ActiveMediaLabel = $"无法解码: {fileName} ({detectedFmt})";
+                    StatusMsg = string.IsNullOrEmpty(diagError)
+                        ? $"无法解码图片 ({detectedFmt}): {fileName}（请改用标准 PNG / JPG）"
+                        : $"无法解码图片 ({detectedFmt}): {fileName} - {diagError}";
                     return;
                 }
+
                 tex.name = "XingShu_LobbyBg_" + fileName;
                 tex.wrapMode = TextureWrapMode.Clamp;
                 _loadedImageTex = tex;
@@ -765,8 +789,89 @@ namespace XingShuRuntime.Utilities
             }
             catch (Exception ex)
             {
+                ActiveMediaLabel = $"加载失败: {fileName}";
                 StatusMsg = $"加载图片失败: {ex.Message}";
                 TeardownActiveMedia(restoreVanilla: true);
+            }
+        }
+
+        private static bool TryDecodeImageViaAndroidBitmap(string fullPath, out byte[] pngBytes, out string diagError)
+        {
+            pngBytes = null;
+            diagError = "";
+            if (Application.platform != RuntimePlatform.Android || string.IsNullOrEmpty(fullPath))
+            {
+                return false;
+            }
+            try
+            {
+                using (var bf = new AndroidJavaClass("android.graphics.BitmapFactory"))
+                using (var bmp = bf.CallStatic<AndroidJavaObject>("decodeFile", fullPath))
+                {
+                    if (bmp == null)
+                    {
+                        diagError = "BitmapFactory.decodeFile 返回空";
+                        return false;
+                    }
+                    int w = bmp.Call<int>("getWidth");
+                    int h = bmp.Call<int>("getHeight");
+                    if (w <= 0 || h <= 0)
+                    {
+                        diagError = "图片尺寸无效";
+                        return false;
+                    }
+
+                    AndroidJavaObject scaled = null;
+                    try
+                    {
+                        AndroidJavaObject target = bmp;
+                        const int MaxDim = 2048;
+                        if (w > MaxDim || h > MaxDim)
+                        {
+                            float ratio = Math.Min((float)MaxDim / w, (float)MaxDim / h);
+                            int nw = Math.Max(2, Mathf.RoundToInt(w * ratio));
+                            int nh = Math.Max(2, Mathf.RoundToInt(h * ratio));
+                            using (var bmpClass = new AndroidJavaClass("android.graphics.Bitmap"))
+                            {
+                                scaled = bmpClass.CallStatic<AndroidJavaObject>("createScaledBitmap", bmp, nw, nh, true);
+                            }
+                            if (scaled != null) target = scaled;
+                        }
+
+                        using (var baos = new AndroidJavaObject("java.io.ByteArrayOutputStream"))
+                        using (var fmtClass = new AndroidJavaClass("android.graphics.Bitmap$CompressFormat"))
+                        using (var pngFmt = fmtClass.GetStatic<AndroidJavaObject>("PNG"))
+                        {
+                            bool compressed = target.Call<bool>("compress", pngFmt, 100, baos);
+                            if (!compressed)
+                            {
+                                diagError = "Android PNG 重编码失败";
+                                return false;
+                            }
+                            using (var byteArrObj = baos.Call<AndroidJavaObject>("toByteArray"))
+                            using (var b64Class = new AndroidJavaClass("android.util.Base64"))
+                            {
+                                string b64 = b64Class.CallStatic<string>("encodeToString", byteArrObj, 2); // Base64.NO_WRAP = 2
+                                if (string.IsNullOrEmpty(b64))
+                                {
+                                    diagError = "Base64 输出为空";
+                                    return false;
+                                }
+                                pngBytes = Convert.FromBase64String(b64);
+                                return pngBytes != null && pngBytes.Length >= 16;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        if (scaled != null) scaled.Dispose();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                diagError = ex.Message;
+                return false;
             }
         }
 
@@ -1228,14 +1333,21 @@ namespace XingShuRuntime.Utilities
         private void SyncOverlayTransform(GLoader loader, GGraph targetGraph, bool shouldShow)
         {
             if (loader == null || loader.isDisposed || targetGraph == null || targetGraph.isDisposed) return;
+            float w = targetGraph.width;
+            float h = targetGraph.height;
+            if ((w <= 1f || h <= 1f) && targetGraph.parent != null)
+            {
+                w = targetGraph.parent.width;
+                h = targetGraph.parent.height;
+            }
             loader.pivotAsAnchor = targetGraph.pivotAsAnchor;
             loader.SetPivot(targetGraph.pivotX, targetGraph.pivotY, targetGraph.pivotAsAnchor);
             loader.SetXY(targetGraph.x, targetGraph.y);
-            loader.SetSize(Mathf.Max(1f, targetGraph.width), Mathf.Max(1f, targetGraph.height));
+            loader.SetSize(Mathf.Max(1f, w), Mathf.Max(1f, h));
             loader.SetScale(targetGraph.scaleX, targetGraph.scaleY);
             loader.rotation = targetGraph.rotation;
-            loader.alpha = targetGraph.alpha;
-            loader.visible = shouldShow && targetGraph.visible && _activeNTexture != null;
+            loader.alpha = targetGraph.alpha > 0.01f ? targetGraph.alpha : 1f;
+            loader.visible = shouldShow && _activeNTexture != null;
             ApplyStyleToLoader(loader);
         }
 

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -125,31 +126,23 @@ internal fun WorkshopScreen(controller: AppController) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    FlowRow(
+                    LazyRow(
                         modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        FilterChip(
-                            selected = kindFilter == "all",
-                            onClick = { kindFilter = "all" },
-                            label = { Text("全部 (${allMods.size})") },
+                        val filters = listOf(
+                            "all" to "全部 (${allMods.size})",
+                            "android" to "手机可装 ($installableCount)",
+                            "community" to "社区模组 ($communityCount)",
+                            "xspkg" to "官方优化 ($xspkgCount)",
                         )
-                        FilterChip(
-                            selected = kindFilter == "android",
-                            onClick = { kindFilter = "android" },
-                            label = { Text("手机可装 ($installableCount)") },
-                        )
-                        FilterChip(
-                            selected = kindFilter == "community",
-                            onClick = { kindFilter = "community" },
-                            label = { Text("社区模组 ($communityCount)") },
-                        )
-                        FilterChip(
-                            selected = kindFilter == "xspkg",
-                            onClick = { kindFilter = "xspkg" },
-                            label = { Text("官方优化 ($xspkgCount)") },
-                        )
+                        items(filters, key = { it.first }) { (key, text) ->
+                            FilterChip(
+                                selected = kindFilter == key,
+                                onClick = { kindFilter = key },
+                                label = { Text(text, maxLines = 1, softWrap = false) },
+                            )
+                        }
                     }
                     IconButton(
                         onClick = { controller.refreshWorkshopAsync(userInitiated = true) },

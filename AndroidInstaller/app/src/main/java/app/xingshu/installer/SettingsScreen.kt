@@ -2,6 +2,7 @@ package app.xingshu.installer
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,6 +55,7 @@ internal fun SettingsScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
@@ -86,8 +88,11 @@ internal fun SettingsScreen(controller: AppController) {
                     ) {
                         Text(if (privReady) "管理授权连接" else "连接无线调试 / Shizuku")
                     }
-                    OutlinedButton(onClick = { controller.openWirelessSettings() }) {
-                        Text("开发者选项")
+                    OutlinedButton(
+                        onClick = { controller.openWirelessSettings() },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text("开发者选项", maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -98,6 +103,7 @@ internal fun SettingsScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
@@ -228,6 +234,7 @@ internal fun SettingsScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Row(
                 modifier = Modifier
@@ -253,6 +260,7 @@ internal fun SettingsScreen(controller: AppController) {
             colors = CardDefaults.outlinedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             ),
+            shape = MaterialTheme.shapes.large,
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
