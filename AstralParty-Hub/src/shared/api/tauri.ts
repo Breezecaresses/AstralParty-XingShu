@@ -421,10 +421,31 @@ export const api = {
     safeInvoke<WorkshopLocalItemState>('workshop_toggle_mod', { installationId, modId, enabled }),
 
   // Drag-and-drop Community Mod / Package Inspector & Installer
-  inspectDroppedMod: (installationId: string, sourcePath: string) =>
-    safeInvoke<DroppedModInspectResult>('inspect_dropped_mod', { installationId, sourcePath }),
-  installDroppedMod: (installationId: string, sourcePath: string, includeCatalog: boolean) =>
-    safeInvoke<DroppedModInstallResult>('install_dropped_mod', { installationId, sourcePath, includeCatalog }),
+  inspectDroppedMod: (installationId: string, sourcePath: string, password?: string) =>
+    safeInvoke<DroppedModInspectResult>('inspect_dropped_mod', {
+      installationId,
+      sourcePath,
+      ...(password ? { password } : {}),
+    }),
+  installDroppedMod: (installationId: string, sourcePath: string, includeCatalog: boolean, password?: string) =>
+    safeInvoke<DroppedModInstallResult>('install_dropped_mod', {
+      installationId,
+      sourcePath,
+      includeCatalog,
+      ...(password ? { password } : {}),
+    }),
+  exportDroppedModAndroidPack: (
+    installationId: string,
+    sourcePath: string,
+    password?: string,
+    outputPath?: string,
+  ) =>
+    safeInvoke<string>('export_dropped_mod_android_pack', {
+      installationId,
+      sourcePath,
+      ...(password ? { password } : {}),
+      ...(outputPath ? { outputPath } : {}),
+    }),
   restoreDroppedMod: (installationId: string, modId: string) =>
     safeInvoke<string>('restore_dropped_mod', { installationId, modId }),
   toggleDroppedMod: (installationId: string, modId: string, enabled: boolean) =>
@@ -471,6 +492,7 @@ export interface DroppedModInspectResult {
   canInstall: boolean;
   alreadyInstalled: boolean;
   hasCatalogBundle: boolean;
+  androidExportableCount?: number;
   warnings: string[];
   matchedFiles: DroppedModTargetMatch[];
   unmatchedFiles: DroppedModUnmatchedFile[];

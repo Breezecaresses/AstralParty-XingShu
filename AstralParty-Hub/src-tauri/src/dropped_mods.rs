@@ -36,6 +36,9 @@ const FORBIDDEN_EXTS: &[&str] = &[
 
 const PREVIEW_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".webm"];
 const MODIMG_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp"];
+const DYNAMIC_CARDS_DIR: &str = "xingshu_dynamic_cards";
+const DYNAMIC_CARD_EXTS: &[&str] = &[".mp4", ".webm", ".mov", ".usm", ".bundle"];
+const SKIP_BACKUP_DIRS: &[&str] = &["原", "原版", "backup", "backups", "original", "originals"];
 const DOC_EXTS: &[&str] = &[".txt", ".md", ".pdf"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +79,8 @@ pub struct DroppedModInspectResult {
     pub can_install: bool,
     pub already_installed: bool,
     pub has_catalog_bundle: bool,
+    #[serde(default)]
+    pub android_exportable_count: usize,
     pub warnings: Vec<String>,
     pub matched_files: Vec<DroppedModTargetMatch>,
     pub unmatched_files: Vec<DroppedModUnmatchedFile>,
@@ -152,6 +157,7 @@ struct DiscoveredTargets {
     protected_runtime_bundle_id: Option<String>,
 }
 
+#[derive(Debug)]
 struct StagedCandidate {
     target_rel: String,
     is_catalog: bool,
@@ -274,13 +280,52 @@ fn modimg_target_name(clean_rel: &str) -> Option<String> {
     None
 }
 
+fn is_valid_dynamic_card_filename(fname: &str, allow_extensionless: bool) -> bool {
+    if fname.is_empty() || fname.contains("..") || fname.contains('/') || fname.contains('\\') || fname.contains(':') {
+        return false;
+    }
+    let lower = fname.to_ascii_lowercase();
+    if DYNAMIC_CARD_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+        return true;
+    }
+    allow_extensionless && !fname.contains('.')
+}
+
+fn dynamic_card_target_name(clean_rel: &str, bytes: &[u8]) -> Option<String> {
+    let norm = clean_rel.trim().replace('\\', "/");
+    let parts: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
+    let leaf = (*parts.last()?).to_string();
+    let in_dynamic_dir = parts.len() >= 2 && parts[parts.len() - 2].eq_ignore_ascii_case(DYNAMIC_CARDS_DIR);
+    let leaf_lower = leaf.to_ascii_lowercase();
+    if in_dynamic_dir && is_valid_dynamic_card_filename(&leaf, false) {
+        return Some(leaf);
+    }
+    if leaf_lower.starts_with("vut_") {
+        if DYNAMIC_CARD_EXTS.iter().any(|ext| leaf_lower.ends_with(ext)) && !leaf.contains("..") {
+            return Some(leaf);
+        }
+        if !leaf.contains('.') && bytes.starts_with(b"UnityFS") && !leaf.contains("..") {
+            return Some(format!("{leaf}.bundle"));
+        }
+    }
+    None
+}
+
+fn is_addon_target_rel(target_rel: &str) -> bool {
+    target_rel.starts_with("modimg/") || target_rel.starts_with("xingshu_dynamic_cards/")
+}
+
 fn validate_dropped_target_rel(root: &Path, target_rel: &str) -> HubResult<(String, PathBuf)> {
     let clean = target_rel.trim().replace('\\', "/");
     let parts: Vec<&str> = clean.split('/').collect();
     let valid_modimg = parts.len() == 2
         && parts[0] == "modimg"
         && MODIMG_EXTS.iter().any(|ext| parts[1].to_ascii_lowercase().ends_with(ext));
+    let valid_dynamic_card = parts.len() == 2
+        && parts[0] == DYNAMIC_CARDS_DIR
+        && is_valid_dynamic_card_filename(parts[1], false);
     let valid_shape = valid_modimg
+        || valid_dynamic_card
         || (parts.len() >= 4
             && parts[0].ends_with("_Data")
             && ((parts[1] == "StreamingAssets"
@@ -291,7 +336,7 @@ fn validate_dropped_target_rel(root: &Path, target_rel: &str) -> HubResult<(Stri
                     && parts.last() == Some(&"__data"))));
     if !valid_shape {
         return Err(HubError::security_violation(format!(
-            "安全策略拒绝：目标路径 '{clean}' 不在游戏 Addressables / StreamingAssets / modimg 资源目录内。"
+            "安全策略拒绝：目标路径 '{clean}' 不在游戏 Addressables / StreamingAssets / modimg / xingshu_dynamic_cards 资源目录内。"
         )));
     }
     let resolved = confined(root, &clean)?;
@@ -586,6 +631,239 @@ struct RawPayloadEntry {
 }
 
 fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<RawPayloadEntry>, Vec<String>, Vec<String>)> {
+    read_source_entries_with_password(source_path, None)
+}
+
+fn is_noise_entry(lower_clean: &str) -> bool {
+    let fname = Path::new(lower_clean).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    lower_clean.ends_with(".bak")
+        || lower_clean.ends_with(".before-uv.bak")
+        || lower_clean.ends_with(".orig")
+        || lower_clean.ends_with(".tmp")
+        || fname == "__info"
+}
+
+fn should_collect_payload_path(clean: &str, lower: &str) -> bool {
+    if is_noise_entry(lower) {
+        return false;
+    }
+    let fname = Path::new(lower).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if lower.ends_with(".bundle") || fname == "__data" || modimg_target_name(clean).is_some() {
+        return true;
+    }
+    let parts: Vec<&str> = clean.split('/').filter(|s| !s.is_empty()).collect();
+    let in_dynamic_dir = parts.len() >= 2 && parts[parts.len() - 2].eq_ignore_ascii_case(DYNAMIC_CARDS_DIR);
+    if in_dynamic_dir && is_valid_dynamic_card_filename(fname, false) {
+        return true;
+    }
+    fname.starts_with("vut_")
+        && (DYNAMIC_CARD_EXTS.iter().any(|ext| fname.ends_with(ext)) || !fname.contains('.'))
+}
+
+fn find_7z_executable() -> Option<PathBuf> {
+    for fixed in [
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+    ] {
+        let p = Path::new(fixed);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            for bin in ["7z.exe", "7za.exe", "7z"] {
+                let candidate = dir.join(bin);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn looks_like_password_error(msg_lower: &str) -> bool {
+    msg_lower.contains("wrong password")
+        || msg_lower.contains("incorrect password")
+        || msg_lower.contains("can not open encrypted")
+        || msg_lower.contains("cannot open encrypted")
+        || msg_lower.contains("data error in encrypted")
+        || msg_lower.contains("enter password")
+        || msg_lower.contains("passphrase")
+        || msg_lower.contains("encrypted")
+        || msg_lower.contains("password required")
+}
+
+fn spawn_hidden_command(program: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
+
+fn extract_archive_with_tools(
+    source_path: &Path,
+    password: Option<&str>,
+    is_rar: bool,
+) -> HubResult<tempfile::TempDir> {
+    let temp = tempfile::Builder::new()
+        .prefix("xingshu-drop-")
+        .tempdir()
+        .map_err(|e| HubError::storage_error(format!("创建临时解压目录失败：{e}")))?;
+    let clean_pw = password.map(str::trim).filter(|s| !s.is_empty());
+
+    if let Some(exe) = find_7z_executable() {
+        let mut cmd = spawn_hidden_command(&exe);
+        cmd.arg("x").arg("-y").arg("-bd");
+        if let Some(pw) = clean_pw {
+            cmd.arg(format!("-p{pw}"));
+        } else {
+            cmd.arg("-p");
+        }
+        cmd.arg(format!("-o{}", temp.path().display()))
+            .arg("--")
+            .arg(source_path);
+        let output = cmd
+            .output()
+            .map_err(|e| HubError::storage_error(format!("调用 7-Zip 解压失败：{e}")))?;
+        if output.status.success() {
+            return Ok(temp);
+        }
+        let detail = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lower = detail.to_ascii_lowercase();
+        if looks_like_password_error(&lower) {
+            return Err(if clean_pw.is_some() {
+                HubError::new(
+                    "ARCHIVE_PASSWORD_INVALID",
+                    "压缩包解压密码错误，请核对后重试。",
+                    "SECURITY",
+                )
+                .with_recoverable(true)
+            } else {
+                HubError::new(
+                    "ARCHIVE_PASSWORD_REQUIRED",
+                    "检测到加密压缩包，请输入解压密码后重试。",
+                    "SECURITY",
+                )
+                .with_recoverable(true)
+            });
+        }
+        let trimmed = detail.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("解压失败").trim();
+        return Err(HubError::invalid_manifest(format!("压缩包解压失败：{trimmed}")));
+    }
+
+    if is_rar && clean_pw.is_none() {
+        let mut cmd = spawn_hidden_command(Path::new("tar"));
+        cmd.arg("-xf")
+            .arg(source_path)
+            .arg("-C")
+            .arg(temp.path());
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                return Ok(temp);
+            }
+            let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+            if looks_like_password_error(&detail) {
+                return Err(HubError::new(
+                    "ARCHIVE_PASSWORD_REQUIRED",
+                    "检测到加密 RAR 压缩包（需要 7-Zip 支持），请安装 7-Zip 后输入密码或手动解压拖入文件夹。",
+                    "SECURITY",
+                )
+                .with_recoverable(true));
+            }
+        }
+        return Err(HubError::invalid_manifest(
+            "当前系统无法解压该 .rar 文件；请安装 7-Zip，或手动解压后直接拖入模组文件夹。",
+        ));
+    }
+
+    Err(HubError::invalid_manifest(
+        "本机未找到 7-Zip（7z.exe），无法解压加密压缩包；请安装 7-Zip 或手动解压后拖入模组文件夹。",
+    ))
+}
+
+fn read_from_directory(
+    dir_path: &Path,
+    source_kind: &str,
+    mut display_name: String,
+) -> HubResult<(String, String, Vec<RawPayloadEntry>, Vec<String>, Vec<String>)> {
+    let canonical_src = dunce::canonicalize(dir_path).map_err(|e| HubError::storage_error(e.to_string()))?;
+    let modinfo_path = canonical_src.join("modinfo.json");
+    if modinfo_path.is_file() {
+        if let Ok(raw) = fs::read_to_string(&modinfo_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(n) = val["name"].as_str().filter(|s| !s.trim().is_empty()) {
+                    display_name = n.trim().to_string();
+                }
+            }
+        }
+    }
+
+    let mut payloads = Vec::new();
+    let mut preview_files = Vec::new();
+    let mut doc_files = Vec::new();
+    let mut total_bytes: u64 = 0;
+    let mut entry_count: usize = 0;
+
+    for entry in WalkDir::new(&canonical_src).follow_links(false).into_iter() {
+        let entry = entry.map_err(|e| HubError::storage_error(e.to_string()))?;
+        if entry.file_type().is_symlink() {
+            return Err(HubError::security_violation("安全限制：模组目录中禁止包含符号链接。"));
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        entry_count += 1;
+        if entry_count > MAX_DROP_ENTRIES {
+            return Err(HubError::security_violation("模组包含文件数量超过安全上限（4000）。"));
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(&canonical_src)
+            .map_err(|e| HubError::security_violation(e.to_string()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let clean = PathGuard::sanitize_relative_path(&rel)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let lower = clean.to_ascii_lowercase();
+        check_forbidden_extension(&lower)?;
+
+        let meta = entry.metadata().map_err(|e| HubError::storage_error(e.to_string()))?;
+        total_bytes = total_bytes.saturating_add(meta.len());
+        if total_bytes > MAX_DROP_UNCOMPRESSED_BYTES {
+            return Err(HubError::security_violation("模组解压总体积超过 2GB 安全上限。"));
+        }
+
+        if should_collect_payload_path(&clean, &lower) {
+            if meta.len() == 0 || meta.len() > MAX_DROP_PAYLOAD_BYTES as u64 {
+                return Err(HubError::security_violation(format!(
+                    "模组资源文件体积异常（{clean}）。"
+                )));
+            }
+            let data = fs::read(entry.path()).map_err(|e| HubError::storage_error(e.to_string()))?;
+            payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
+        } else if !is_noise_entry(&lower) && PREVIEW_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+            preview_files.push(clean);
+        } else if DOC_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+            doc_files.push(clean);
+        }
+    }
+    Ok((source_kind.into(), display_name, payloads, preview_files, doc_files))
+}
+
+fn read_source_entries_with_password(
+    source_path: &Path,
+    password: Option<&str>,
+) -> HubResult<(String, String, Vec<RawPayloadEntry>, Vec<String>, Vec<String>)> {
     if !source_path.exists() {
         return Err(HubError::invalid_manifest("拖入的文件或文件夹不存在。"));
     }
@@ -604,60 +882,8 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
         .unwrap_or("本地模组")
         .to_string();
 
-    let mut payloads = Vec::new();
-    let mut preview_files = Vec::new();
-    let mut doc_files = Vec::new();
-
     if source_path.is_dir() {
-        let canonical_src = dunce::canonicalize(source_path).map_err(|e| HubError::storage_error(e.to_string()))?;
-        let mut total_bytes: u64 = 0;
-        let mut entry_count: usize = 0;
-        for entry in WalkDir::new(&canonical_src).follow_links(false).into_iter() {
-            let entry = entry.map_err(|e| HubError::storage_error(e.to_string()))?;
-            if entry.file_type().is_symlink() {
-                return Err(HubError::security_violation("安全限制：拖入文件夹中禁止包含符号链接。"));
-            }
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            entry_count += 1;
-            if entry_count > MAX_DROP_ENTRIES {
-                return Err(HubError::security_violation("拖入文件夹包含文件数量超过安全上限（4000）。"));
-            }
-            let rel = entry
-                .path()
-                .strip_prefix(&canonical_src)
-                .map_err(|e| HubError::security_violation(e.to_string()))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let clean = PathGuard::sanitize_relative_path(&rel)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let lower = clean.to_ascii_lowercase();
-            check_forbidden_extension(&lower)?;
-
-            let meta = entry.metadata().map_err(|e| HubError::storage_error(e.to_string()))?;
-            total_bytes = total_bytes.saturating_add(meta.len());
-            if total_bytes > MAX_DROP_UNCOMPRESSED_BYTES {
-                return Err(HubError::security_violation("拖入文件夹总体积超过 2GB 安全上限。"));
-            }
-
-            let file_name = Path::new(&lower).file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if lower.ends_with(".bundle") || file_name == "__data" || modimg_target_name(&clean).is_some() {
-                if meta.len() == 0 || meta.len() > MAX_DROP_PAYLOAD_BYTES as u64 {
-                    return Err(HubError::security_violation(format!(
-                        "模组资源文件体积异常（{clean}）。"
-                    )));
-                }
-                let data = fs::read(entry.path()).map_err(|e| HubError::storage_error(e.to_string()))?;
-                payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
-            } else if PREVIEW_EXTS.iter().any(|ext| lower.ends_with(ext)) {
-                preview_files.push(clean);
-            } else if DOC_EXTS.iter().any(|ext| lower.ends_with(ext)) {
-                doc_files.push(clean);
-            }
-        }
-        return Ok(("folder".into(), default_name, payloads, preview_files, doc_files));
+        return read_from_directory(source_path, "folder", default_name);
     }
 
     let file_name = source_path
@@ -675,17 +901,33 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
 
     if lower_name.ends_with(".bundle") {
         let data = fs::read(source_path).map_err(|e| HubError::storage_error(e.to_string()))?;
-        payloads.push(RawPayloadEntry { source_entry: file_name, bytes: data });
-        return Ok(("single_bundle".into(), default_name, payloads, preview_files, doc_files));
+        return Ok((
+            "single_bundle".into(),
+            default_name,
+            vec![RawPayloadEntry { source_entry: file_name, bytes: data }],
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+
+    if lower_name.ends_with(".rar") {
+        let extracted = extract_archive_with_tools(source_path, password, true)?;
+        return read_from_directory(extracted.path(), "community_rar", default_name);
     }
 
     if !(lower_name.ends_with(".zip") || lower_name.ends_with(".xspkg") || lower_name.ends_with(".apmm")) {
         return Err(HubError::invalid_manifest(
-            "不支持的文件格式；请拖入 .zip、.xspkg、.apmm、.bundle 或解压后的模组文件夹。",
+            "不支持的文件格式；请拖入 .zip、.rar、.xspkg、.apmm、.bundle 或解压后的模组文件夹。",
         ));
     }
 
-    ArchiveGuard::inspect_zip(
+    let source_kind = if lower_name.ends_with(".apmm") {
+        "apmm"
+    } else {
+        "community_zip"
+    };
+
+    let has_encrypted = ArchiveGuard::inspect_zip_encryption(
         source_path,
         &ArchiveLimits {
             max_file_count: MAX_DROP_ENTRIES,
@@ -695,14 +937,30 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
         },
     )?;
 
+    if has_encrypted {
+        if password.map(str::trim).filter(|s| !s.is_empty()).is_none() {
+            return Err(HubError::new(
+                "ARCHIVE_PASSWORD_REQUIRED",
+                "检测到加密压缩包，请输入解压密码后重试。",
+                "SECURITY",
+            )
+            .with_recoverable(true));
+        }
+        let extracted = extract_archive_with_tools(source_path, password, false)?;
+        return read_from_directory(extracted.path(), source_kind, default_name);
+    }
+
     let file = fs::File::open(source_path).map_err(|e| HubError::storage_error(e.to_string()))?;
     let mut zf = zip::ZipArchive::new(file)
-        .map_err(|_| HubError::invalid_manifest("压缩包格式无效或已损坏（若为 RAR/7z，请先解压后拖入文件夹或重新打包为 ZIP）。"))?;
+        .map_err(|_| HubError::invalid_manifest("压缩包格式无效或已损坏（若为 RAR/7z，请确认扩展名为 .rar 或重新打包为 ZIP）。"))?;
     if zf.is_empty() || zf.len() > MAX_DROP_ENTRIES {
         return Err(HubError::security_violation("压缩包条目数量异常。"));
     }
 
-    let mut display_name = default_name;
+    let mut payloads = Vec::new();
+    let mut preview_files = Vec::new();
+    let mut doc_files = Vec::new();
+    let mut display_name = default_name.clone();
     if let Ok(mut modinfo) = zf.by_name("modinfo.json") {
         let mut s = String::new();
         if modinfo.read_to_string(&mut s).is_ok() {
@@ -715,57 +973,100 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
     }
 
     let mut total_uncompressed: u64 = 0;
-    for idx in 0..zf.len() {
-        let mut entry = zf
-            .by_index(idx)
-            .map_err(|e| HubError::invalid_manifest(format!("读取压缩包条目失败：{e}")))?;
-        if entry.is_symlink() {
-            return Err(HubError::security_violation("安全限制：压缩包内禁止包含符号链接。"));
-        }
-        let raw_name = decode_zip_entry_name(entry.name_raw()).replace('\\', "/");
-        if entry.is_dir() {
-            let trimmed = raw_name.trim_matches('/');
-            if !trimmed.is_empty() {
-                let _ = PathGuard::sanitize_relative_path(trimmed)?;
-            }
-            continue;
-        }
-        total_uncompressed = total_uncompressed.saturating_add(entry.size());
-        if total_uncompressed > MAX_DROP_UNCOMPRESSED_BYTES {
-            return Err(HubError::security_violation("压缩包解压总体积超过 2GB 安全上限。"));
-        }
-        let clean = PathGuard::sanitize_relative_path(&raw_name)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let lower = clean.to_ascii_lowercase();
-        check_forbidden_extension(&lower)?;
+    let zf_len = zf.len();
+    let mut retry_encrypted_via_7z = false;
+    for idx in 0..zf_len {
+        let loop_err = match zf.by_index(idx) {
+            Ok(mut entry) => {
+                if entry.is_symlink() {
+                    Some(HubError::security_violation("安全限制：压缩包内禁止包含符号链接。"))
+                } else {
+                    let raw_name = decode_zip_entry_name(entry.name_raw()).replace('\\', "/");
+                    if entry.is_dir() {
+                        let trimmed = raw_name.trim_matches('/');
+                        if !trimmed.is_empty() {
+                            PathGuard::sanitize_relative_path(trimmed)?;
+                        }
+                        None
+                    } else {
+                        total_uncompressed = total_uncompressed.saturating_add(entry.size());
+                        if total_uncompressed > MAX_DROP_UNCOMPRESSED_BYTES {
+                            Some(HubError::security_violation("压缩包解压总体积超过 2GB 安全上限。"))
+                        } else {
+                            let clean = PathGuard::sanitize_relative_path(&raw_name)?
+                                .to_string_lossy()
+                                .replace('\\', "/");
+                            let lower = clean.to_ascii_lowercase();
+                            check_forbidden_extension(&lower)?;
 
-        let entry_fname = Path::new(&lower).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if lower.ends_with(".bundle") || entry_fname == "__data" || modimg_target_name(&clean).is_some() {
-            let mut data = Vec::new();
-            entry
-                .by_ref()
-                .take((MAX_DROP_PAYLOAD_BYTES + 1) as u64)
-                .read_to_end(&mut data)
-                .map_err(|e| HubError::storage_error(e.to_string()))?;
-            if data.is_empty() || data.len() > MAX_DROP_PAYLOAD_BYTES {
-                return Err(HubError::security_violation(format!(
-                    "压缩包内资源文件体积异常（{clean}）。"
-                )));
+                            if should_collect_payload_path(&clean, &lower) {
+                                let mut data = Vec::new();
+                                entry
+                                    .by_ref()
+                                    .take((MAX_DROP_PAYLOAD_BYTES + 1) as u64)
+                                    .read_to_end(&mut data)
+                                    .map_err(|e| HubError::storage_error(e.to_string()))?;
+                                if data.is_empty() || data.len() > MAX_DROP_PAYLOAD_BYTES {
+                                    Some(HubError::security_violation(format!(
+                                        "压缩包内资源文件体积异常（{clean}）。"
+                                    )))
+                                } else {
+                                    payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
+                                    None
+                                }
+                            } else if !is_noise_entry(&lower) && PREVIEW_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+                                preview_files.push(clean);
+                                None
+                            } else if DOC_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+                                doc_files.push(clean);
+                                None
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                }
             }
-            payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
-        } else if PREVIEW_EXTS.iter().any(|ext| lower.ends_with(ext)) {
-            preview_files.push(clean);
-        } else if DOC_EXTS.iter().any(|ext| lower.ends_with(ext)) {
-            doc_files.push(clean);
+            Err(zip::result::ZipError::UnsupportedArchive(msg))
+                if {
+                    let m = msg.to_ascii_lowercase();
+                    m.contains("password") || m.contains("encrypt") || m.contains("aes")
+                } =>
+            {
+                if password.map(str::trim).filter(|s| !s.is_empty()).is_none() {
+                    Some(
+                        HubError::new(
+                            "ARCHIVE_PASSWORD_REQUIRED",
+                            "检测到加密压缩包，请输入解压密码后重试。",
+                            "SECURITY",
+                        )
+                        .with_recoverable(true),
+                    )
+                } else {
+                    retry_encrypted_via_7z = true;
+                    break;
+                }
+            }
+            Err(zip::result::ZipError::InvalidPassword) => Some(
+                HubError::new(
+                    "ARCHIVE_PASSWORD_INVALID",
+                    "压缩包解压密码错误，请核对后重试。",
+                    "SECURITY",
+                )
+                .with_recoverable(true),
+            ),
+            Err(e) => Some(HubError::invalid_manifest(format!("读取压缩包条目失败：{e}"))),
+        };
+        if let Some(err) = loop_err {
+            return Err(err);
         }
     }
+    if retry_encrypted_via_7z {
+        drop(zf);
+        let extracted = extract_archive_with_tools(source_path, password, false)?;
+        return read_from_directory(extracted.path(), source_kind, default_name);
+    }
 
-    let source_kind = if lower_name.ends_with(".apmm") {
-        "apmm"
-    } else {
-        "community_zip"
-    };
     Ok((source_kind.into(), display_name, payloads, preview_files, doc_files))
 }
 
@@ -786,7 +1087,10 @@ pub(crate) fn is_xspkg_archive(source_path: &Path) -> HubResult<bool> {
         Ok(z) => z,
         Err(_) => return Ok(false),
     };
-    let has_manifest = zf.by_name("manifest.json").is_ok();
+    let has_manifest = match zf.by_name("manifest.json") {
+        Ok(entry) => !entry.encrypted(),
+        Err(_) => false,
+    };
     Ok(has_manifest)
 }
 
@@ -849,11 +1153,88 @@ fn lookup_hex_targets<'a>(
         .or_else(|| discovered.by_addr_group.get(hex_id))
 }
 
+fn is_valid_asset_basename(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 160
+        && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+}
+
+fn read_vanilla_bundle_baseline(root: &Path, target_rel: &str) -> HubResult<Vec<u8>> {
+    let want_key = target_key(target_rel);
+
+    for (receipt_dir_rel, backups_base_rel) in [
+        (".xingshu-mods/dropped-receipts", ".xingshu-mods/dropped-backups"),
+        (".xingshu-mods/workshop-receipts", ".xingshu-mods/workshop-backups"),
+    ] {
+        let dir = confined(root, receipt_dir_rel)?;
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(raw) = fs::read(&p) else { continue };
+            let Ok(val) = serde_json::from_slice::<serde_json::Value>(&raw) else { continue };
+            let phase = val["phase"].as_str().unwrap_or("");
+            let id = val["modId"]
+                .as_str()
+                .or_else(|| val["mod_id"].as_str())
+                .unwrap_or("");
+            if !matches!(phase, "installed" | "prepared") || id.is_empty() {
+                continue;
+            }
+            let Some(files) = val["files"].as_array() else { continue };
+            for f in files {
+                let Some(t) = f["target"].as_str() else { continue };
+                if target_key(t) != want_key {
+                    continue;
+                }
+                let baseline_sha = f["baselineSha256"]
+                    .as_str()
+                    .or_else(|| f["baseline_sha256"].as_str())
+                    .unwrap_or("");
+                let idx = f["index"].as_u64().map(|n| n as usize);
+                if let (false, Some(index), Ok(clean_id)) =
+                    (baseline_sha.is_empty(), idx, sanitize_mod_id(id))
+                {
+                    let backup_rel = format!("{backups_base_rel}/{clean_id}/baseline/{index}.bundle");
+                    if let Ok(backup_abs) = confined(root, &backup_rel) {
+                        if backup_abs.is_file() {
+                            if let Ok(bytes) = fs::read(&backup_abs) {
+                                if sha256_hex(&bytes).eq_ignore_ascii_case(baseline_sha) {
+                                    return Ok(bytes);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let (_, target_abs) = validate_dropped_target_rel(root, target_rel)?;
+    fs::read(&target_abs).map_err(|e| HubError::storage_error(format!("读取原版容器失败（{target_rel}）：{e}")))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn inspect_against_game(
     game: &GameInstallation,
     installation_id: &str,
     root: &Path,
     source_path: &Path,
+) -> HubResult<(DroppedModInspectResult, Vec<StagedCandidate>)> {
+    inspect_against_game_with_password(game, installation_id, root, source_path, None)
+}
+
+fn inspect_against_game_with_password(
+    game: &GameInstallation,
+    installation_id: &str,
+    root: &Path,
+    source_path: &Path,
+    password: Option<&str>,
 ) -> HubResult<(DroppedModInspectResult, Vec<StagedCandidate>)> {
     let mod_id = derive_mod_id(source_path);
     let existing_receipt = read_receipt(root, &mod_id)?;
@@ -899,6 +1280,7 @@ fn inspect_against_game(
             can_install: compatible && !matched_files.is_empty() && !already_installed,
             already_installed,
             has_catalog_bundle: false,
+            android_exportable_count: 0,
             warnings,
             matched_files,
             unmatched_files: Vec::new(),
@@ -911,9 +1293,27 @@ fn inspect_against_game(
     }
 
     let (source_kind, display_name, raw_payloads, preview_files, doc_files) =
-        read_source_entries(source_path)?;
+        read_source_entries_with_password(source_path, password)?;
     let discovered = discover_game_targets(game, root)?;
     let active_owners = collect_active_target_owners(root, &mod_id)?;
+
+    let has_backup_dir = |entry: &str| {
+        let parts: Vec<&str> = entry.split('/').collect();
+        parts.len() >= 2
+            && parts[..parts.len() - 1]
+                .iter()
+                .any(|seg| SKIP_BACKUP_DIRS.iter().any(|b| seg.eq_ignore_ascii_case(b)))
+    };
+    let non_backup_leafs: HashSet<String> = raw_payloads
+        .iter()
+        .filter(|raw| !has_backup_dir(&raw.source_entry))
+        .filter_map(|raw| {
+            Path::new(&raw.source_entry)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase())
+        })
+        .collect();
 
     let mut matched_files = Vec::new();
     let mut unmatched_files = Vec::new();
@@ -923,39 +1323,87 @@ fn inspect_against_game(
     let mut seen_targets = HashSet::new();
     let mut has_catalog_bundle = false;
     let mut addr_group_fallback_count = 0usize;
+    let mut adapted_modimg_count = 0usize;
+    let mut migrated_bundle_count = 0usize;
+    let mut dynamic_card_count = 0usize;
+    let mut apenc_skipped_count = 0usize;
+    let mut backup_skipped_count = 0usize;
+    let mut lazy_catalogs: Option<Vec<std::sync::Arc<crate::game_art::Catalog>>> = None;
 
     for raw in raw_payloads {
         let entry_lower = raw.source_entry.to_ascii_lowercase();
         let path_obj = Path::new(&raw.source_entry);
         let file_name = path_obj.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let file_lower = file_name.to_ascii_lowercase();
+
+        if has_backup_dir(&raw.source_entry) && non_backup_leafs.contains(&file_lower) {
+            backup_skipped_count += 1;
+            continue;
+        }
+
+        let bundle_summary = if raw.bytes.starts_with(b"UnityFS") {
+            crate::mod_inspector::inspect_bundle_contents(&raw.bytes).ok()
+        } else {
+            None
+        };
+
+        if bundle_summary.as_ref().is_some_and(|s| s.has_astral_runtime_dll) {
+            conflicts.push(format!(
+                "{} 包含第三方篡改版 AstralParty.Runtime.dll，已自动拦截以防破坏 3.3.0 运行时。",
+                raw.source_entry
+            ));
+            continue;
+        }
+
+        let raw_apenc = raw
+            .bytes
+            .get(..raw.bytes.len().min(4096))
+            .is_some_and(|head| head.windows(7).any(|w| w == b"APENC01"));
+        if raw_apenc || bundle_summary.as_ref().is_some_and(|s| s.has_apenc_drm) {
+            apenc_skipped_count += 1;
+            unmatched_files.push(DroppedModUnmatchedFile {
+                source_entry: raw.source_entry,
+                reason: "检测到 APENC01 加密动态立绘；星枢原生动态立绘不支持也不绕过官方 DRM 加密，请改用无加密 .mp4/.webm/.mov/.usm/.bundle。".into(),
+                size: raw.bytes.len() as u64,
+            });
+            continue;
+        }
+
         let source_bundle_id = if file_lower == "__data" {
             path_obj.parent().and_then(Path::file_name).and_then(|name| name.to_str())
         } else {
             path_obj.file_stem().and_then(|name| name.to_str())
         };
-        if source_bundle_id.zip(discovered.protected_runtime_bundle_id.as_deref())
+        if source_bundle_id
+            .zip(discovered.protected_runtime_bundle_id.as_deref())
             .is_some_and(|(source, protected)| source.eq_ignore_ascii_case(protected))
         {
             conflicts.push(format!("{file_name} 属于星枢运行时核心容器，第三方模组无法覆盖。"));
             continue;
         }
 
-        let mut candidate_targets: Vec<(String, String, String, bool)> = Vec::new();
+        // Tuple: `(bundle_id, target_rel, target_kind, is_catalog, custom_bytes)`
+        let mut candidate_targets: Vec<(String, String, String, bool, Option<Vec<u8>>)> = Vec::new();
+        let mut direct_unmatched_reason: Option<String> = None;
 
         if file_lower == "catalog.bundle" {
             has_catalog_bundle = true;
             if discovered.catalog_targets.is_empty() {
-                unmatched_files.push(DroppedModUnmatchedFile {
-                    source_entry: raw.source_entry,
-                    reason: "当前游戏目录未发现 StreamingAssets/aa/catalog.bundle".into(),
-                    size: raw.bytes.len() as u64,
-                });
-                continue;
+                direct_unmatched_reason = Some("当前游戏目录未发现 StreamingAssets/aa/catalog.bundle".into());
+            } else {
+                for target_rel in &discovered.catalog_targets {
+                    candidate_targets.push(("catalog".into(), target_rel.clone(), "catalog".into(), true, None));
+                }
             }
-            for target_rel in &discovered.catalog_targets {
-                candidate_targets.push(("catalog".into(), target_rel.clone(), "catalog".into(), true));
-            }
+        } else if let Some(dyn_name) = dynamic_card_target_name(&raw.source_entry, &raw.bytes) {
+            dynamic_card_count += 1;
+            candidate_targets.push((
+                "dynamic_card".into(),
+                format!("{DYNAMIC_CARDS_DIR}/{dyn_name}"),
+                "dynamic_card".into(),
+                false,
+                None,
+            ));
         } else if file_lower == "__data" {
             let parent_hex = path_obj
                 .parent()
@@ -974,7 +1422,7 @@ fn inspect_against_game(
                 if let Some(targets) = discovered.by_hex.get(&hex_id) {
                     for (t_rel, t_kind) in targets {
                         if t_kind == "addressables" || targets.len() == 1 {
-                            candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                            candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false, None));
                         }
                     }
                 } else if let Some((group_id, targets)) = grandparent_hex
@@ -983,37 +1431,24 @@ fn inspect_against_game(
                 {
                     addr_group_fallback_count += 1;
                     for (t_rel, t_kind) in targets {
-                        candidate_targets.push((group_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                        candidate_targets.push((group_id.clone(), t_rel.clone(), t_kind.clone(), false, None));
                     }
                 } else {
-                    unmatched_files.push(DroppedModUnmatchedFile {
-                        source_entry: raw.source_entry,
-                        reason: format!("当前游戏目录中未找到 Addressables 容器 {hex_id}"),
-                        size: raw.bytes.len() as u64,
-                    });
-                    continue;
+                    direct_unmatched_reason = Some(format!("当前游戏目录中未找到 Addressables 容器 {hex_id}"));
                 }
             } else {
-                unmatched_files.push(DroppedModUnmatchedFile {
-                    source_entry: raw.source_entry,
-                    reason: "无法识别 __data 上级 32 位 Bundle Hash 目录名".into(),
-                    size: raw.bytes.len() as u64,
-                });
-                continue;
+                direct_unmatched_reason = Some("无法识别 __data 上级 32 位 Bundle Hash 目录名".into());
             }
         } else if let Some(stem) = path_obj.file_stem().and_then(|s| s.to_str()).filter(|s| is_hex32(s)) {
             let hex_id = stem.to_ascii_lowercase();
             if let Some(targets) = lookup_hex_targets(&discovered, &hex_id) {
                 for (t_rel, t_kind) in targets {
-                    candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                    candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false, None));
                 }
             } else {
-                unmatched_files.push(DroppedModUnmatchedFile {
-                    source_entry: raw.source_entry,
-                    reason: format!("当前游戏目录未找到对应 Bundle（{hex_id}.bundle），可能版本或渠道不一致"),
-                    size: raw.bytes.len() as u64,
-                });
-                continue;
+                direct_unmatched_reason = Some(format!(
+                    "当前游戏目录未找到对应 Bundle（{hex_id}.bundle），可能版本或渠道不一致"
+                ));
             }
         } else if let Some(hex_id) = path_obj
             .file_stem()
@@ -1030,26 +1465,18 @@ fn inspect_against_game(
             }
             if let Some(targets) = lookup_hex_targets(&discovered, &hex_id) {
                 for (t_rel, t_kind) in targets {
-                    candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                    candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false, None));
                 }
             } else {
-                unmatched_files.push(DroppedModUnmatchedFile {
-                    source_entry: raw.source_entry,
-                    reason: format!("检测到带前缀 Bundle ID（{hex_id}），但当前游戏目录未找到该版本资源"),
-                    size: raw.bytes.len() as u64,
-                });
-                continue;
+                direct_unmatched_reason = Some(format!(
+                    "检测到带前缀 Bundle ID（{hex_id}），但当前游戏目录未找到该版本资源"
+                ));
             }
         } else if let Some((_, aa_rel)) = entry_lower.split_once("streamingassets/aa/") {
             if let Some((t_rel, t_kind)) = discovered.by_aa_rel.get(aa_rel) {
-                candidate_targets.push((file_name.into(), t_rel.clone(), t_kind.clone(), false));
+                candidate_targets.push((file_name.into(), t_rel.clone(), t_kind.clone(), false, None));
             } else {
-                unmatched_files.push(DroppedModUnmatchedFile {
-                    source_entry: raw.source_entry,
-                    reason: "StreamingAssets/aa 下不存在该名称的原始资源".into(),
-                    size: raw.bytes.len() as u64,
-                });
-                continue;
+                direct_unmatched_reason = Some("StreamingAssets/aa 下不存在该名称的原始资源".into());
             }
         } else if let Some(modimg_name) = modimg_target_name(&raw.source_entry) {
             candidate_targets.push((
@@ -1057,6 +1484,7 @@ fn inspect_against_game(
                 format!("modimg/{modimg_name}"),
                 "modimg".into(),
                 false,
+                None,
             ));
         } else if let Some(embedded_id) = file_lower
             .ends_with(".bundle")
@@ -1073,36 +1501,148 @@ fn inspect_against_game(
             }
             if let Some(targets) = lookup_hex_targets(&discovered, &embedded_id) {
                 for (t_rel, t_kind) in targets {
-                    candidate_targets.push((embedded_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                    candidate_targets.push((embedded_id.clone(), t_rel.clone(), t_kind.clone(), false, None));
                 }
             } else {
-                unmatched_files.push(DroppedModUnmatchedFile {
-                    source_entry: raw.source_entry,
-                    reason: format!(
-                        "重命名 Bundle 文件（内置容器 ID {embedded_id}）与当前游戏版本不匹配，需重新适配 3.3.0"
-                    ),
-                    size: raw.bytes.len() as u64,
-                });
-                continue;
+                direct_unmatched_reason = Some(format!(
+                    "重命名 Bundle 文件（内置容器 ID {embedded_id}）与当前游戏版本不匹配，需重新适配 3.3.0"
+                ));
             }
         } else {
+            direct_unmatched_reason = Some("非 32 位 Hash Bundle 文件，且未指定 StreamingAssets/aa 或 modimg/ 路径".into());
+        }
+
+        // Cross-version Catalog auto-adapt fallback for old/renamed UnityFS containers
+        let mut fallback_note: Option<String> = None;
+        if candidate_targets.is_empty() && !has_catalog_bundle {
+            if let Some(ref summary) = bundle_summary {
+                if !summary.texture_names.is_empty()
+                    && summary.monobehaviour_names.is_empty()
+                    && summary.other_object_count == 0
+                {
+                    let catalogs = lazy_catalogs
+                        .get_or_insert_with(|| crate::game_art::load_game_catalogs(game, root));
+                    let mut extract_err: Option<String> = None;
+                    for tex_name in &summary.texture_names {
+                        if !is_valid_asset_basename(tex_name) {
+                            continue;
+                        }
+                        if crate::game_art::resolve_asset_bundles(catalogs, tex_name).is_empty() {
+                            continue;
+                        }
+                        match crate::mod_inspector::extract_texture_full_png_from_bundle(&raw.bytes, tex_name) {
+                            Ok(png_bytes) => {
+                                adapted_modimg_count += 1;
+                                let bid = format!("tex.{}", &sha256_hex(tex_name.as_bytes())[..12]);
+                                candidate_targets.push((
+                                    bid,
+                                    format!("modimg/{tex_name}.png"),
+                                    "modimg_adapted".into(),
+                                    false,
+                                    Some(png_bytes),
+                                ));
+                            }
+                            Err(e) => {
+                                extract_err = Some(format!("贴图 '{tex_name}' 解码失败：{e}"));
+                            }
+                        }
+                    }
+                    if candidate_targets.is_empty() {
+                        fallback_note = extract_err.or_else(|| {
+                            Some(format!(
+                                "容器内贴图 [{}] 未在当前版本游戏 Addressables Catalog 中匹配到目标",
+                                summary.texture_names.join(", ")
+                            ))
+                        });
+                    }
+                } else if summary.monobehaviour_names.len() == 1
+                    && summary.texture_names.is_empty()
+                    && summary.other_object_count == 0
+                {
+                    let mb_name = &summary.monobehaviour_names[0];
+                    if mb_name.to_ascii_lowercase().starts_with("vut_") && is_valid_asset_basename(mb_name) {
+                        dynamic_card_count += 1;
+                        candidate_targets.push((
+                            "dynamic_card".into(),
+                            format!("{DYNAMIC_CARDS_DIR}/{mb_name}.bundle"),
+                            "dynamic_card".into(),
+                            false,
+                            None,
+                        ));
+                    } else {
+                        let catalogs = lazy_catalogs
+                            .get_or_insert_with(|| crate::game_art::load_game_catalogs(game, root));
+                        let bundles = crate::game_art::resolve_asset_bundles(catalogs, mb_name);
+                        let mut last_err: Option<String> = None;
+                        'mb_search: for b_name in &bundles {
+                            let Some(stem) = Path::new(b_name).file_stem().and_then(|s| s.to_str()) else {
+                                continue;
+                            };
+                            let hex_id = stem.to_ascii_lowercase();
+                            let Some(targets) = lookup_hex_targets(&discovered, &hex_id) else {
+                                continue;
+                            };
+                            for (t_rel, _) in targets {
+                                match read_vanilla_bundle_baseline(root, t_rel)
+                                    .map_err(|e| e.message)
+                                    .and_then(|van| {
+                                        crate::mod_inspector::migrate_single_monobehaviour_bundle(&van, &raw.bytes)
+                                    }) {
+                                    Ok(migrated) => {
+                                        migrated_bundle_count += 1;
+                                        candidate_targets.push((
+                                            hex_id.clone(),
+                                            t_rel.clone(),
+                                            "migrated_bundle".into(),
+                                            false,
+                                            Some(migrated),
+                                        ));
+                                        break 'mb_search;
+                                    }
+                                    Err(e) => {
+                                        last_err = Some(e);
+                                    }
+                                }
+                            }
+                        }
+                        if candidate_targets.is_empty() {
+                            fallback_note = Some(if bundles.is_empty() {
+                                format!("MonoBehaviour '{mb_name}' 未在当前版本 Addressables Catalog 中找到")
+                            } else {
+                                format!(
+                                    "MonoBehaviour '{mb_name}' 自动迁移失败：{}",
+                                    last_err.unwrap_or_else(|| "当前游戏目录未下载对应 3.3.0 原版容器".into())
+                                )
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if candidate_targets.is_empty() {
             unmatched_files.push(DroppedModUnmatchedFile {
                 source_entry: raw.source_entry,
-                reason: "非 32 位 Hash Bundle 文件，且未指定 StreamingAssets/aa 或 modimg/ 路径".into(),
+                reason: fallback_note
+                    .or(direct_unmatched_reason)
+                    .unwrap_or_else(|| "未能在当前游戏目录匹配到可替换目标。".into()),
                 size: raw.bytes.len() as u64,
             });
             continue;
         }
 
-        let payload_sha256 = sha256_hex(&raw.bytes);
-        let payload_size = raw.bytes.len() as u64;
-
-        for (bundle_id, target_rel, target_kind, is_catalog) in candidate_targets {
+        for (bundle_id, target_rel, target_kind, is_catalog, custom_bytes) in candidate_targets {
             if !seen_targets.insert(target_rel.clone()) {
-                warnings.push(format!("模组包内存在重复指向 {target_rel} 的文件，已忽略后续重复条目。"));
+                warnings.push(format!(
+                    "检测到多差分或重复指向 {target_rel} 的文件，已优先保留首个并跳过：{}",
+                    raw.source_entry
+                ));
                 continue;
             }
             let (norm_target, target_abs) = validate_dropped_target_rel(root, &target_rel)?;
+            let final_bytes = custom_bytes.unwrap_or_else(|| raw.bytes.clone());
+            let payload_sha256 = sha256_hex(&final_bytes);
+            let payload_size = final_bytes.len() as u64;
             let current_sha256 = if target_abs.is_file() {
                 compute_file_sha256(&target_abs)?
             } else {
@@ -1141,12 +1681,37 @@ fn inspect_against_game(
             staged_candidates.push(StagedCandidate {
                 target_rel: norm_target,
                 is_catalog,
-                bytes: raw.bytes.clone(),
-                sha256: payload_sha256.clone(),
+                bytes: final_bytes,
+                sha256: payload_sha256,
             });
         }
     }
 
+    if adapted_modimg_count > 0 {
+        warnings.push(format!(
+            "已自动将 {adapted_modimg_count} 个旧版贴图容器无损提取为 modimg/*.png（PC 与安卓手机通用，游戏升级不失效）。"
+        ));
+    }
+    if migrated_bundle_count > 0 {
+        warnings.push(format!(
+            "已自动将 {migrated_bundle_count} 个旧版技能/大厅视频容器迁移重构至当前 3.3.0 原版容器。"
+        ));
+    }
+    if dynamic_card_count > 0 {
+        warnings.push(format!(
+            "已识别 {dynamic_card_count} 个无加密动态立绘资源，将安装至 xingshu_dynamic_cards/ 目录。"
+        ));
+    }
+    if apenc_skipped_count > 0 {
+        warnings.push(format!(
+            "已自动跳过 {apenc_skipped_count} 个 APENC01 加密动态立绘文件（星枢原生动态立绘不支持也不绕过官方加密，其余立绘/技能资源可正常使用）。"
+        ));
+    }
+    if backup_skipped_count > 0 {
+        warnings.push(format!(
+            "检测到 {backup_skipped_count} 个原版对照/备份子目录文件（如 原/），已自动忽略避免误覆盖。"
+        ));
+    }
     if addr_group_fallback_count > 0 {
         warnings.push(format!(
             "已通过 Addressables 分组自动对齐 {addr_group_fallback_count} 个热更缓存目标（目录 Hash 已随游戏更新）。"
@@ -1162,7 +1727,7 @@ fn inspect_against_game(
         warnings.push("未能在当前所选游戏目录匹配到任何可替换的资源文件，请确认游戏渠道或版本是否一致。".into());
     } else if !unmatched_files.is_empty() {
         warnings.push(format!(
-            "有 {} 个 Bundle 未在当前游戏目录匹配到目标（安装时将自动跳过）。",
+            "有 {} 个资源未在当前游戏目录匹配到目标（安装时将自动跳过）。",
             unmatched_files.len()
         ));
     }
@@ -1172,6 +1737,16 @@ fn inspect_against_game(
 
     conflicts.sort();
     conflicts.dedup();
+    let android_exportable_count = matched_files
+        .iter()
+        .filter(|f| {
+            !f.is_catalog
+                && f.conflict_with.is_none()
+                && matches!(f.target_kind.as_str(), "modimg" | "modimg_adapted")
+                && f.target_rel.starts_with("modimg/")
+                && f.target_rel.to_ascii_lowercase().ends_with(".png")
+        })
+        .count();
     let has_non_catalog_or_any = !matched_files.is_empty();
     let compatible = has_non_catalog_or_any && conflicts.is_empty();
     let can_install = compatible && !already_installed;
@@ -1188,6 +1763,7 @@ fn inspect_against_game(
         can_install,
         already_installed,
         has_catalog_bundle,
+        android_exportable_count,
         warnings,
         matched_files,
         unmatched_files,
@@ -1215,7 +1791,7 @@ fn restore_bundle_receipt(root: &Path, receipt: &DroppedModReceipt) -> HubResult
             String::new()
         };
         if f.baseline_sha256.is_empty() {
-            if !f.target.starts_with("modimg/") {
+            if !is_addon_target_rel(&f.target) {
                 return Err(HubError::storage_error("安装前备份校验标识缺失，无法还原。"));
             }
             if !current_hash.is_empty() && !current_hash.eq_ignore_ascii_case(&f.mod_sha256) {
@@ -1273,8 +1849,36 @@ pub(crate) fn install_dropped_from_path(
     install_service: Option<&InstallService>,
     backup_repo: Option<&BackupRepository>,
 ) -> HubResult<DroppedModInstallResult> {
+    install_dropped_from_path_with_password(
+        game,
+        root,
+        source_path,
+        include_catalog,
+        None,
+        install_service,
+        backup_repo,
+    )
+}
+
+fn install_dropped_from_path_with_password(
+    game: &GameInstallation,
+    root: &Path,
+    source_path: &Path,
+    include_catalog: bool,
+    password: Option<&str>,
+    install_service: Option<&InstallService>,
+    backup_repo: Option<&BackupRepository>,
+) -> HubResult<DroppedModInstallResult> {
     let _lock = operation_lock(root)?;
-    install_dropped_in_locked_root(game, root, source_path, include_catalog, install_service, backup_repo)
+    install_dropped_in_locked_root_with_password(
+        game,
+        root,
+        source_path,
+        include_catalog,
+        password,
+        install_service,
+        backup_repo,
+    )
 }
 
 pub(crate) fn install_dropped_in_locked_root(
@@ -1285,8 +1889,29 @@ pub(crate) fn install_dropped_in_locked_root(
     install_service: Option<&InstallService>,
     backup_repo: Option<&BackupRepository>,
 ) -> HubResult<DroppedModInstallResult> {
+    install_dropped_in_locked_root_with_password(
+        game,
+        root,
+        source_path,
+        include_catalog,
+        None,
+        install_service,
+        backup_repo,
+    )
+}
+
+fn install_dropped_in_locked_root_with_password(
+    game: &GameInstallation,
+    root: &Path,
+    source_path: &Path,
+    include_catalog: bool,
+    password: Option<&str>,
+    install_service: Option<&InstallService>,
+    backup_repo: Option<&BackupRepository>,
+) -> HubResult<DroppedModInstallResult> {
     game_closed(game)?;
-    let (inspect, candidates) = inspect_against_game(game, &game.id, root, source_path)?;
+    let (inspect, candidates) =
+        inspect_against_game_with_password(game, &game.id, root, source_path, password)?;
 
     if let Some(existing) = read_receipt(root, &inspect.mod_id)? {
         if existing.phase != "restored" {
@@ -1359,7 +1984,7 @@ pub(crate) fn install_dropped_in_locked_root(
         let (_, target_abs) = validate_dropped_target_rel(root, &c.target_rel)?;
         let baseline_hash = if target_abs.is_file() {
             compute_file_sha256(&target_abs)?
-        } else if c.target_rel.starts_with("modimg/") {
+        } else if is_addon_target_rel(&c.target_rel) {
             String::new()
         } else {
             return Err(HubError::invalid_manifest(format!(
@@ -1516,10 +2141,100 @@ pub(crate) fn restore_dropped_in_locked_root(
     Ok(format!("已还原「{}」安装前的原版文件，备份保留。", receipt.name))
 }
 
+fn export_android_pack_from_path(
+    game: &GameInstallation,
+    root: &Path,
+    source_path: &Path,
+    password: Option<&str>,
+    output_path: Option<&Path>,
+) -> HubResult<String> {
+    let (inspect, candidates) =
+        inspect_against_game_with_password(game, &game.id, root, source_path, password)?;
+
+    let export_entries: Vec<&StagedCandidate> = candidates
+        .iter()
+        .filter(|c| !c.is_catalog && is_addon_target_rel(&c.target_rel))
+        .collect();
+    let modimg_png_count = export_entries
+        .iter()
+        .filter(|c| c.target_rel.starts_with("modimg/") && c.target_rel.to_ascii_lowercase().ends_with(".png"))
+        .count();
+    if modimg_png_count == 0 {
+        return Err(HubError::invalid_manifest(
+            "该模组包未包含可导出为安卓 modimg/*.png 的贴图资源。",
+        ));
+    }
+
+    let safe_base: String = inspect
+        .display_name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .take(80)
+        .collect();
+    let default_file_name = format!("{}_Android_modimg.zip", safe_base.trim().trim_matches('.'));
+
+    let dest_path = if let Some(explicit) = output_path {
+        if explicit.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(HubError::security_violation("导出目标路径不允许包含上级目录跳转。"));
+        }
+        explicit.to_path_buf()
+    } else {
+        let is_staged = source_path.to_string_lossy().contains("staged-drops");
+        let base_dir = if is_staged {
+            dirs::download_dir()
+                .or_else(|| source_path.parent().map(Path::to_path_buf))
+                .unwrap_or_else(std::env::temp_dir)
+        } else {
+            source_path
+                .parent()
+                .map(Path::to_path_buf)
+                .or_else(dirs::download_dir)
+                .unwrap_or_else(std::env::temp_dir)
+        };
+        base_dir.join(default_file_name)
+    };
+
+    let parent = dest_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| HubError::storage_error("无效的导出路径。"))?;
+    fs::create_dir_all(parent).map_err(|e| HubError::storage_error(e.to_string()))?;
+
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| HubError::storage_error(format!("创建临时导出文件失败：{e}")))?;
+    {
+        let mut zf = zip::ZipWriter::new(tmp.as_file_mut());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for item in &export_entries {
+            zf.start_file(&item.target_rel, opts)
+                .map_err(|e| HubError::storage_error(format!("写入压缩条目失败：{e}")))?;
+            zf.write_all(&item.bytes)
+                .map_err(|e| HubError::storage_error(format!("写入贴图数据失败：{e}")))?;
+        }
+        zf.finish()
+            .map_err(|e| HubError::storage_error(format!("完成安卓模组包封装失败：{e}")))?;
+    }
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| HubError::storage_error(e.to_string()))?;
+    tmp.persist(&dest_path)
+        .map_err(|e| HubError::storage_error(format!("保存安卓模组包失败：{e}")))?;
+
+    Ok(dest_path.display().to_string())
+}
+
 #[tauri::command]
 pub async fn inspect_dropped_mod(
     installation_id: String,
     source_path: String,
+    password: Option<String>,
     center: State<'_, ExtensionCenter>,
 ) -> HubResult<DroppedModInspectResult> {
     let game = get_game(&center.db, &installation_id)?;
@@ -1529,7 +2244,13 @@ pub async fn inspect_dropped_mod(
         return Err(HubError::invalid_manifest("请提供有效的模组文件或文件夹路径。"));
     }
     tokio::task::spawn_blocking(move || {
-        let (res, _) = inspect_against_game(&game, &installation_id, &root, Path::new(&trimmed))?;
+        let (res, _) = inspect_against_game_with_password(
+            &game,
+            &installation_id,
+            &root,
+            Path::new(&trimmed),
+            password.as_deref(),
+        )?;
         Ok(res)
     })
     .await
@@ -1541,6 +2262,7 @@ pub async fn install_dropped_mod(
     installation_id: String,
     source_path: String,
     include_catalog: bool,
+    password: Option<String>,
     center: State<'_, ExtensionCenter>,
     install_service: State<'_, InstallService>,
 ) -> HubResult<DroppedModInstallResult> {
@@ -1553,15 +2275,46 @@ pub async fn install_dropped_mod(
     let svc = install_service.inner();
     let backup_repo = BackupRepository::new(center.db.clone());
     tokio::task::block_in_place(|| {
-        install_dropped_from_path(
+        install_dropped_from_path_with_password(
             &game,
             &root,
             Path::new(&trimmed),
             include_catalog,
+            password.as_deref(),
             Some(svc),
             Some(&backup_repo),
         )
     })
+}
+
+#[tauri::command]
+pub async fn export_dropped_mod_android_pack(
+    installation_id: String,
+    source_path: String,
+    password: Option<String>,
+    output_path: Option<String>,
+    center: State<'_, ExtensionCenter>,
+) -> HubResult<String> {
+    let game = get_game(&center.db, &installation_id)?;
+    let root = game_root(&game)?;
+    let trimmed = source_path.trim().trim_matches('"').to_string();
+    if trimmed.is_empty() {
+        return Err(HubError::invalid_manifest("请提供有效的模组文件或文件夹路径。"));
+    }
+    let out_trimmed = output_path
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty());
+    tokio::task::spawn_blocking(move || {
+        export_android_pack_from_path(
+            &game,
+            &root,
+            Path::new(&trimmed),
+            password.as_deref(),
+            out_trimmed.as_deref().map(Path::new),
+        )
+    })
+    .await
+    .map_err(|e| HubError::storage_error(e.to_string()))?
 }
 
 #[tauri::command]
@@ -1742,8 +2495,13 @@ fn save_staged_drop_file(app: &tauri::AppHandle, file_name: &str, bytes: &[u8]) 
         .collect::<String>();
     let lower = clean_name.to_ascii_lowercase();
     check_forbidden_extension(&lower)?;
-    if !(lower.ends_with(".zip") || lower.ends_with(".xspkg") || lower.ends_with(".apmm") || lower.ends_with(".bundle")) {
-        return Err(HubError::invalid_manifest("仅支持选择 .zip、.xspkg、.apmm 或 .bundle 文件。"));
+    if !(lower.ends_with(".zip")
+        || lower.ends_with(".rar")
+        || lower.ends_with(".xspkg")
+        || lower.ends_with(".apmm")
+        || lower.ends_with(".bundle"))
+    {
+        return Err(HubError::invalid_manifest("仅支持选择 .zip、.rar、.xspkg、.apmm 或 .bundle 文件。"));
     }
     let base_dir = app
         .path()
@@ -1792,6 +2550,7 @@ mod tests {
     const TEST_HEX_B: &str = "fedcba9876543210fedcba9876543210";
 
     fn fixture_game(root: &Path) -> GameInstallation {
+        fs::create_dir_all(root).unwrap();
         let exe = root.join("AstralParty_CN.exe");
         fs::write(&exe, b"exe").unwrap();
         fs::write(root.join("GameAssembly.dll"), b"dll").unwrap();
@@ -2198,5 +2957,379 @@ mod tests {
                 assert_eq!(inspect.matched_files.len(), expected);
             }
         }
+    }
+
+    fn build_min_catalog_json(mappings: &[(&str, &str)]) -> Vec<u8> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut internal_ids = Vec::new();
+        let mut key_bytes = Vec::new();
+        let mut bucket_bytes = Vec::new();
+        let mut entry_bytes = Vec::new();
+
+        entry_bytes.extend_from_slice(&(mappings.len() as u32).to_le_bytes());
+        bucket_bytes.extend_from_slice(&(mappings.len() as u32).to_le_bytes());
+        for (idx, (asset, bundle_name)) in mappings.iter().enumerate() {
+            internal_ids.push(format!("StandaloneWindows64/{bundle_name}"));
+            let kpos = key_bytes.len() as u32;
+            key_bytes.push(0u8);
+            key_bytes.extend_from_slice(&(asset.len() as u32).to_le_bytes());
+            key_bytes.extend_from_slice(asset.as_bytes());
+
+            bucket_bytes.extend_from_slice(&kpos.to_le_bytes());
+            bucket_bytes.extend_from_slice(&1u32.to_le_bytes());
+            bucket_bytes.extend_from_slice(&(idx as u32).to_le_bytes());
+
+            entry_bytes.extend_from_slice(&(idx as u32).to_le_bytes());
+            entry_bytes.extend_from_slice(&0u32.to_le_bytes());
+            entry_bytes.extend_from_slice(&(-1i32).to_le_bytes());
+            entry_bytes.extend_from_slice(&[0u8; 16]);
+        }
+
+        serde_json::to_vec(&serde_json::json!({
+            "m_InternalIds": internal_ids,
+            "m_KeyDataString": STANDARD.encode(key_bytes),
+            "m_BucketDataString": STANDARD.encode(bucket_bytes),
+            "m_EntryDataString": STANDARD.encode(entry_bytes),
+        }))
+        .unwrap()
+    }
+
+    fn build_min_unityfs_bundle(cab_name: &str, types: Vec<i32>, objects: Vec<(i64, usize, Vec<u8>)>) -> Vec<u8> {
+        let mut obj_data = Vec::new();
+        let mut entries = Vec::with_capacity(objects.len());
+        for (pid, tid, payload) in &objects {
+            while obj_data.len() % 8 != 0 {
+                obj_data.push(0);
+            }
+            let st = obj_data.len();
+            obj_data.extend_from_slice(payload);
+            entries.push((*pid, st as i64, payload.len() as u32, *tid as i32));
+        }
+
+        let mut meta = Vec::new();
+        meta.extend_from_slice(b"2022.3.62f3\0");
+        meta.extend_from_slice(&19i32.to_le_bytes());
+        meta.push(0);
+        meta.extend_from_slice(&(types.len() as i32).to_le_bytes());
+        for cid in &types {
+            meta.extend_from_slice(&cid.to_le_bytes());
+            meta.push(0);
+            meta.extend_from_slice(&(-1i16).to_le_bytes());
+            if *cid == 114 || *cid < 0 {
+                meta.extend_from_slice(&[0u8; 16]);
+            }
+            meta.extend_from_slice(&[0u8; 16]);
+        }
+        meta.extend_from_slice(&(entries.len() as i32).to_le_bytes());
+        while meta.len() % 4 != 0 {
+            meta.push(0);
+        }
+        for (pid, st, sz, tid) in entries {
+            meta.extend_from_slice(&pid.to_le_bytes());
+            meta.extend_from_slice(&st.to_le_bytes());
+            meta.extend_from_slice(&sz.to_le_bytes());
+            meta.extend_from_slice(&tid.to_le_bytes());
+        }
+        let data_offset = (48 + meta.len()).next_multiple_of(16);
+        let mut cab = vec![0u8; data_offset + obj_data.len()];
+        let total = cab.len() as i64;
+        cab[0..4].copy_from_slice(&(meta.len() as u32).to_be_bytes());
+        cab[8..12].copy_from_slice(&22u32.to_be_bytes());
+        cab[20..24].copy_from_slice(&(meta.len() as u32).to_be_bytes());
+        cab[24..32].copy_from_slice(&total.to_be_bytes());
+        cab[32..40].copy_from_slice(&(data_offset as i64).to_be_bytes());
+        cab[48..48 + meta.len()].copy_from_slice(&meta);
+        cab[data_offset..].copy_from_slice(&obj_data);
+
+        let mut blocks_info = Vec::new();
+        blocks_info.extend_from_slice(&[0u8; 16]);
+        blocks_info.extend_from_slice(&1i32.to_be_bytes());
+        blocks_info.extend_from_slice(&(cab.len() as u32).to_be_bytes());
+        blocks_info.extend_from_slice(&(cab.len() as u32).to_be_bytes());
+        blocks_info.extend_from_slice(&0x0040u16.to_be_bytes());
+        blocks_info.extend_from_slice(&1i32.to_be_bytes());
+        blocks_info.extend_from_slice(&0i64.to_be_bytes());
+        blocks_info.extend_from_slice(&(cab.len() as i64).to_be_bytes());
+        blocks_info.extend_from_slice(&4u32.to_be_bytes());
+        blocks_info.extend_from_slice(cab_name.as_bytes());
+        blocks_info.push(0);
+
+        let mut bundle = Vec::new();
+        bundle.extend_from_slice(b"UnityFS\0");
+        bundle.extend_from_slice(&8u32.to_be_bytes());
+        bundle.extend_from_slice(b"5.x.x\02022.3.62f3\0");
+        let sz_pos = bundle.len();
+        bundle.extend_from_slice(&0i64.to_be_bytes());
+        bundle.extend_from_slice(&(blocks_info.len() as u32).to_be_bytes());
+        bundle.extend_from_slice(&(blocks_info.len() as u32).to_be_bytes());
+        bundle.extend_from_slice(&0x0040u32.to_be_bytes());
+        while bundle.len() % 16 != 0 {
+            bundle.push(0);
+        }
+        bundle.extend_from_slice(&blocks_info);
+        bundle.extend_from_slice(&cab);
+        let blen = bundle.len() as i64;
+        bundle[sz_pos..sz_pos + 8].copy_from_slice(&blen.to_be_bytes());
+        bundle
+    }
+
+    fn make_texture2d_obj_rgba32(name: &str, w: i32, h: i32, rgba: &[u8]) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        o.extend_from_slice(name.as_bytes());
+        while o.len() % 4 != 0 {
+            o.push(0);
+        }
+        o.extend_from_slice(&0i32.to_le_bytes()); // forcedFallbackFormat
+        o.push(0); // downscaleFallback
+        o.push(0); // isAlphaChannelOptional
+        while o.len() % 4 != 0 {
+            o.push(0);
+        }
+        o.extend_from_slice(&w.to_le_bytes());
+        o.extend_from_slice(&h.to_le_bytes());
+        o.extend_from_slice(&(rgba.len() as u32).to_le_bytes());
+        o.extend_from_slice(&0i32.to_le_bytes()); // mips stripped
+        o.extend_from_slice(&4i32.to_le_bytes()); // TextureFormat::RGBA32
+        o.extend_from_slice(&1i32.to_le_bytes()); // mipCount
+        o.extend_from_slice(&[0u8, 0, 0, 0]); // flags + align
+        o.extend_from_slice(&0u32.to_le_bytes()); // mipmap group empty
+        o.extend_from_slice(&[0u8; 4]); // streaming + align
+        o.extend_from_slice(&0i32.to_le_bytes()); // streaming priority
+        o.extend_from_slice(&1i32.to_le_bytes()); // image count
+        o.extend_from_slice(&2i32.to_le_bytes()); // dimension
+        o.extend_from_slice(&[0u8; 24]); // gl settings
+        o.extend_from_slice(&0i32.to_le_bytes()); // lightmap
+        o.extend_from_slice(&1i32.to_le_bytes()); // colorspace
+        o.extend_from_slice(&0i32.to_le_bytes()); // platform blob len
+        while o.len() % 4 != 0 {
+            o.push(0);
+        }
+        o.extend_from_slice(&(rgba.len() as u32).to_le_bytes());
+        o.extend_from_slice(rgba);
+        while o.len() % 4 != 0 {
+            o.push(0);
+        }
+        o
+    }
+
+    fn make_monobehaviour_obj(hdr28: [u8; 28], name: &str, body: &[u8]) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(&hdr28);
+        o.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        o.extend_from_slice(name.as_bytes());
+        while o.len() % 4 != 0 {
+            o.push(0);
+        }
+        o.extend_from_slice(body);
+        o
+    }
+
+    #[test]
+    fn adapts_old_texture_and_monobehaviour_bundles_via_catalog_and_exports_android_zip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("Game");
+        let game = fixture_game(&game_dir);
+
+        // Prepare vanilla 3.3.0 MonoBehaviour bundle & local catalog
+        let van_mb_hdr = [0xCCu8; 28];
+        let van_mb_bundle = build_min_unityfs_bundle(
+            "CAB-van-skill",
+            vec![114],
+            vec![(1, 0, make_monobehaviour_obj(van_mb_hdr, "VSkill_Hero129", b"VANILLA_BYTES"))],
+        );
+        let aa_dir = game_dir.join("AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64");
+        fs::write(aa_dir.join(format!("{TEST_HEX_A}.bundle")), &van_mb_bundle).unwrap();
+
+        let tex_hex = "11111111222222223333333344444444";
+        fs::write(aa_dir.join(format!("{tex_hex}.bundle")), b"orig-tex-placeholder").unwrap();
+
+        let local_cat_dir = game_dir.join("AstralParty_CN_Data/com.unity.addressables");
+        fs::create_dir_all(&local_cat_dir).unwrap();
+        fs::write(
+            local_cat_dir.join("catalog_3.3.0.json"),
+            build_min_catalog_json(&[
+                ("UT_Hero_Card_129", &format!("{tex_hex}.bundle")),
+                ("VSkill_Hero129", &format!("{TEST_HEX_A}.bundle")),
+            ]),
+        )
+        .unwrap();
+
+        let old_tex_bundle = build_min_unityfs_bundle(
+            "CAB-old-tex",
+            vec![28],
+            vec![(1, 0, make_texture2d_obj_rgba32("UT_Hero_Card_129", 2, 2, &[255u8; 16]))],
+        );
+        let old_mb_bundle = build_min_unityfs_bundle(
+            "CAB-old-skill",
+            vec![114],
+            vec![(1, 0, make_monobehaviour_obj([0x12u8; 28], "VSkill_Hero129", b"CUSTOM_SKILL_NEW"))],
+        );
+
+        let mod_zip = tmp.path().join("legacy_skin.zip");
+        write_zip(&mod_zip, &[
+            ("MOD/__data (1057).bundle", &old_tex_bundle),
+            ("MOD/原/__data (1057).bundle", b"backup-must-be-skipped"),
+            ("MOD/技能.bundle", &old_mb_bundle),
+            ("MOD/variant_dup/技能_variant.bundle", &old_mb_bundle),
+        ]);
+
+        let (inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &mod_zip).unwrap();
+        assert!(inspect.compatible, "conflicts: {:?}", inspect.conflicts);
+        assert_eq!(inspect.android_exportable_count, 1);
+        assert_eq!(inspect.matched_files.len(), 2, "matched: {:?}", inspect.matched_files);
+        assert!(inspect.matched_files.iter().any(|m| {
+            m.target_kind == "modimg_adapted" && m.target_rel == "modimg/UT_Hero_Card_129.png"
+        }));
+        assert!(inspect.matched_files.iter().any(|m| {
+            m.target_kind == "migrated_bundle"
+                && m.target_rel.ends_with(&format!("{TEST_HEX_A}.bundle"))
+        }));
+
+        // Install, verify PNG + migrated MonoBehaviour, export Android ZIP, then restore cleanly
+        let inst = install_dropped_from_path(&game, &game_dir, &mod_zip, false, None, None).unwrap();
+        assert_eq!(inst.installed_count, 2);
+        let installed_png = fs::read(game_dir.join("modimg/UT_Hero_Card_129.png")).unwrap();
+        assert!(installed_png.starts_with(b"\x89PNG"));
+
+        let android_zip = tmp.path().join("out_android_modimg.zip");
+        let saved = export_android_pack_from_path(&game, &game_dir, &mod_zip, None, Some(&android_zip)).unwrap();
+        assert_eq!(PathBuf::from(&saved), android_zip);
+        let zf = zip::ZipArchive::new(fs::File::open(&android_zip).unwrap()).unwrap();
+        assert_eq!(zf.len(), 1);
+
+        restore_dropped_by_id(&game, &game_dir, &inst.mod_id, None).unwrap();
+        assert!(!game_dir.join("modimg/UT_Hero_Card_129.png").exists());
+        assert_eq!(fs::read(aa_dir.join(format!("{TEST_HEX_A}.bundle"))).unwrap(), van_mb_bundle);
+    }
+
+    #[test]
+    fn blocks_astral_runtime_dll_skips_apenc_and_supports_drm_free_dynamic_cards() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("Game");
+        let game = fixture_game(&game_dir);
+
+        let mut rt_name = Vec::new();
+        let n = b"AstralParty.Runtime.dll";
+        rt_name.extend_from_slice(&(n.len() as u32).to_le_bytes());
+        rt_name.extend_from_slice(n);
+        let rt_bundle = build_min_unityfs_bundle("CAB-rt", vec![49], vec![(1, 0, rt_name)]);
+
+        let apenc_bundle = build_min_unityfs_bundle(
+            "CAB-drm",
+            vec![114],
+            vec![(1, 0, make_monobehaviour_obj([0u8; 28], "VUT_Hero_Card_114_01", b"\0APENC01_ENC"))],
+        );
+
+        let malicious_zip = tmp.path().join("skin_video_bad.zip");
+        write_zip(&malicious_zip, &[
+            ("123/data/VUT_Hero_Card_114_01", &apenc_bundle),
+            ("CN_STEAM/game_assembly/69021db4cc5c5dddeac2e02519be31f7.bundle", &rt_bundle),
+        ]);
+
+        let (bad_inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &malicious_zip).unwrap();
+        assert!(!bad_inspect.compatible);
+        assert!(bad_inspect.conflicts.iter().any(|c| c.contains("AstralParty.Runtime.dll")));
+        assert_eq!(bad_inspect.unmatched_files.len(), 1);
+        assert!(bad_inspect.unmatched_files[0].reason.contains("APENC01"));
+        assert!(install_dropped_from_path(&game, &game_dir, &malicious_zip, false, None, None).is_err());
+
+        // DRM-free VUT_ video + modimg card installs, toggles, and restores cleanly
+        let good_zip = tmp.path().join("drm_free_dynamic.zip");
+        write_zip(&good_zip, &[
+            ("xingshu_dynamic_cards/VUT_Hero_Card_306.mp4", b"ftypisom_fake_mp4"),
+            ("modimg/UT_Hero_Card_306.png", b"\x89PNG\r\n\x1a\nfake"),
+        ]);
+        let (good_inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &good_zip).unwrap();
+        assert!(good_inspect.compatible);
+        assert_eq!(good_inspect.matched_files.len(), 2);
+        assert_eq!(good_inspect.android_exportable_count, 1);
+
+        let inst = install_dropped_from_path(&game, &game_dir, &good_zip, false, None, None).unwrap();
+        assert!(game_dir.join("xingshu_dynamic_cards/VUT_Hero_Card_306.mp4").is_file());
+        let install_svc = InstallService::new(
+            crate::storage::database::Database::in_memory().unwrap(),
+            tmp.path().join("backups"),
+        );
+        toggle_dropped_in_locked_root(&game, &game_dir, &inst.mod_id, false, &install_svc).unwrap();
+        assert!(!game_dir.join("xingshu_dynamic_cards/VUT_Hero_Card_306.mp4").exists());
+        toggle_dropped_in_locked_root(&game, &game_dir, &inst.mod_id, true, &install_svc).unwrap();
+        assert!(game_dir.join("xingshu_dynamic_cards/VUT_Hero_Card_306.mp4").is_file());
+        restore_dropped_by_id(&game, &game_dir, &inst.mod_id, None).unwrap();
+        assert!(!game_dir.join("xingshu_dynamic_cards/VUT_Hero_Card_306.mp4").exists());
+    }
+
+    #[test]
+    fn handles_encrypted_zip_and_rar_archives_with_7z_when_available() {
+        let Some(seven_z) = find_7z_executable() else {
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("Game");
+        let game = fixture_game(&game_dir);
+
+        let payload_src = tmp.path().join("payload_src");
+        fs::create_dir_all(payload_src.join("modimg")).unwrap();
+        fs::write(payload_src.join("modimg/UT_Test.png"), b"\x89PNG\r\n\x1a\ntest").unwrap();
+
+        let enc_zip = tmp.path().join("encrypted.zip");
+        let status = spawn_hidden_command(&seven_z)
+            .args(["a", "-tzip", "-psecret123", "-y"])
+            .arg(&enc_zip)
+            .arg(payload_src.join("modimg"))
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+
+        let err_missing = inspect_against_game_with_password(&game, &game.id, &game_dir, &enc_zip, None).unwrap_err();
+        assert_eq!(err_missing.code, "ARCHIVE_PASSWORD_REQUIRED");
+
+        let err_wrong = inspect_against_game_with_password(&game, &game.id, &game_dir, &enc_zip, Some("wrongpw")).unwrap_err();
+        assert_eq!(err_wrong.code, "ARCHIVE_PASSWORD_INVALID");
+
+        let (ok_inspect, _) = inspect_against_game_with_password(&game, &game.id, &game_dir, &enc_zip, Some("secret123")).unwrap();
+        assert!(ok_inspect.compatible);
+        assert_eq!(ok_inspect.matched_files.len(), 1);
+        assert_eq!(ok_inspect.matched_files[0].target_rel, "modimg/UT_Test.png");
+    }
+
+    #[test]
+    #[ignore = "requires local real archives and Steam 8vJXn6CN read-only verification"]
+    fn inspects_real_mod_packs_read_only_against_330() {
+        let game_dir = PathBuf::from(r"E:\Steam\steamapps\common\Astral Party\8vJXn6CN");
+        let game = GameInstallation {
+            id: "inst-real-330".into(),
+            platform: "STEAM_CN".into(),
+            platform_app_id: Some("2622000".into()),
+            install_path: game_dir.display().to_string(),
+            executable_path: Some(game_dir.join("AstralParty_CN.exe").display().to_string()),
+            detected_build_id: None,
+            detected_version: None,
+            detection_method: "TEST".into(),
+            is_valid: true,
+            is_primary: true,
+            last_verified_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let mod_root = PathBuf::from(r"E:\工作流\星引擎插件\星引擎MOD包制作\星引擎mod");
+
+        let p1 = mod_root.join("透明睡衣赛克斯（静态）.zip");
+        let (r1, _) = inspect_against_game(&game, &game.id, &game_dir, &p1).unwrap();
+        assert!(r1.compatible, "r1 conflicts: {:?} unmatched: {:?}", r1.conflicts, r1.unmatched_files);
+        assert_eq!(r1.matched_files.len(), 7, "透明睡衣赛克斯 should match 7/7: {:?}", r1.matched_files);
+        assert_eq!(r1.android_exportable_count, 6);
+
+        let p2 = mod_root.join("卖春哈基米（网球装皮肤）.zip");
+        let (r2, _) = inspect_against_game(&game, &game.id, &game_dir, &p2).unwrap();
+        assert!(r2.compatible, "r2 conflicts: {:?} unmatched: {:?}", r2.conflicts, r2.unmatched_files);
+        assert_eq!(r2.matched_files.len(), 8, "卖春哈基米 should match 8/8: {:?}", r2.matched_files);
+        assert_eq!(r2.android_exportable_count, 7);
+
+        let p3 = mod_root.join("僵尸海晴动态立绘.zip");
+        let (r3, _) = inspect_against_game(&game, &game.id, &game_dir, &p3).unwrap();
+        assert!(!r3.compatible);
+        assert!(r3.conflicts.iter().any(|c| c.contains("AstralParty.Runtime.dll")));
+        assert!(r3.unmatched_files.iter().any(|u| u.reason.contains("APENC01")));
     }
 }

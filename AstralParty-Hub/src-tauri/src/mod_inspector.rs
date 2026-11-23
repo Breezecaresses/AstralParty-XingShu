@@ -883,10 +883,14 @@ struct FsBlock {
 struct FsNode {
     offset: usize,
     size: usize,
+    nflags: u32,
     path: String,
 }
 
 struct UnityFsParsed {
+    format_ver: u32,
+    player_ver: String,
+    engine_ver: String,
     stream: Vec<u8>,
     nodes: Vec<FsNode>,
 }
@@ -924,8 +928,8 @@ fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed
     let mut r = BinReader::new(data, true);
     r.pos = 8;
     let format_ver = r.read_u32()?;
-    let _player_ver = r.read_cstring()?;
-    let _engine_ver = r.read_cstring()?;
+    let player_ver = r.read_cstring()?;
+    let engine_ver = r.read_cstring()?;
     if format_ver < 6 {
         return Err("仅支持 UnityFS v6+ 格式".to_string());
     }
@@ -976,12 +980,12 @@ fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed
     for _ in 0..node_count {
         let offset = usize::try_from(br.read_i64()?).map_err(|_| "Bundle 节点偏移无效".to_string())?;
         let size = usize::try_from(br.read_i64()?).map_err(|_| "Bundle 节点大小无效".to_string())?;
-        let _nflags = br.read_u32()?;
+        let nflags = br.read_u32()?;
         let path = br.read_cstring()?;
         if !path.ends_with(".resS") {
             max_cab_end = max_cab_end.max(offset.saturating_add(size));
         }
-        nodes.push(FsNode { offset, size, path });
+        nodes.push(FsNode { offset, size, nflags, path });
     }
 
     let mut stream = Vec::new();
@@ -1003,7 +1007,7 @@ fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed
         cursor = c_end;
     }
 
-    Ok(UnityFsParsed { stream, nodes })
+    Ok(UnityFsParsed { format_ver, player_ver, engine_ver, stream, nodes })
 }
 
 #[derive(Clone)]
@@ -1022,14 +1026,18 @@ struct SerializedTypeEntry {
 }
 
 struct SerializedObjEntry {
+    #[allow(dead_code)]
+    path_id: i64,
     byte_start: usize,
     byte_size: usize,
     type_id: usize,
 }
 
 struct ParsedSerializedFile {
+    version: u32,
     little_endian: bool,
     data_offset: usize,
+    object_table_offset: usize,
     types: Vec<SerializedTypeEntry>,
     objects: Vec<SerializedObjEntry>,
 }
@@ -1306,10 +1314,11 @@ fn parse_serialized_file(raw: &[u8]) -> Result<ParsedSerializedFile, String> {
     if ver >= 14 {
         mr.align(4);
     }
+    let object_table_offset = mr.pos;
 
     let mut objects = Vec::with_capacity(obj_count as usize);
     for _ in 0..obj_count {
-        let _path_id = mr.read_i64()?;
+        let path_id = mr.read_i64()?;
         let byte_start = if ver >= 22 {
             mr.read_i64()? as usize
         } else {
@@ -1318,6 +1327,7 @@ fn parse_serialized_file(raw: &[u8]) -> Result<ParsedSerializedFile, String> {
         let byte_size = mr.read_u32()? as usize;
         let type_id = mr.read_i32()? as usize;
         objects.push(SerializedObjEntry {
+            path_id,
             byte_start,
             byte_size,
             type_id,
@@ -1325,8 +1335,10 @@ fn parse_serialized_file(raw: &[u8]) -> Result<ParsedSerializedFile, String> {
     }
 
     Ok(ParsedSerializedFile {
+        version: ver,
         little_endian,
         data_offset,
+        object_table_offset,
         types,
         objects,
     })
@@ -1508,6 +1520,272 @@ pub fn extract_texture_png_from_bundle(raw: &[u8], target_asset_name: &str) -> R
     let (w, h, pixels) = extract_texture_rgba(raw, target_asset_name)?;
     let (w, h, pixels) = downscale_max_dim(w, h, &pixels, MAX_PREVIEW_DIM);
     encode_rgba_png(w, h, &pixels)
+}
+
+pub(crate) fn extract_texture_full_png_from_bundle(raw: &[u8], target_asset_name: &str) -> Result<Vec<u8>, String> {
+    let (w, h, pixels) = extract_texture_rgba(raw, target_asset_name)?;
+    encode_rgba_png(w, h, &pixels)
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BundleContentSummary {
+    pub texture_names: Vec<String>,
+    pub monobehaviour_names: Vec<String>,
+    pub other_object_count: usize,
+    pub has_text_asset: bool,
+    pub has_astral_runtime_dll: bool,
+    pub has_apenc_drm: bool,
+}
+
+fn contains_apenc_magic(slice: &[u8]) -> bool {
+    let head = &slice[..slice.len().min(4096)];
+    head.windows(7).any(|w| w == b"APENC01")
+}
+
+fn extract_monobehaviour_name(obj_raw: &[u8], little_endian: bool) -> Result<String, String> {
+    if obj_raw.len() < 28 {
+        return Err("MonoBehaviour 数据长度不足 28 字节".to_string());
+    }
+    let mut r = BinReader::new(&obj_raw[28..], !little_endian);
+    r.read_len_string_aligned()
+}
+
+pub(crate) fn inspect_bundle_contents(raw: &[u8]) -> Result<BundleContentSummary, String> {
+    let fs_parsed = parse_unityfs(raw, true)?;
+    let mut summary = BundleContentSummary::default();
+    let mut parsed_cab_count = 0usize;
+
+    for node in &fs_parsed.nodes {
+        if node.path.ends_with(".resS") || node.offset.saturating_add(node.size) > fs_parsed.stream.len() {
+            continue;
+        }
+        let cab_raw = &fs_parsed.stream[node.offset..node.offset + node.size];
+        let Ok(sf) = parse_serialized_file(cab_raw) else { continue };
+        parsed_cab_count += 1;
+
+        for obj in &sf.objects {
+            let Some(ty) = sf.types.get(obj.type_id) else { continue };
+            let start = sf.data_offset.saturating_add(obj.byte_start);
+            let end = start.saturating_add(obj.byte_size);
+            if end > cab_raw.len() {
+                continue;
+            }
+            let obj_raw = &cab_raw[start..end];
+            match ty.class_id {
+                28 => {
+                    let mut nr = BinReader::new(obj_raw, !sf.little_endian);
+                    if let Ok(name) = nr.read_len_string_aligned() {
+                        if !name.is_empty() && !summary.texture_names.contains(&name) {
+                            summary.texture_names.push(name);
+                        }
+                    }
+                }
+                114 => {
+                    if contains_apenc_magic(obj_raw) {
+                        summary.has_apenc_drm = true;
+                    }
+                    if let Ok(name) = extract_monobehaviour_name(obj_raw, sf.little_endian) {
+                        if !name.is_empty() && !summary.monobehaviour_names.contains(&name) {
+                            summary.monobehaviour_names.push(name);
+                        }
+                    }
+                }
+                49 => {
+                    summary.has_text_asset = true;
+                    let mut nr = BinReader::new(obj_raw, !sf.little_endian);
+                    if let Ok(name) = nr.read_len_string_aligned() {
+                        if name.to_ascii_lowercase().contains("astralparty.runtime") {
+                            summary.has_astral_runtime_dll = true;
+                        }
+                    }
+                }
+                142 => {}
+                _ => {
+                    summary.other_object_count += 1;
+                }
+            }
+        }
+    }
+
+    if parsed_cab_count == 0 {
+        return Err("Bundle 中未包含可解析的 SerializedFile".to_string());
+    }
+    Ok(summary)
+}
+
+fn find_single_monobehaviour<'a>(
+    fs_parsed: &'a UnityFsParsed,
+    label: &str,
+) -> Result<(usize, &'a [u8], ParsedSerializedFile, usize, &'a [u8], String), String> {
+    let mut found: Option<(usize, &'a [u8], ParsedSerializedFile, usize, &'a [u8], String)> = None;
+    let mut total_mb = 0usize;
+
+    for (node_idx, node) in fs_parsed.nodes.iter().enumerate() {
+        if node.path.ends_with(".resS") || node.offset.saturating_add(node.size) > fs_parsed.stream.len() {
+            continue;
+        }
+        let cab_raw = &fs_parsed.stream[node.offset..node.offset + node.size];
+        let Ok(sf) = parse_serialized_file(cab_raw) else { continue };
+        for (obj_idx, obj) in sf.objects.iter().enumerate() {
+            let Some(ty) = sf.types.get(obj.type_id) else { continue };
+            if ty.class_id != 114 {
+                continue;
+            }
+            total_mb += 1;
+            let start = sf.data_offset.saturating_add(obj.byte_start);
+            let end = start.saturating_add(obj.byte_size);
+            if end > cab_raw.len() || obj.byte_size < 28 {
+                return Err(format!("{label} MonoBehaviour 对象范围或头部无效"));
+            }
+            let obj_raw = &cab_raw[start..end];
+            let name = extract_monobehaviour_name(obj_raw, sf.little_endian)?;
+            if found.is_none() {
+                found = Some((node_idx, cab_raw, sf, obj_idx, obj_raw, name));
+                break;
+            }
+        }
+    }
+
+    if total_mb != 1 {
+        return Err(format!("{label} 期望包含 1 个 MonoBehaviour，实际为 {total_mb} 个"));
+    }
+    found.ok_or_else(|| format!("{label} 未找到 MonoBehaviour"))
+}
+
+pub(crate) fn migrate_single_monobehaviour_bundle(vanilla_raw: &[u8], mod_raw: &[u8]) -> Result<Vec<u8>, String> {
+    let v_fs = parse_unityfs(vanilla_raw, false)?;
+    let m_fs = parse_unityfs(mod_raw, false)?;
+
+    let (v_node_idx, v_cab, v_sf, v_mb_idx, v_mb_raw, v_name) =
+        find_single_monobehaviour(&v_fs, "原版容器")?;
+    let (_, _, _, _, m_mb_raw, m_name) = find_single_monobehaviour(&m_fs, "模组容器")?;
+
+    if contains_apenc_magic(m_mb_raw) {
+        return Err("检测到 APENC01 加密视频载体（不支持绕过官方加密）".to_string());
+    }
+    if v_name.is_empty() || !v_name.eq_ignore_ascii_case(&m_name) {
+        return Err(format!(
+            "MonoBehaviour 资产名不匹配：原版 '{v_name}' != 模组 '{m_name}'"
+        ));
+    }
+
+    let stride = if v_sf.version >= 22 { 24usize } else { 20usize };
+    let table_end = v_sf
+        .object_table_offset
+        .checked_add(v_sf.objects.len().saturating_mul(stride))
+        .ok_or_else(|| "SerializedFile 对象表大小溢出".to_string())?;
+    if table_end > v_sf.data_offset || v_sf.data_offset > v_cab.len() {
+        return Err("原版 CAB SerializedFile 对象表越界".to_string());
+    }
+
+    let mut order: Vec<usize> = (0..v_sf.objects.len()).collect();
+    order.sort_by_key(|&i| v_sf.objects[i].byte_start);
+
+    let mut new_cab = v_cab[..v_sf.data_offset].to_vec();
+    for &idx in &order {
+        let obj = &v_sf.objects[idx];
+        let old_abs_start = v_sf.data_offset.saturating_add(obj.byte_start);
+        let old_abs_end = old_abs_start.saturating_add(obj.byte_size);
+        if old_abs_end > v_cab.len() {
+            return Err("原版 CAB 对象数据越界".to_string());
+        }
+        while (new_cab.len() - v_sf.data_offset) % 8 != 0 {
+            new_cab.push(0);
+        }
+        let new_rel_start = new_cab.len() - v_sf.data_offset;
+        let new_size = if idx == v_mb_idx {
+            new_cab.extend_from_slice(&v_mb_raw[..28]);
+            new_cab.extend_from_slice(&m_mb_raw[28..]);
+            28 + (m_mb_raw.len() - 28)
+        } else {
+            new_cab.extend_from_slice(&v_cab[old_abs_start..old_abs_end]);
+            obj.byte_size
+        };
+
+        let entry_off = v_sf.object_table_offset + idx * stride;
+        let write_u32 = |buf: &mut [u8], pos: usize, val: u32, le: bool| {
+            buf[pos..pos + 4].copy_from_slice(&if le { val.to_le_bytes() } else { val.to_be_bytes() });
+        };
+        let write_i64 = |buf: &mut [u8], pos: usize, val: i64, le: bool| {
+            buf[pos..pos + 8].copy_from_slice(&if le { val.to_le_bytes() } else { val.to_be_bytes() });
+        };
+        if v_sf.version >= 22 {
+            write_i64(&mut new_cab, entry_off + 8, new_rel_start as i64, v_sf.little_endian);
+            write_u32(&mut new_cab, entry_off + 16, u32::try_from(new_size).map_err(|_| "CAB 对象超过 4GB".to_string())?, v_sf.little_endian);
+        } else {
+            write_u32(&mut new_cab, entry_off + 8, u32::try_from(new_rel_start).map_err(|_| "CAB 偏移超过 4GB".to_string())?, v_sf.little_endian);
+            write_u32(&mut new_cab, entry_off + 12, u32::try_from(new_size).map_err(|_| "CAB 对象超过 4GB".to_string())?, v_sf.little_endian);
+        }
+    }
+
+    let new_cab_len = new_cab.len();
+    if v_sf.version >= 22 {
+        new_cab[24..32].copy_from_slice(&(new_cab_len as i64).to_be_bytes());
+        if new_cab[4..8] != [0, 0, 0, 0] && new_cab_len <= u32::MAX as usize {
+            new_cab[4..8].copy_from_slice(&(new_cab_len as u32).to_be_bytes());
+        }
+    } else {
+        let len_u32 = u32::try_from(new_cab_len).map_err(|_| "CAB 文件超过 32 位大小上限".to_string())?;
+        new_cab[4..8].copy_from_slice(&len_u32.to_be_bytes());
+    }
+
+    let mut new_stream = Vec::with_capacity(new_cab_len);
+    let mut rebuilt_nodes = Vec::with_capacity(v_fs.nodes.len());
+    for (idx, node) in v_fs.nodes.iter().enumerate() {
+        let new_off = new_stream.len();
+        let new_sz = if idx == v_node_idx {
+            new_stream.extend_from_slice(&new_cab);
+            new_cab.len()
+        } else {
+            let end = node.offset.saturating_add(node.size);
+            if end > v_fs.stream.len() {
+                return Err("原版 Bundle 节点数据越界".to_string());
+            }
+            new_stream.extend_from_slice(&v_fs.stream[node.offset..end]);
+            node.size
+        };
+        rebuilt_nodes.push((new_off, new_sz, node.nflags, node.path.as_str()));
+    }
+
+    let stream_len_u32 = u32::try_from(new_stream.len()).map_err(|_| "重构 Bundle 数据流超出 4GB".to_string())?;
+    let mut blocks_info = Vec::new();
+    blocks_info.extend_from_slice(&[0u8; 16]);
+    blocks_info.extend_from_slice(&1i32.to_be_bytes());
+    blocks_info.extend_from_slice(&stream_len_u32.to_be_bytes());
+    blocks_info.extend_from_slice(&stream_len_u32.to_be_bytes());
+    blocks_info.extend_from_slice(&0x0040u16.to_be_bytes());
+    blocks_info.extend_from_slice(&(rebuilt_nodes.len() as i32).to_be_bytes());
+    for (no, ns, nf, npath) in rebuilt_nodes {
+        blocks_info.extend_from_slice(&(no as i64).to_be_bytes());
+        blocks_info.extend_from_slice(&(ns as i64).to_be_bytes());
+        blocks_info.extend_from_slice(&nf.to_be_bytes());
+        blocks_info.extend_from_slice(npath.as_bytes());
+        blocks_info.push(0);
+    }
+
+    let blocks_info_u32 = u32::try_from(blocks_info.len()).map_err(|_| "blocks_info 过大".to_string())?;
+    let mut out = Vec::with_capacity(128 + blocks_info.len() + new_stream.len());
+    out.extend_from_slice(b"UnityFS\0");
+    out.extend_from_slice(&v_fs.format_ver.to_be_bytes());
+    out.extend_from_slice(v_fs.player_ver.as_bytes());
+    out.push(0);
+    out.extend_from_slice(v_fs.engine_ver.as_bytes());
+    out.push(0);
+    let sz_pos = out.len();
+    out.extend_from_slice(&0i64.to_be_bytes());
+    out.extend_from_slice(&blocks_info_u32.to_be_bytes());
+    out.extend_from_slice(&blocks_info_u32.to_be_bytes());
+    out.extend_from_slice(&0x0040u32.to_be_bytes());
+    if v_fs.format_ver >= 7 {
+        while out.len() % 16 != 0 {
+            out.push(0);
+        }
+    }
+    out.extend_from_slice(&blocks_info);
+    out.extend_from_slice(&new_stream);
+    let total_len = out.len() as i64;
+    out[sz_pos..sz_pos + 8].copy_from_slice(&total_len.to_be_bytes());
+    Ok(out)
 }
 
 pub(crate) fn extract_atlas_png(raw: &[u8], name: &str) -> Result<Vec<u8>, String> {
@@ -2304,5 +2582,163 @@ mod tests {
 
         assert_eq!(extract_text_asset(&bundle, "spinehandcard_test.atlas").unwrap(), b"atlas-payload");
         assert!(extract_text_asset(&bundle, "missing").is_err());
+    }
+
+    fn build_test_unityfs_bundle(cab_name: &str, types: Vec<(i32, usize)>, objects: Vec<(i64, usize, Vec<u8>)>) -> Vec<u8> {
+        let mut obj_data = Vec::new();
+        let mut entries = Vec::with_capacity(objects.len());
+        for (pid, tid, payload) in &objects {
+            while obj_data.len() % 8 != 0 {
+                obj_data.push(0);
+            }
+            let st = obj_data.len();
+            obj_data.extend_from_slice(payload);
+            entries.push((*pid, st as i64, payload.len() as u32, *tid as i32));
+        }
+
+        let mut meta = Vec::new();
+        meta.extend_from_slice(b"2022.3.62f3\0");
+        meta.extend_from_slice(&19i32.to_le_bytes());
+        meta.push(0);
+        meta.extend_from_slice(&(types.len() as i32).to_le_bytes());
+        for (cid, _) in &types {
+            meta.extend_from_slice(&cid.to_le_bytes());
+            meta.push(0);
+            meta.extend_from_slice(&(-1i16).to_le_bytes());
+            if *cid == 114 || *cid < 0 {
+                meta.extend_from_slice(&[0u8; 16]);
+            }
+            meta.extend_from_slice(&[0u8; 16]);
+        }
+        meta.extend_from_slice(&(entries.len() as i32).to_le_bytes());
+        while meta.len() % 4 != 0 {
+            meta.push(0);
+        }
+        for (pid, st, sz, tid) in entries {
+            meta.extend_from_slice(&pid.to_le_bytes());
+            meta.extend_from_slice(&st.to_le_bytes());
+            meta.extend_from_slice(&sz.to_le_bytes());
+            meta.extend_from_slice(&tid.to_le_bytes());
+        }
+        let data_offset = (48 + meta.len()).next_multiple_of(16);
+        let mut cab = vec![0u8; data_offset + obj_data.len()];
+        let total = cab.len() as i64;
+        cab[0..4].copy_from_slice(&(meta.len() as u32).to_be_bytes());
+        cab[8..12].copy_from_slice(&22u32.to_be_bytes());
+        cab[20..24].copy_from_slice(&(meta.len() as u32).to_be_bytes());
+        cab[24..32].copy_from_slice(&total.to_be_bytes());
+        cab[32..40].copy_from_slice(&(data_offset as i64).to_be_bytes());
+        cab[48..48 + meta.len()].copy_from_slice(&meta);
+        cab[data_offset..].copy_from_slice(&obj_data);
+
+        let mut blocks_info = Vec::new();
+        blocks_info.extend_from_slice(&[0u8; 16]);
+        blocks_info.extend_from_slice(&1i32.to_be_bytes());
+        blocks_info.extend_from_slice(&(cab.len() as u32).to_be_bytes());
+        blocks_info.extend_from_slice(&(cab.len() as u32).to_be_bytes());
+        blocks_info.extend_from_slice(&0x0040u16.to_be_bytes());
+        blocks_info.extend_from_slice(&1i32.to_be_bytes());
+        blocks_info.extend_from_slice(&0i64.to_be_bytes());
+        blocks_info.extend_from_slice(&(cab.len() as i64).to_be_bytes());
+        blocks_info.extend_from_slice(&4u32.to_be_bytes());
+        blocks_info.extend_from_slice(cab_name.as_bytes());
+        blocks_info.push(0);
+
+        let mut bundle = Vec::new();
+        bundle.extend_from_slice(b"UnityFS\0");
+        bundle.extend_from_slice(&8u32.to_be_bytes());
+        bundle.extend_from_slice(b"5.x.x\02022.3.62f3\0");
+        let sz_pos = bundle.len();
+        bundle.extend_from_slice(&0i64.to_be_bytes());
+        bundle.extend_from_slice(&(blocks_info.len() as u32).to_be_bytes());
+        bundle.extend_from_slice(&(blocks_info.len() as u32).to_be_bytes());
+        bundle.extend_from_slice(&0x0040u32.to_be_bytes());
+        while bundle.len() % 16 != 0 {
+            bundle.push(0);
+        }
+        bundle.extend_from_slice(&blocks_info);
+        bundle.extend_from_slice(&cab);
+        let blen = bundle.len() as i64;
+        bundle[sz_pos..sz_pos + 8].copy_from_slice(&blen.to_be_bytes());
+        bundle
+    }
+
+    fn make_mb_obj(header28: [u8; 28], name: &str, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&header28);
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    #[test]
+    fn inspects_bundle_contents_and_migrates_single_monobehaviour() {
+        let van_hdr = [0xAAu8; 28];
+        let mut mod_hdr = [0x11u8; 28];
+        mod_hdr[0] = 0x22;
+        let van = build_test_unityfs_bundle(
+            "CAB-van",
+            vec![(142, 0), (114, 1)],
+            vec![
+                (1, 0, vec![0x99u8; 24]),
+                (100, 1, make_mb_obj(van_hdr, "VSkill_Test", b"VAN")),
+            ],
+        );
+        let mod_b = build_test_unityfs_bundle(
+            "CAB-mod",
+            vec![(142, 0), (114, 1)],
+            vec![
+                (1, 0, vec![0x88u8; 16]),
+                (200, 1, make_mb_obj(mod_hdr, "VSkill_Test", b"MOD_LONGER_PAYLOAD_123456")),
+            ],
+        );
+
+        let sum = inspect_bundle_contents(&mod_b).unwrap();
+        assert_eq!(sum.monobehaviour_names, vec!["VSkill_Test"]);
+        assert!(sum.texture_names.is_empty());
+        assert_eq!(sum.other_object_count, 0);
+        assert!(!sum.has_astral_runtime_dll && !sum.has_apenc_drm);
+
+        let migrated = migrate_single_monobehaviour_bundle(&van, &mod_b).unwrap();
+        let fs = parse_unityfs(&migrated, false).unwrap();
+        assert_eq!(fs.nodes[0].path, "CAB-van");
+        let cab = &fs.stream[fs.nodes[0].offset..fs.nodes[0].offset + fs.nodes[0].size];
+        let sf = parse_serialized_file(cab).unwrap();
+        assert_eq!(sf.objects.len(), 2);
+        let mb = &sf.objects[1];
+        let mb_bytes = &cab[sf.data_offset + mb.byte_start..sf.data_offset + mb.byte_start + mb.byte_size];
+        assert_eq!(&mb_bytes[..28], &van_hdr);
+        assert!(mb_bytes.ends_with(b"MOD_LONGER_PAYLOAD_123456"));
+
+        let apenc_mod = build_test_unityfs_bundle(
+            "CAB-drm",
+            vec![(114, 0)],
+            vec![(1, 0, make_mb_obj(mod_hdr, "VUT_Hero_Card_114_01", b"\0\0APENC01_DRM"))],
+        );
+        let ap_sum = inspect_bundle_contents(&apenc_mod).unwrap();
+        assert!(ap_sum.has_apenc_drm);
+        assert!(migrate_single_monobehaviour_bundle(&van, &apenc_mod).is_err());
+
+        let mut rt_payload = Vec::new();
+        let rt_name = b"AstralParty.Runtime.dll";
+        rt_payload.extend_from_slice(&(rt_name.len() as u32).to_le_bytes());
+        rt_payload.extend_from_slice(rt_name);
+        let rt_bundle = build_test_unityfs_bundle("CAB-rt", vec![(49, 0)], vec![(1, 0, rt_payload)]);
+        let rt_sum = inspect_bundle_contents(&rt_bundle).unwrap();
+        assert!(rt_sum.has_text_asset && rt_sum.has_astral_runtime_dll);
+    }
+
+    #[test]
+    #[ignore = "requires real bundle paths via XINGSHU_TEST_VANILLA_MB, XINGSHU_TEST_MOD_MB, XINGSHU_TEST_OUT_MB"]
+    fn migrates_real_monobehaviour_bundle_from_env() {
+        let van = fs::read(std::env::var_os("XINGSHU_TEST_VANILLA_MB").unwrap()).unwrap();
+        let mod_b = fs::read(std::env::var_os("XINGSHU_TEST_MOD_MB").unwrap()).unwrap();
+        let out_path = PathBuf::from(std::env::var_os("XINGSHU_TEST_OUT_MB").unwrap());
+        let migrated = migrate_single_monobehaviour_bundle(&van, &mod_b).unwrap();
+        fs::write(&out_path, &migrated).unwrap();
     }
 }

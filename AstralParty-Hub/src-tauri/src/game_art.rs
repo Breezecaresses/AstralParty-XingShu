@@ -2,7 +2,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
@@ -13,6 +13,7 @@ use tauri::{AppHandle, Manager, UriSchemeContext, UriSchemeResponder, Wry, http}
 use tokio::sync::Semaphore;
 
 use crate::{
+    domain::installation::GameInstallation,
     extension_center::{ExtensionCenter, game_root},
     mod_inspector::{extract_addressables_json, extract_atlas_png, extract_game_emote, extract_text_asset, extract_texture_png_from_bundle},
     security::path_guard::PathGuard,
@@ -57,8 +58,9 @@ struct CatalogDocument {
     entries: String,
 }
 
-struct Catalog {
+pub(crate) struct Catalog {
     keys: HashMap<String, usize>,
+    keys_lower: HashMap<String, usize>,
     buckets: Vec<Vec<usize>>,
     entries: Vec<(usize, i32)>,
     internal_ids: Vec<String>,
@@ -81,6 +83,7 @@ impl Catalog {
         }
         let mut parsed = Self {
             keys: HashMap::new(),
+            keys_lower: HashMap::new(),
             buckets: Vec::with_capacity(bucket_count),
             entries: Vec::with_capacity(count),
             internal_ids: doc.internal_ids,
@@ -126,6 +129,7 @@ impl Catalog {
                     None
                 };
                 if let Some(name) = name.filter(|name| valid_asset_name(name)) {
+                    parsed.keys_lower.entry(name.to_ascii_lowercase()).or_insert(bucket);
                     parsed.keys.insert(name, bucket);
                 }
             }
@@ -133,11 +137,16 @@ impl Catalog {
         Some(parsed)
     }
 
-    fn bundles(&self, asset: &str) -> Option<Vec<&str>> {
-        let mut pending = self.buckets[*self.keys.get(asset)?].clone();
+    pub(crate) fn bundles(&self, asset: &str) -> Option<Vec<&str>> {
+        let bucket = self
+            .keys
+            .get(asset)
+            .copied()
+            .or_else(|| self.keys_lower.get(&asset.to_ascii_lowercase()).copied())?;
+        let mut pending = VecDeque::from(self.buckets[bucket].clone());
         let mut seen = HashSet::new();
         let mut output = Vec::new();
-        while let Some(index) = pending.pop() {
+        while let Some(index) = pending.pop_front() {
             if !seen.insert(index) { continue; }
             let (internal, dependency) = self.entries[index];
             let name = self.internal_ids[internal].rsplit(['/', '\\']).next().unwrap_or_default();
@@ -146,7 +155,7 @@ impl Catalog {
                 output.push(name);
             }
             if dependency >= 0 {
-                pending.extend(&self.buckets[dependency as usize]);
+                pending.extend(self.buckets[dependency as usize].iter().copied());
             }
         }
         Some(output)
@@ -166,6 +175,151 @@ fn read_limited(root: &Path, file: &Path, limit: u64) -> Option<Vec<u8>> {
     let mut raw = Vec::with_capacity(metadata.len() as usize);
     file.take(limit + 1).read_to_end(&mut raw).ok()?;
     (raw.len() as u64 <= limit).then_some(raw)
+}
+
+fn catalog_name_from_settings(data: &Path, aa: &Path) -> Option<String> {
+    read_limited(data, &aa.join("settings.json"), 1024 * 1024)
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|settings| {
+            settings.get("m_CatalogLocations")?.as_array()?.iter().find_map(|entry| {
+                let file = entry.get("m_InternalId")?.as_str()?.rsplit(['/', '\\']).next()?;
+                let version = file.strip_prefix("catalog_")?.strip_suffix(".hash")?;
+                (!version.is_empty() && version.bytes().all(|c| c.is_ascii_digit() || c == b'.'))
+                    .then(|| format!("catalog_{version}.json"))
+            })
+        })
+}
+
+fn parse_catalog_file(boundary: &Path, path: &Path) -> Option<Arc<Catalog>> {
+    let checked = PathGuard::ensure_within_root(boundary, path).ok()?;
+    let mut raw = read_limited(boundary, &checked, CATALOG_LIMIT)?;
+    if checked.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("bundle")) {
+        raw = extract_addressables_json(&raw).ok()?;
+    }
+    Catalog::parse(&raw).map(Arc::new)
+}
+
+fn collect_sorted_catalog_jsons(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut items: Vec<(SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let p = entry.path();
+            let name = p.file_name()?.to_str()?;
+            if !(name.starts_with("catalog_") && name.ends_with(".json")) {
+                return None;
+            }
+            let meta = entry.metadata().ok()?;
+            meta.is_file().then(|| (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), p))
+        })
+        .collect();
+    items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    items.into_iter().map(|(_, p)| p).collect()
+}
+
+fn discover_data_dirs_and_exes(game: &GameInstallation, root: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(stem) = game
+        .executable_path
+        .as_deref()
+        .and_then(|p| Path::new(p).file_stem())
+        .and_then(|s| s.to_str())
+    {
+        let data = root.join(format!("{stem}_Data"));
+        if data.is_dir() && seen.insert(data.clone()) {
+            out.push((stem.to_string(), data));
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_dir() {
+                continue;
+            }
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(stem) = name.strip_suffix("_Data") else {
+                continue;
+            };
+            if (p.join("StreamingAssets").is_dir() || p.join("com.unity.addressables").is_dir())
+                && seen.insert(p.clone())
+            {
+                out.push((stem.to_string(), p));
+            }
+        }
+    }
+
+    out
+}
+
+pub(crate) fn load_game_catalogs(game: &GameInstallation, root: &Path) -> Vec<Arc<Catalog>> {
+    let mut catalogs = Vec::new();
+    let mut seen_files: HashSet<PathBuf> = HashSet::new();
+    let local_low = dirs::data_local_dir().and_then(|p| Some(p.parent()?.join("LocalLow/feimo")));
+
+    let mut push_catalog = |boundary: &Path, path: &Path| {
+        let Ok(canon) = dunce::canonicalize(path) else {
+            return;
+        };
+        if !seen_files.insert(canon) {
+            return;
+        }
+        if let Some(cat) = parse_catalog_file(boundary, path) {
+            catalogs.push(cat);
+        }
+    };
+
+    for (exe_stem, data_dir) in discover_data_dirs_and_exes(game, root) {
+        let Ok(data) = PathGuard::ensure_within_root(root, &data_dir) else {
+            continue;
+        };
+        let aa = data.join("StreamingAssets/aa");
+        let local_cache = data.join("com.unity.addressables");
+        let user_cache = local_low
+            .as_ref()
+            .map(|ll| ll.join(&exe_stem).join("com.unity.addressables"));
+
+        if let Some(name) = catalog_name_from_settings(&data, &aa) {
+            if let Some(uc) = user_cache.as_deref() {
+                push_catalog(uc, &uc.join(&name));
+            }
+            push_catalog(&data, &local_cache.join(&name));
+        }
+
+        if let Some(uc) = user_cache.as_deref() {
+            for p in collect_sorted_catalog_jsons(uc) {
+                push_catalog(uc, &p);
+            }
+        }
+        for p in collect_sorted_catalog_jsons(&local_cache) {
+            push_catalog(&data, &p);
+        }
+        push_catalog(&data, &aa.join("catalog.json"));
+        push_catalog(&data, &aa.join("catalog.bundle"));
+    }
+
+    catalogs
+}
+
+pub(crate) fn resolve_asset_bundles(catalogs: &[Arc<Catalog>], asset: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for cat in catalogs {
+        let Some(bundles) = cat.bundles(asset) else {
+            continue;
+        };
+        for b in bundles {
+            if !out.iter().any(|existing: &String| existing.eq_ignore_ascii_case(b)) {
+                out.push(b.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn emoji_sheet_candidates(asset: &str) -> Vec<(String, bool)> {
@@ -284,16 +438,7 @@ impl GameArt {
     fn artwork_from_game(&self, data: &Path, user_cache: Option<&Path>, asset: &str, spine_part: Option<&str>) -> Option<Vec<u8>> {
         let aa = data.join("StreamingAssets/aa");
         let local_cache = data.join("com.unity.addressables");
-        let catalog_name = read_limited(data, &aa.join("settings.json"), 1024 * 1024)
-            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-            .and_then(|settings| {
-                settings.get("m_CatalogLocations")?.as_array()?.iter().find_map(|entry| {
-                    let file = entry.get("m_InternalId")?.as_str()?.rsplit(['/', '\\']).next()?;
-                    let version = file.strip_prefix("catalog_")?.strip_suffix(".hash")?;
-                    (!version.is_empty() && version.bytes().all(|c| c.is_ascii_digit() || c == b'.'))
-                        .then(|| format!("catalog_{version}.json"))
-                })
-            });
+        let catalog_name = catalog_name_from_settings(data, &aa);
         let mut catalogs = Vec::new();
         if let Some(name) = catalog_name {
             for location in user_cache.into_iter().chain([local_cache.as_path()]) {

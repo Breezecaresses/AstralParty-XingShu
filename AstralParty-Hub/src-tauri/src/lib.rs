@@ -370,6 +370,7 @@ pub fn run() {
             external_mods::archive_external_mod_report,
             dropped_mods::inspect_dropped_mod,
             dropped_mods::install_dropped_mod,
+            dropped_mods::export_dropped_mod_android_pack,
             dropped_mods::restore_dropped_mod,
             dropped_mods::toggle_dropped_mod,
             dropped_mods::list_dropped_mods,

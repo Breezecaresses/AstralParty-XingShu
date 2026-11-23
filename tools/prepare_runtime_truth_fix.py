@@ -149,10 +149,14 @@ def main():
         subprocess.run([PWSH, '-NoProfile', '-File', str(ROOT / 'tools/check_runtime_compatibility.ps1'),
                         '-RuntimeDll', str(original_runtime), '-HooksDll', str(DLL)], check=True)
         boot_runtime = folder / 'AstralParty.Runtime.bootstrap.dll'
+        thinking_runtime = folder / 'AstralParty.Runtime.thinking.dll'
         subprocess.run([str(patcher), str(original_runtime), str(bootstrap), str(boot_runtime),
                         sha(original_runtime.read_bytes()), LEGACY['bootstrapType']], check=True)
         subprocess.run([PWSH, '-NoProfile', '-File', str(ROOT / 'tools/patch_thinking_time.ps1'),
-                        '-InputDll', str(boot_runtime), '-OutputDll', str(patched_runtime),
+                        '-InputDll', str(boot_runtime), '-OutputDll', str(thinking_runtime),
+                        '-HooksDll', str(DLL)], check=True)
+        subprocess.run([PWSH, '-NoProfile', '-File', str(ROOT / 'tools/patch_modimg_loader.ps1'),
+                        '-InputDll', str(thinking_runtime), '-OutputDll', str(patched_runtime),
                         '-HooksDll', str(DLL)], check=True)
         runtime.m_Script = patched_runtime.read_bytes().decode('utf8', errors='surrogateescape')
         runtime.save()

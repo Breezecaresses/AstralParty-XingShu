@@ -60,12 +60,33 @@ class ModImgLoaderPatcher
             var nTextureType = module.Types.Single(t => t.FullName == "FairyGUI.NTexture");
 
             var modLoaderType = hooks.MainModule.Types.Single(t => t.FullName == "XingShuRuntime.Utilities.ModImgTextureLoader");
-            var tryResolve = modLoaderType.Methods.Single(m =>
+            var tryResolveForLoader = modLoaderType.Methods.FirstOrDefault(m =>
+                m.Name == "TryResolveForLoader"
+                && m.IsStatic
+                && m.Parameters.Count == 2
+                && m.Parameters[0].ParameterType.FullName == "FairyGUI.GLoader"
+                && m.Parameters[1].ParameterType.FullName == "System.String");
+            var tryResolveSingle = modLoaderType.Methods.Single(m =>
                 m.Name == "TryResolve" && m.IsStatic && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.FullName == "System.String");
-            var tryResolveRef = module.ImportReference(tryResolve);
+            var useLoaderOverload = tryResolveForLoader != null;
+            var modLoaderRef = module.ImportReference(modLoaderType);
+            var tryResolveRef = new MethodReference(
+                useLoaderOverload ? "TryResolveForLoader" : "TryResolve",
+                nTextureType,
+                modLoaderRef)
+            {
+                HasThis = false
+            };
+            if (useLoaderOverload)
+            {
+                tryResolveRef.Parameters.Add(new ParameterDefinition(gLoaderType));
+            }
+            tryResolveRef.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
 
             bool alreadyPatched = loadExternal.Body.Instructions.Any(i =>
-                i.Operand is MethodReference mr && mr.FullName.Contains("ModImgTextureLoader::TryResolve"));
+                i.Operand is MethodReference mr && (
+                    mr.FullName.Contains("ModImgTextureLoader::TryResolveForLoader")
+                    || (!useLoaderOverload && mr.FullName.Contains("ModImgTextureLoader::TryResolve"))));
 
             if (!alreadyPatched)
             {
@@ -78,19 +99,34 @@ class ModImgLoaderPatcher
                 var firstOrig = loadExternal.Body.Instructions[0];
                 var il = loadExternal.Body.GetILProcessor();
 
-                var prefix = new[]
-                {
-                    il.Create(OpCodes.Ldarg_0),
-                    il.Create(OpCodes.Call, getUrl),
-                    il.Create(OpCodes.Call, tryResolveRef),
-                    il.Create(OpCodes.Stloc, modTexVar),
-                    il.Create(OpCodes.Ldloc, modTexVar),
-                    il.Create(OpCodes.Brfalse, firstOrig),
-                    il.Create(OpCodes.Ldarg_0),
-                    il.Create(OpCodes.Ldloc, modTexVar),
-                    il.Create(OpCodes.Call, onLoadCompleted),
-                    il.Create(OpCodes.Ret),
-                };
+                var prefix = useLoaderOverload
+                    ? new[]
+                    {
+                        il.Create(OpCodes.Ldarg_0),
+                        il.Create(OpCodes.Ldarg_0),
+                        il.Create(OpCodes.Call, getUrl),
+                        il.Create(OpCodes.Call, tryResolveRef),
+                        il.Create(OpCodes.Stloc, modTexVar),
+                        il.Create(OpCodes.Ldloc, modTexVar),
+                        il.Create(OpCodes.Brfalse, firstOrig),
+                        il.Create(OpCodes.Ldarg_0),
+                        il.Create(OpCodes.Ldloc, modTexVar),
+                        il.Create(OpCodes.Call, onLoadCompleted),
+                        il.Create(OpCodes.Ret),
+                    }
+                    : new[]
+                    {
+                        il.Create(OpCodes.Ldarg_0),
+                        il.Create(OpCodes.Call, getUrl),
+                        il.Create(OpCodes.Call, tryResolveRef),
+                        il.Create(OpCodes.Stloc, modTexVar),
+                        il.Create(OpCodes.Ldloc, modTexVar),
+                        il.Create(OpCodes.Brfalse, firstOrig),
+                        il.Create(OpCodes.Ldarg_0),
+                        il.Create(OpCodes.Ldloc, modTexVar),
+                        il.Create(OpCodes.Call, onLoadCompleted),
+                        il.Create(OpCodes.Ret),
+                    };
 
                 for (int idx = 0; idx < prefix.Length; idx++)
                 {
@@ -116,8 +152,14 @@ class ModImgLoaderPatcher
             {
                 throw new InvalidOperationException("Verified output DLL is missing TextureLoader modimg hook instructions");
             }
+            if (verified.MainModule.GetTypeReferences().Any(tr =>
+                (tr.FullName == "FairyGUI.GLoader" || tr.FullName == "FairyGUI.NTexture")
+                && string.Equals(tr.Scope.Name, "AstralParty.Runtime", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("Verified output DLL introduced external TypeReference to own FairyGUI types");
+            }
         }
 
-        Console.WriteLine("PASS: UI.TextureLoader.LoadExternal patched & verified -> ModImgTextureLoader::TryResolve");
+        Console.WriteLine("PASS: UI.TextureLoader.LoadExternal patched & verified -> ModImgTextureLoader::TryResolveForLoader");
     }
 }

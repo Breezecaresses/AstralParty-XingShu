@@ -37,6 +37,44 @@ namespace XingShuRuntime.Utilities
                 TextureCache.Clear();
                 FileIndex.Clear();
             }
+            DynamicCardVideoManager.InvalidateCache();
+        }
+
+        public static NTexture TryResolveForLoader(GLoader loader, string url)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                DynamicCardVideoManager.ClearLoader(loader);
+                return null;
+            }
+            if (url.StartsWith("ui://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                DynamicCardVideoManager.ClearLoader(loader);
+                return null;
+            }
+
+            if (loader != null)
+            {
+                NTexture dynamicTex = DynamicCardVideoManager.TryResolve(loader, url);
+                if (dynamicTex != null)
+                {
+                    lock (Sync)
+                    {
+                        _hitCount++;
+                        _lastAttemptedUrl = url;
+                        _lastMatchedKey = "dynamic:" + url;
+                    }
+                    return dynamicTex;
+                }
+            }
+            else
+            {
+                DynamicCardVideoManager.ClearLoader(null);
+            }
+
+            return TryResolve(url);
         }
 
         public static NTexture TryResolve(string url)

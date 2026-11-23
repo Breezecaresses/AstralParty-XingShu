@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'reac
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
   FileArchive,
   FileText,
   FolderUp,
   Image as ImageIcon,
+  KeyRound,
   RotateCcw,
   ShieldCheck,
   Sparkles,
@@ -32,6 +34,7 @@ interface Props {
 
 const SOURCE_KIND_LABELS: Record<string, string> = {
   community_zip: '社区模组 ZIP',
+  community_rar: '社区模组 RAR',
   xspkg: '.xspkg 扩展包',
   apmm: '.apmm 模组包',
   single_bundle: '单 Bundle 文件',
@@ -42,12 +45,29 @@ const TARGET_KIND_LABELS: Record<string, string> = {
   streaming_assets: 'StreamingAssets/aa',
   addressables: 'Addressables/__data',
   modimg: 'modimg/ 贴图覆盖',
+  modimg_adapted: 'modimg/ 自动适配贴图',
+  migrated_bundle: '3.3.0 自动迁移容器',
+  dynamic_card: 'xingshu_dynamic_cards/ 动态立绘',
   catalog: 'catalog.bundle',
   xspkg: '.xspkg 清单目标',
 };
 
+const errorCode = (err: unknown): string =>
+  err && typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code) : '';
+
 const errorText = (err: unknown) =>
   err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : String(err);
+
+const isPasswordError = (err: unknown): boolean => {
+  const code = errorCode(err);
+  const msg = errorText(err);
+  return (
+    code === 'ARCHIVE_PASSWORD_REQUIRED' ||
+    code === 'ARCHIVE_PASSWORD_INVALID' ||
+    msg.includes('ARCHIVE_PASSWORD_REQUIRED') ||
+    msg.includes('ARCHIVE_PASSWORD_INVALID')
+  );
+};
 
 export function ModDropInspector({ installationId, onBusy, disabled = false, onInstalled, showInstalled = true, onOpenInstalled }: Props) {
   const [pendingPaths, clearPendingPaths] = usePendingDroppedModPaths();
@@ -57,6 +77,8 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
   const [installResult, setInstallResult] = useState<DroppedModInstallResult | null>(null);
   const [records, setRecords] = useState<DroppedModRecord[]>([]);
   const [includeCatalog, setIncludeCatalog] = useState(false);
+  const [archivePassword, setArchivePassword] = useState('');
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -80,9 +102,13 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
   }, [loadRecords]);
 
   const inspectPath = useCallback(
-    async (pathToInspect: string) => {
+    async (pathToInspect: string, passwordOverride?: string, preservePassword = false) => {
       const clean = pathToInspect.trim().replace(/^"|"$/g, '');
       if (!clean) return;
+      if (!preservePassword) {
+        setArchivePassword('');
+        setNeedsPassword(false);
+      }
       setSourcePath(clean);
       setInstallResult(null);
       setFeedback('');
@@ -97,11 +123,15 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
       setBusy(true);
       onBusy(true);
       try {
-        const res = await api.inspectDroppedMod(installationId, clean);
+        const res = await api.inspectDroppedMod(installationId, clean, passwordOverride || undefined);
         setInspectResult(res);
         setIncludeCatalog(false);
+        setNeedsPassword(Boolean(passwordOverride));
       } catch (e) {
         setInspectResult(null);
+        if (isPasswordError(e)) {
+          setNeedsPassword(true);
+        }
         setError(errorText(e));
       } finally {
         setBusy(false);
@@ -127,9 +157,9 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
       ? inspectResult.installationId !== installationId
       : error.includes('先在上方选择');
     if (installationId && sourcePath && !busy && needsInspection) {
-      void inspectPath(sourcePath);
+      void inspectPath(sourcePath, archivePassword || undefined, needsPassword);
     }
-  }, [installationId, sourcePath, inspectResult, busy, error, inspectPath]);
+  }, [installationId, sourcePath, inspectResult, busy, error, inspectPath, archivePassword, needsPassword]);
 
   const handleFilePick = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -164,13 +194,35 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
     setError('');
     setFeedback('');
     try {
-      const res = await api.installDroppedMod(installationId, inspectResult.sourcePath, includeCatalog);
+      const pw = archivePassword.trim() || undefined;
+      const res = await api.installDroppedMod(installationId, inspectResult.sourcePath, includeCatalog, pw);
       setInstallResult(res);
       setFeedback(res.message);
       await loadRecords();
-      const refreshed = await api.inspectDroppedMod(installationId, inspectResult.sourcePath);
+      const refreshed = await api.inspectDroppedMod(installationId, inspectResult.sourcePath, pw);
       setInspectResult(refreshed);
       onInstalled();
+    } catch (e) {
+      if (isPasswordError(e)) {
+        setNeedsPassword(true);
+      }
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+      onBusy(false);
+    }
+  };
+
+  const handleExportAndroidPack = async () => {
+    if (!installationId || inspectResult?.installationId !== installationId || busy || disabled) return;
+    setBusy(true);
+    onBusy(true);
+    setError('');
+    setFeedback('');
+    try {
+      const pw = archivePassword.trim() || undefined;
+      const savedPath = await api.exportDroppedModAndroidPack(installationId, inspectResult.sourcePath, pw);
+      setFeedback(`已导出安卓手机通用 modimg 贴图包：${savedPath}`);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -191,7 +243,11 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
       setFeedback(msg);
       await loadRecords();
       if (inspectResult && inspectResult.modId === record.modId) {
-        const refreshed = await api.inspectDroppedMod(installationId, inspectResult.sourcePath);
+        const refreshed = await api.inspectDroppedMod(
+          installationId,
+          inspectResult.sourcePath,
+          archivePassword.trim() || undefined,
+        );
         setInspectResult(refreshed);
       }
       onInstalled();
@@ -223,14 +279,14 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
             <span>拖入本地 Mod 检测与安装</span>
           </h2>
           <p>
-            将下载的模组 <code>.zip</code>、<code>.xspkg</code>、<code>.apmm</code>、<code>.bundle</code> 或解压文件夹直接拖入窗口任意位置，自动匹配游戏目录并备份原版文件后安装。
+            将下载的模组 <code>.zip</code>、<code>.rar</code>、<code>.xspkg</code>、<code>.apmm</code>、<code>.bundle</code> 或解压文件夹直接拖入窗口任意位置，自动按游戏 Catalog 适配旧版包并备份原版文件后安装。
           </p>
         </div>
         <div className="mod-drop-actions">
           <input
             ref={fileInputRef}
             type="file"
-            accept=".zip,.xspkg,.apmm,.bundle"
+            accept=".zip,.rar,.xspkg,.apmm,.bundle"
             style={{ display: 'none' }}
             onChange={(e) => void handleFilePick(e)}
           />
@@ -259,13 +315,41 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
           value={sourcePath}
           disabled={busy || disabled}
           onChange={(e) => setSourcePath(e.target.value)}
-          placeholder="直接拖入模组包/文件夹，或粘贴本地 .zip / .xspkg / .apmm / .bundle / 文件夹路径…"
+          placeholder="直接拖入模组包/文件夹，或粘贴本地 .zip / .rar / .xspkg / .apmm / .bundle / 文件夹路径…"
           aria-label="本地模组路径"
         />
         <button type="submit" className="btn btn-primary btn-sm" disabled={busy || disabled || !sourcePath.trim()}>
           {busy ? '检测中…' : '检测文件'}
         </button>
       </form>
+
+      {needsPassword && (
+        <form
+          className="mod-drop-path-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void inspectPath(sourcePath, archivePassword.trim(), true);
+          }}
+        >
+          <KeyRound size={15} />
+          <input
+            type="password"
+            className="form-input"
+            value={archivePassword}
+            disabled={busy || disabled}
+            onChange={(e) => setArchivePassword(e.target.value)}
+            placeholder="请输入压缩包解压密码（仅本次内存解压，不保存密码）…"
+            aria-label="压缩包解压密码"
+          />
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            disabled={busy || disabled || !sourcePath.trim() || !archivePassword.trim()}
+          >
+            使用密码重试
+          </button>
+        </form>
+      )}
 
       {queuedPaths.length > 1 && (
         <div className="mod-drop-queue">
@@ -322,6 +406,17 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
             </div>
 
             <div className="mod-drop-preview-cta">
+              {(inspectResult.androidExportableCount ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy || disabled || !installationId}
+                  onClick={() => void handleExportAndroidPack()}
+                >
+                  <Download size={14} />
+                  导出安卓 modimg 包（{inspectResult.androidExportableCount}）
+                </button>
+              )}
               {inspectResult.alreadyInstalled ? (
                 <button
                   type="button"
@@ -359,6 +454,8 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
                   setInstallResult(null);
                   setSourcePath('');
                   setQueuedPaths([]);
+                  setArchivePassword('');
+                  setNeedsPassword(false);
                 }}
               >
                 清除

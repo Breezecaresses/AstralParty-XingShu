@@ -33,6 +33,10 @@ pub struct ArchiveGuard;
 
 impl ArchiveGuard {
     pub fn inspect_zip<P: AsRef<Path>>(zip_path: P, limits: &ArchiveLimits) -> HubResult<()> {
+        Self::inspect_zip_encryption(zip_path, limits).map(|_| ())
+    }
+
+    pub fn inspect_zip_encryption<P: AsRef<Path>>(zip_path: P, limits: &ArchiveLimits) -> HubResult<bool> {
         let file = File::open(zip_path.as_ref()).map_err(|e| {
             HubError::new("ARCHIVE_OPEN_FAILED", format!("Failed to open package archive: {e}"), "SECURITY")
         })?;
@@ -51,12 +55,16 @@ impl ArchiveGuard {
 
         let mut total_uncompressed_bytes: u64 = 0;
         let mut total_compressed_bytes: u64 = 0;
+        let mut has_encrypted = false;
 
         for i in 0..entry_count {
             let entry = archive.by_index_raw(i).map_err(|e| {
                 HubError::new("ARCHIVE_CORRUPT", format!("Failed to read archive entry index {i}: {e}"), "SECURITY")
             })?;
 
+            if entry.encrypted() {
+                has_encrypted = true;
+            }
             let size = entry.size();
             let compressed_size = entry.compressed_size();
             let name = decode_zip_entry_name(entry.name_raw());
@@ -99,6 +107,6 @@ impl ArchiveGuard {
             }
         }
 
-        Ok(())
+        Ok(has_encrypted)
     }
 }

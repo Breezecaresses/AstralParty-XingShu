@@ -331,8 +331,8 @@ export const DesktopLayout: React.FC = () => {
               </strong>
               <span>
                 {locale === 'zh-CN'
-                  ? '支持 .zip、.xspkg、.apmm、.bundle 或解压后的模组文件夹'
-                  : 'Supports .zip, .xspkg, .apmm, .bundle, or extracted mod folders'}
+                  ? '支持 .zip、.rar、.xspkg、.apmm、.bundle 或解压后的模组文件夹'
+                  : 'Supports .zip, .rar, .xspkg, .apmm, .bundle, or extracted mod folders'}
               </span>
             </div>
           </div>
