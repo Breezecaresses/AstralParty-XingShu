@@ -376,6 +376,7 @@ pub fn run() {
             dropped_mods::stage_dropped_mod_bytes,
             dropped_mods::stage_dropped_mod_raw,
             workshop::workshop_list_local_state,
+            workshop::workshop_active_install_progress,
             workshop::workshop_download_and_install,
             workshop::workshop_restore_mod,
             workshop::workshop_toggle_mod,

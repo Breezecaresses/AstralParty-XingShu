@@ -18,7 +18,7 @@ import javax.net.ssl.HttpsURLConnection;
  */
 final class PayloadDownloadManager {
     static final String OFFICIAL_HOST = "astralparty-xingshu.lanxichaxu.cn";
-    static final long MAX_PAYLOAD_BYTES = 128L * 1024L * 1024L;
+    static final long MAX_PAYLOAD_BYTES = 1024L * 1024L * 1024L;
     private static final long PROGRESS_INTERVAL_NS = 80_000_000L;
     private static final long PROGRESS_STEP_BYTES = 64L * 1024L;
 
@@ -129,7 +129,7 @@ final class PayloadDownloadManager {
             }
             long headerLen = conn.getContentLengthLong();
             if (headerLen > MAX_PAYLOAD_BYTES) {
-                throw new IOException("远端文件大小超过上限（128 MB）");
+                throw new IOException("远端文件大小超过上限（1 GB）");
             }
             if (expectedSize > 0 && headerLen > 0 && headerLen != expectedSize) {
                 throw new IOException("远端文件大小与清单不一致（声明 " + expectedSize + " B，实际 " + headerLen + " B）");
@@ -181,7 +181,7 @@ final class PayloadDownloadManager {
                 while ((n = in.read(buf)) != -1) {
                     received += n;
                     if (received > MAX_PAYLOAD_BYTES) {
-                        throw new IOException("下载体积超出安全上限（128 MB）");
+                        throw new IOException("下载体积超出安全上限（1 GB）");
                     }
                     if (expectedSize > 0 && received > expectedSize) {
                         throw new IOException("下载内容超出声明大小，已中断");

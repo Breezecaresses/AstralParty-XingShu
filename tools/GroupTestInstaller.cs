@@ -211,10 +211,15 @@ internal static class GroupTest
         return result;
     }
 
-    internal static void LoadPackage()
+    internal static void LoadPackage(string expectedManifestSha256 = null)
     {
         var manifest = Within(PackageRoot, "release.json");
-        if (Hash(manifest) != PackageIdentity.ManifestSha256)
+        var expected = String.IsNullOrEmpty(expectedManifestSha256)
+            ? PackageIdentity.ManifestSha256
+            : expectedManifestSha256.Trim().ToLowerInvariant();
+        if (expected.Length != 64 || !expected.All(ch => (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')))
+            throw new InvalidOperationException("清单校验哈希格式无效。");
+        if (Hash(manifest) != expected)
             throw new InvalidOperationException("发布包清单校验失败，请重新完整解压原始压缩包。");
         Release = Json.Deserialize<ReleaseInfo>(File.ReadAllText(manifest, Encoding.UTF8));
         if (Release == null || Release.FormatVersion != 1 || Release.Platforms == null ||
@@ -1002,15 +1007,19 @@ internal static class GroupTest
         string exportLogPath = null;
         try
         {
-            LoadPackage();
             var filtered = new List<string>();
             bool replaceConflicts = false;
+            string manifestSha256 = null;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--replace-conflicts") { replaceConflicts = true; continue; }
                 if (args[i] == "--export-log" && i + 1 < args.Length) { exportLogPath = args[++i]; continue; }
+                if (args[i] == "--manifest-sha256" && i + 1 < args.Length) { manifestSha256 = args[++i]; continue; }
                 filtered.Add(args[i]);
             }
+            if (filtered.Count == 1 && filtered[0] == "--verify-package" && !String.IsNullOrEmpty(manifestSha256))
+                throw new ArgumentException("--verify-package cannot override ManifestSha256.");
+            LoadPackage(manifestSha256);
             if (filtered.Count == 1 && filtered[0] == "--tab-android" || (filtered.Count == 2 && filtered[0] == "--tab" && filtered[1] == "android"))
             {
                 Application.EnableVisualStyles();

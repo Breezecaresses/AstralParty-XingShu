@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.7">Download v0.1.7</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8">Download v0.1.8</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">Web Edition</a> ·
   <a href="docs/README.md">Docs &amp; Validation Records</a> ·
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
@@ -35,16 +35,16 @@
 
 ## Stable Release
 
-[Download stable v0.1.7](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.7) ([release notes](docs/records/RELEASE_0.1.7.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
+[Download stable v0.1.8](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8) ([release notes](docs/records/RELEASE_0.1.8.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
 
 | Target | Package / Access | Highlights |
 | --- | --- | --- |
-| **Windows Desktop** | `XingShu_Hub_0.1.7_x64-setup.exe` / `XingShu_Desktop_0.1.7.zip` | One-click Windows installer or streamlined portable pure-launcher Hub (contains only `Hub/xingshu-hub.exe` + readme — standalone installer assistants and redundant pre-bundled `Runtime/` / `Android/` folders removed). Supports integrated conflict scan/restore and on-demand installation of the **XingShu Official Plugin Mod** (`r8.40`) + 18 modules. |
+| **Windows Desktop** | `XingShu_Hub_0.1.8_x64-setup.exe` / `XingShu_Desktop_0.1.8.zip` | One-click Windows installer or streamlined portable pure-launcher Hub (contains only `Hub/xingshu-hub.exe` + readme). Decoupled from core runtime via remote `core-manifest.json` hot-updates, integrated conflict scan/restore, 4-way concurrent SHA-256 mod caching, redesigned Mod detail modal with in-game emoji reactions, and on-demand installation of **XingShu Official Plugin Mod** (`r8.41` LZ4) + **19 modules**. |
 | **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop** discovery & creator uploads, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
-| **Android Launcher** | `XingShu_Android_0.1.7.apk` / `XingShu_Android_0.1.7.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.7.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Downloads verified payloads on demand with SHA-256 checks, Shizuku & Wireless/USB ADB support, custom themes/wallpaper, PE Mod Workshop, and local pack import. |
+| **Android Launcher** | `XingShu_Android_0.1.8.apk` / `XingShu_Android_0.1.8.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.8.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Now loads remote `android-core-manifest.json` (`CoreRuntimeSpec`) over Shizuku & Wireless/USB ADB so core updates (`android-preview8.36` and beyond) install without reinstalling the APK. |
 
 > [!NOTE]
-> Updating the Hub or Android APK does not automatically overwrite the in-game plugin. After an app self-update, close the game cleanly and install or upgrade the **XingShu Official Plugin Mod** from the **Mods** tab. See the [v0.1.7 release record](docs/records/RELEASE_0.1.7.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
+> The Core Framework (`XingShu Official Plugin Mod`) is now completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.8 release record](docs/records/RELEASE_0.1.8.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
 
 ---
 
@@ -52,18 +52,18 @@
 
 **AstralParty-XingShu (星枢)** is an open-source multi-platform launcher, mod workshop, replay workstation, and modular in-game runtime suite built for *Astral Party* (吉星派对):
 
-1. **AstralParty-Hub (Desktop & Web)**: Built with Tauri 2 + Rust + React 19 + TypeScript. Launches vanilla clients out of the box or installs modular official/community `.xspkg`/`.zip` mods with SHA-256 verification and atomic backups. Features built-in conflict inspection and vanilla restoration (no external installer popups), live in-game room management, `.rep` frame-by-frame replay & board topology playback, platform accounts, and an offline encyclopedia displaying active mod overrides.
-2. **XingShu Official Plugin Mod (`r8.40`, C# / Unity)**: Modular in-game runtime featuring 18 independently toggleable official modules (teammate hand overlay, defense/dodge prediction, battle card point hints, character-select map name display, discard hitbox guard, monster cooldown tracker, free camera zoom, match stats HUD, quick thanks, and FairyGUI-styled native UI center with async atlas load protection).
-3. **Android Pure Launcher (`AndroidInstaller`, Kotlin / Jetpack Compose)**: Rebuilt Material 3 companion app featuring a custom XingShu bottom navigation bar, dynamic theme palettes & wallpaper support, Shizuku / ADB runtime installation & restoration, and PE Mod Workshop / card-pack management.
+1. **AstralParty-Hub (Desktop & Web)**: Built with Tauri 2 + Rust + React 19 + TypeScript. Launches vanilla clients out of the box or installs modular official/community `.xspkg`/`.zip` mods with single-flight locking, 4-way concurrent EdgeOne-cached downloads, local SHA-256 verification, and atomic backups. Features built-in conflict inspection and vanilla restoration, live in-game room management, `.rep` frame-by-frame replay & board topology playback, platform accounts, and an offline encyclopedia displaying active mod overrides.
+2. **XingShu Official Plugin Mod (`r8.41` PC / `android-preview8.36` Android, C# / Unity)**: Independent hot-updatable in-game runtime featuring **19 independently toggleable official modules** (including **Custom Lobby Background**, teammate hand overlay, defense/dodge prediction, battle card point hints, character-select map name display, discard hitbox guard, monster cooldown tracker, free camera zoom, match stats HUD, quick thanks, and FairyGUI-styled native UI center).
+3. **Android Pure Launcher (`AndroidInstaller`, Kotlin / Jetpack Compose)**: Rebuilt Material 3 companion app featuring remote `CoreRuntimeSpec` hot-updates, custom XingShu bottom navigation bar, dynamic theme palettes & wallpaper support, Shizuku / ADB runtime installation & restoration, and PE Mod Workshop / card-pack management.
 
 ---
 
-## Key Capabilities in v0.1.7
+## Key Capabilities in v0.1.8
 
-- **Pure Launcher + Modular Official Plugin**: Both Desktop and Android default to launching the unmodified game cleanly; install the core **XingShu Official Plugin Mod** and toggle any of the **18 official modules** individually or batch-install in one click with live download progress.
-- **Integrated Conflict Scan & Residual Truth**: Detects official vanilla baselines as well as prior runtimes (including `r8.38` / `r8.39`) and conflicting DLL/bundle plugins inline inside Hub, with cross-version backup search and one-click restoration.
-- **PCL-Inspired Launcher Experience & Live Room Control**: Animated startup splash, custom color themes, persistent quick-action deck, and live in-game room creation/sync once connected in lobby.
-- **Modrinth-Style Workshop & Encyclopedia Override Tracking**: Desktop and Web workshops share unified project detail views, platform account login, creator profiles, and animated emotes; encyclopedia pages (Characters, Cards, Chips, Maps) badge currently installed mod replacements.
+- **Independent Hot-Updatable Core Framework (No Launcher Reinstall Required)**: Both Desktop (`core-manifest.json`) and Android (`android-core-manifest.json` synced via Shizuku IPC & Wireless ADB) treat **XingShu Official Plugin Mod** as an independent hot-updatable core mod alongside custom mods, with strict HTTPS/path/SHA-256 checks and offline baseline fallbacks.
+- **Pure Launcher + 19 Official Modules (New: Custom Lobby Background)**: Added module #19 `xingshu.launcher.custom-lobby-bg` for one-click persistent in-game lobby background customization; toggle any module or batch-install all 19 with live progress.
+- **EdgeOne CDN Acceleration, LZ4 Compression & Download Reliability**: PC `r8.41` uses LZ4 compression (~`9.3 MB`), backed by EdgeOne CDN caching + BBR, Rust single-flight install locks (fixing repeat-click state oscillation), tab-switch progress rehydration, 4-way concurrent payload fetch, and local SHA-256 caching.
+- **Redesigned Mod Detail Modal, Emoji Reactions & Native Official Logo**: Fixed Portal scoping/z-index stacking in Desktop Mods detail modal with animated `EmoteReactionBar` reactions and gallery lightbox, and upgraded LauncherHome with the native transparent dual-language *Astral Party* official logo.
 - **Unified Native In-Game Control Center & Replay Analyzer**: Press `F1` (or tap the floating orb) for consistent PC/mobile native FairyGUI controls and 12 remappable hotkeys ([HOTKEYS.md](docs/guides/HOTKEYS.md)); analyze `.rep` or match-ID replays with interactive round charts and step-by-step board playback.
 
 ---
@@ -89,10 +89,10 @@ flowchart TD
         SpecHook --> SpecStore --> SpecBridge
     end
 
-    subgraph RuntimeMain["Main Game Client (Optional XingShu Official Plugin r8.40)"]
+    subgraph RuntimeMain["Main Game Client (Optional XingShu Official Plugin r8.41)"]
         MainBridge["Bridge Client (Loopback TCP)"]
         TruthSource["HandTruthSource Arbiter"]
-        Modules["18 Modular Official Plugins & Native UI Center"]
+        Modules["19 Modular Official Plugins & Native UI Center"]
         MainBridge --> TruthSource --> Modules
     end
 
@@ -126,7 +126,7 @@ AstralParty-XingShu/
 │   ├── src-tauri/                        # Rust backend (IPC bridge, inline inspector, SHA-256 installer)
 │   └── public/                           # Static brand, encyclopedia media & animated emotes
 ├── XingShu-Dev/                          # In-game C# Unity modular runtime
-│   ├── src/XingShu.Runtime/              # 18 official modules, Native UI Center, HandTruth & Room control
+│   ├── src/XingShu.Runtime/              # 19 official modules, Native UI Center, HandTruth & Room control
 │   └── tools/                            # MSBuild scripts, C# conformance & lifecycle test runners
 ├── AndroidInstaller/                     # Kotlin + Jetpack Compose Android Pure Launcher
 │   ├── app/                              # Compose UI, Shizuku integration, HTTPS SHA-256 cache & tests
@@ -185,6 +185,7 @@ python tools/build_android_installer.py --help
 ## Detailed Documentation
 
 - [docs/README.md](docs/README.md) — Documentation Index & Release / Validation Records
+- [RELEASE_0.1.8.md](docs/records/RELEASE_0.1.8.md) — v0.1.8 Release Notes & Independent Core Architecture
 - [RELEASE_0.1.7.md](docs/records/RELEASE_0.1.7.md) — v0.1.7 Release Notes & Architecture Changes
 - [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md) — Android Installation & Recovery Guide
 - [HOTKEYS.md](docs/guides/HOTKEYS.md) — In-Game Shortcuts Configuration

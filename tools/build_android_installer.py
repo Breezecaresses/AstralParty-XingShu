@@ -15,8 +15,8 @@ from android_payload import previous_hashes, validate_baseline_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_CANDIDATE_URL = 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-preview8.35/candidate.__data'
-DEFAULT_VANILLA_URL = 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-preview8.35/vanilla.__data'
+DEFAULT_CANDIDATE_URL = 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-preview8.36/candidate.__data'
+DEFAULT_VANILLA_URL = 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-preview8.36/vanilla.__data'
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 

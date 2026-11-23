@@ -1,7 +1,7 @@
 package app.xingshu.installer
 
 /**
- * Canonical catalog of the 18 modular official XingShu features that map 1:1 to
+ * Canonical catalog of the 19 modular official XingShu features that map 1:1 to
  * `xingshu/plugins/xingshu.launcher.<id>.module` markers inside the Android game data folder.
  */
 object OfficialModulesCatalog {
@@ -31,6 +31,7 @@ object OfficialModulesCatalog {
         OfficialModule("settlement-capture", "结算截图", "专用的结算截图入口", "快捷与娱乐"),
         OfficialModule("select-map-name", "选人地图提示", "在选人界面右侧显示当前地图名称", "战术推演"),
         OfficialModule("battle-card-points", "战斗卡牌点数", "战斗卡牌打出后显示点数与加成明细", "战术推演"),
+        OfficialModule("custom-lobby-bg", "自定义大厅背景", "免改原包替换大厅视频/静态图/USM 背景，兼容隐藏 UI 与缩放", "快捷与娱乐"),
     )
 
     val GROUPS: List<String> = listOf("全部", "对局信息", "战术推演", "操作与画面", "快捷与娱乐")

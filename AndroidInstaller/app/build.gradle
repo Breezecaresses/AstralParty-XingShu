@@ -10,8 +10,8 @@ android {
         applicationId 'app.xingshu.installer'
         minSdk 26
         targetSdk 35
-        versionCode 2026112210
-        versionName '0.1.7'
+        versionCode 2026112301
+        versionName '0.1.8'
         ndk {
             abiFilters 'arm64-v8a'
         }

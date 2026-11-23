@@ -428,4 +428,41 @@ internal static class XingShuConfigKeys
 	internal const string StatsWidgetMetrics = "XINGSHU_STATS_WIDGET_METRICS";
 
 	internal const int StatsWidgetMetricsDefault = 255;
+
+	// 自定义大厅背景 (CustomLobbyBackground)
+	internal const string CustomLobbyBgEnabled = "XINGSHU_CUSTOM_LOBBY_BG_ENABLED";
+	internal const bool CustomLobbyBgEnabledDefault = true;
+
+	internal const string CustomLobbyBgSyncSubPanels = "XINGSHU_CUSTOM_LOBBY_BG_SYNC_SUB";
+	internal const bool CustomLobbyBgSyncSubPanelsDefault = false;
+
+	internal const string CustomLobbyBgRandomOnLobby = "XINGSHU_CUSTOM_LOBBY_BG_RANDOM";
+	internal const bool CustomLobbyBgRandomOnLobbyDefault = false;
+
+	internal const string CustomLobbyBgSelectedFile = "XINGSHU_CUSTOM_LOBBY_BG_FILE";
+	internal const string CustomLobbyBgSelectedFileDefault = "";
+
+	internal const string CustomLobbyBgFolderPath = "XINGSHU_CUSTOM_LOBBY_BG_DIR";
+	internal const string CustomLobbyBgFolderPathDefault = "";
+
+	internal const string CustomLobbyBgFillMode = "XINGSHU_CUSTOM_LOBBY_BG_FILL";
+	internal const int CustomLobbyBgFillModeDefault = 0;
+
+	internal const string CustomLobbyBgBrightness = "XINGSHU_CUSTOM_LOBBY_BG_BRIGHTNESS";
+	internal const float CustomLobbyBgBrightnessMin = 0.30f;
+	internal const float CustomLobbyBgBrightnessMax = 1.00f;
+	internal const float CustomLobbyBgBrightnessDefault = 1.00f;
+
+	internal const string CustomLobbyBgSpeed = "XINGSHU_CUSTOM_LOBBY_BG_SPEED";
+	internal const float CustomLobbyBgSpeedMin = 0.50f;
+	internal const float CustomLobbyBgSpeedMax = 2.00f;
+	internal const float CustomLobbyBgSpeedDefault = 1.00f;
+
+	internal const string CustomLobbyBgMuted = "XINGSHU_CUSTOM_LOBBY_BG_MUTED";
+	internal const bool CustomLobbyBgMutedDefault = true;
+
+	internal const string CustomLobbyBgVolume = "XINGSHU_CUSTOM_LOBBY_BG_VOLUME";
+	internal const float CustomLobbyBgVolumeMin = 0.00f;
+	internal const float CustomLobbyBgVolumeMax = 1.00f;
+	internal const float CustomLobbyBgVolumeDefault = 0.35f;
 }

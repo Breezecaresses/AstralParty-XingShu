@@ -411,6 +411,8 @@ export const api = {
   // Mod / Card / Skin Workshop (Desktop installer)
   workshopListLocalState: (installationId: string) =>
     safeInvoke<WorkshopLocalItemState[]>('workshop_list_local_state', { installationId }, []),
+  workshopActiveInstallProgress: (installationId: string) =>
+    safeInvoke<ActiveModInstallProgress | null>('workshop_active_install_progress', { installationId }, null),
   workshopDownloadAndInstall: (request: WorkshopInstallRequestPayload) =>
     safeInvoke<WorkshopInstallResult>('workshop_download_and_install', { request }),
   workshopRestoreMod: (installationId: string, modId: string) =>
@@ -505,6 +507,7 @@ export interface DroppedModRecord {
 export interface WorkshopInstallRequestPayload {
   installationId: string;
   modId: string;
+  skipConflicts?: boolean;
 }
 
 export interface WorkshopLocalItemState {
@@ -525,6 +528,17 @@ export interface WorkshopInstallResult {
   message: string;
   downloadedPath?: string | null;
   transactionId?: string | null;
+}
+
+export interface ActiveModInstallProgress {
+  installationId: string;
+  modId: string;
+  taskId: number;
+  stage: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  detail: string;
 }
 
 export const getSpectatorHandPayload = api.getSpectatorHandPayload;

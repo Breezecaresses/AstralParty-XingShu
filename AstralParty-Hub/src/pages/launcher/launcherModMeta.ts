@@ -90,6 +90,7 @@ const MODULE_SPECS: Record<string, { group: ModSubGroup; Icon: LucideIcon }> = {
   'replay-player': { group: 'media', Icon: Film },
   'static-portraits': { group: 'media', Icon: ImageIcon },
   'settlement-capture': { group: 'media', Icon: Aperture },
+  'custom-lobby-bg': { group: 'media', Icon: Film },
 };
 
 export const OFFICIAL_SUB_GROUPS: Array<{ id: ModSubGroup; labelZh: string; labelEn: string }> = [

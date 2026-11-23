@@ -75,6 +75,7 @@ namespace XingShuRuntime.UI
         private XingShuBattleStatsView _battleStatsView;
         private XingShuAdvancedSettingsView _advancedSettingsView;
         private XingShuHotkeySettingsView _hotkeySettingsView;
+        private XingShuLobbyBgView _lobbyBgView;
         private GameObject _comingSoonView;
         private Text _comingSoonText;
 
@@ -104,6 +105,7 @@ namespace XingShuRuntime.UI
             7, // 对局数据
             5, // 自由镜头
             4, // 录像回放
+            10, // 大厅背景
             3, // 模组加载 (仅手机端展示)
             8, // 高级设置
             9  // 快捷键
@@ -120,7 +122,8 @@ namespace XingShuRuntime.UI
             "自动化与社交",
             "对局数据",
             "高级设置",
-            "快捷键"
+            "快捷键",
+            "大厅背景"
         };
 
         internal static void Install(GameObject host)
@@ -244,6 +247,10 @@ namespace XingShuRuntime.UI
                 else if (_currentTabIndex == 9 && _hotkeySettingsView != null)
                 {
                     _hotkeySettingsView.UpdateSync();
+                }
+                else if (_currentTabIndex == 10 && _lobbyBgView != null)
+                {
+                    _lobbyBgView.UpdateSync();
                 }
             }
         }
@@ -509,6 +516,34 @@ namespace XingShuRuntime.UI
             else
             {
                 Instance.SelectTab(7);
+            }
+        }
+
+        internal static void OpenLobbyBgPage()
+        {
+            if (Instance == null || !TabAvailable(10)) return;
+            if (!Instance._isOpen)
+            {
+                Instance.SetOpenState(true);
+            }
+            Instance.SelectTab(10);
+        }
+
+        internal static void ToggleLobbyBgPage()
+        {
+            if (Instance == null || !TabAvailable(10)) return;
+            if (!Instance._isOpen)
+            {
+                Instance.SetOpenState(true);
+                Instance.SelectTab(10);
+            }
+            else if (Instance._currentTabIndex == 10)
+            {
+                Instance.SetOpenState(false);
+            }
+            else
+            {
+                Instance.SelectTab(10);
             }
         }
 
@@ -1044,6 +1079,13 @@ namespace XingShuRuntime.UI
             _hotkeySettingsView = new XingShuHotkeySettingsView(_contentArea.transform);
             _hotkeySettingsView.Root.SetActive(false);
 
+            // 10. 自定义大厅背景页面 (Active Feature - Tab 10)
+            if (TabAvailable(10))
+            {
+                _lobbyBgView = new XingShuLobbyBgView(_contentArea.transform);
+                _lobbyBgView.Root.SetActive(false);
+            }
+
             // 占位提示页面 (Coming Soon)
             _comingSoonView = XingShuUIFactory.CreateUIObject("Page_ComingSoon", _contentArea);
             RectTransform csRt = _comingSoonView.GetComponent<RectTransform>();
@@ -1090,6 +1132,7 @@ namespace XingShuRuntime.UI
                     || LauncherModules.CanLoad("SettlementScreenshot")
                     || LauncherModules.CanLoad("SelectRoleMapNameHint");
                 case 7: return LauncherModules.CanLoad("BattleStatsOverlay");
+                case 10: return LauncherModules.CanLoad("CustomLobbyBackground");
                 default: return true;
             }
         }
@@ -1187,6 +1230,12 @@ namespace XingShuRuntime.UI
             {
                 _hotkeySettingsView.Root.SetActive(index == 9);
                 if (index == 9) _hotkeySettingsView.UpdateSync();
+            }
+
+            if (_lobbyBgView != null)
+            {
+                _lobbyBgView.Root.SetActive(index == 10);
+                if (index == 10) _lobbyBgView.UpdateSync();
             }
 
             if (_comingSoonView != null)

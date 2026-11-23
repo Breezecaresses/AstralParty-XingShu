@@ -135,6 +135,10 @@ export function ModDropInspector({ installationId, onBusy, disabled = false, onI
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    if (file.size === 0 || file.size > 1024 * 1024 * 1024) {
+      setError('选择的文件为空或超过 1GB 安全上限。');
+      return;
+    }
     setBusy(true);
     onBusy(true);
     setError('');

@@ -1,15 +1,26 @@
 //! Desktop launcher operations over explicitly registered game installations.
-use std::{path::{Path, PathBuf}, process::Command, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 use crate::{domain::{error::{HubError, HubResult}, installation::GameInstallation},
     extension_center::{self, ExtensionCenter}, install::gates::ProcessGate,
     security::hash::compute_file_sha256, xing_shu::bridge::server::BridgeServer};
 
-const MODULE_RUNTIME: &str = "1.0.0-game-ui-r8.40";
 const COMPONENT_RELEASE: &[u8] = include_bytes!("launcher_component_release.json");
 const COMPONENT_INSTALLER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/XingShuComponentInstaller.exe"));
+const CORE_MANIFEST_PATH: &str = "/xingshu-hub/assets/launcher-runtime/core-manifest.json";
+const CORE_MANIFEST_MAX_BYTES: usize = 2 * 1024 * 1024;
+const CORE_MANIFEST_TTL: Duration = Duration::from_secs(60);
+const CORE_MANIFEST_OFFLINE_BACKOFF: Duration = Duration::from_secs(15);
+const MAX_CORE_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 static INSTALLATION_CHANGE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CORE_MANIFEST_CACHE: OnceLock<Mutex<Option<(Instant, Duration, CoreManifestBundle)>>> = OnceLock::new();
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,14 +33,14 @@ pub struct LauncherDiskState {
     installer_available: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Release {
     runtime_version: String,
     platforms: Vec<ReleasePlatform>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct ReleasePlatform {
     id: String,
@@ -72,7 +83,7 @@ pub struct ConflictInspectReport {
     conflict_prompt: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KnownRuntime {
     platform: String,
@@ -81,19 +92,272 @@ struct KnownRuntime {
     bundle_relative_path: String,
 }
 
-fn error(code: &str, message: impl Into<String>) -> HubError {
-    HubError::new(code, message, "LAUNCHER").with_recoverable(true)
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreManifestWire {
+    format_version: u32,
+    runtime_version: String,
+    path_prefix: String,
+    payload_sizes: HashMap<String, u64>,
+    release: serde_json::Value,
+    #[serde(default)]
+    inventory: Vec<KnownRuntime>,
 }
 
-fn component_release() -> HubResult<Release> {
-    serde_json::from_slice(COMPONENT_RELEASE).map_err(|_| error("PACKAGE_INVALID", "组件清单无法识别。"))
+#[derive(Clone)]
+struct CoreManifestBundle {
+    release: Release,
+    release_raw_json: Vec<u8>,
+    release_sha256: String,
+    path_prefix: String,
+    payload_sizes: HashMap<String, u64>,
+    inventory: Vec<KnownRuntime>,
+    source: &'static str,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Media {
     path_prefix: String,
-    payload_sizes: std::collections::HashMap<String, u64>,
+    payload_sizes: HashMap<String, u64>,
+}
+
+fn error(code: &str, message: impl Into<String>) -> HubError {
+    HubError::new(code, message, "LAUNCHER").with_recoverable(true)
+}
+
+fn core_manifest_cache() -> &'static Mutex<Option<(Instant, Duration, CoreManifestBundle)>> {
+    CORE_MANIFEST_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_32_hex(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn validate_bundle_relative_path(platform_id: &str, rel: &str) -> HubResult<()> {
+    let expected_data_dir = match platform_id {
+        "STEAM_CN" => "AstralParty_CN_Data/",
+        "TAPTAP" | "BILIBILI" | "WEGAME" => "吉星派对_Data/",
+        _ => return Err(error("PACKAGE_INVALID", "核心组件清单包含未授权的渠道。")),
+    };
+    let norm = rel.replace('\\', "/");
+    if norm.starts_with('/')
+        || norm.contains(':')
+        || norm.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(error("PACKAGE_INVALID", "核心组件目标路径包含非法字符或越权片段。"));
+    }
+    let after_aa = norm
+        .strip_prefix(expected_data_dir)
+        .and_then(|rest| rest.strip_prefix("com.unity.addressables/AssetBundles/"))
+        .ok_or_else(|| error("PACKAGE_INVALID", "核心组件目标路径不在 Addressables 资源目录内。"))?;
+    let mut parts = after_aa.split('/');
+    let group = parts.next().unwrap_or("");
+    let bundle = parts.next().unwrap_or("");
+    let leaf = parts.next().unwrap_or("");
+    if !is_32_hex(group) || !is_32_hex(bundle) || leaf != "__data" || parts.next().is_some() {
+        return Err(error("PACKAGE_INVALID", "核心组件目标资产路径格式无效。"));
+    }
+    Ok(())
+}
+
+fn validate_platform_entry(platform: &ReleasePlatform, size: u64) -> HubResult<()> {
+    if !matches!(platform.id.as_str(), "STEAM_CN" | "TAPTAP" | "BILIBILI" | "WEGAME") {
+        return Err(error("PACKAGE_INVALID", "核心组件清单包含未识别渠道。"));
+    }
+    let expected_payload = format!("Runtime/{}/__data", platform.id);
+    if platform.payload != expected_payload {
+        return Err(error("PACKAGE_INVALID", "核心组件载荷相对路径无效。"));
+    }
+    validate_bundle_relative_path(&platform.id, &platform.bundle_relative_path)?;
+    if !is_sha256_hex(&platform.payload_sha256) || !is_sha256_hex(&platform.game_assembly_sha256) {
+        return Err(error("PACKAGE_INVALID", "核心组件清单缺少有效 SHA-256。"));
+    }
+    if let Some(vanilla) = &platform.vanilla_sha256 {
+        if !is_sha256_hex(vanilla) {
+            return Err(error("PACKAGE_INVALID", "核心组件原版哈希格式无效。"));
+        }
+    }
+    if platform.accepted_hashes.is_empty() || !platform.accepted_hashes.iter().all(|h| is_sha256_hex(h)) {
+        return Err(error("PACKAGE_INVALID", "核心组件兼容哈希表无效。"));
+    }
+    if !(1..=MAX_CORE_PAYLOAD_BYTES).contains(&size) {
+        return Err(error("PACKAGE_INVALID", "核心组件下载体积超出安全范围。"));
+    }
+    Ok(())
+}
+
+fn parse_and_validate_core_manifest(raw: &[u8], source: &'static str) -> HubResult<CoreManifestBundle> {
+    let mut wire: CoreManifestWire = serde_json::from_slice(raw)
+        .map_err(|_| error("PACKAGE_INVALID", "核心组件远端清单 JSON 无法识别。"))?;
+    if wire.format_version != 1 {
+        return Err(error("PACKAGE_INVALID", "核心组件清单版本不受支持。"));
+    }
+    let rt_ver = wire.runtime_version.trim();
+    if rt_ver.is_empty()
+        || rt_ver.len() > 64
+        || !rt_ver.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        return Err(error("PACKAGE_INVALID", "核心组件版本号格式无效。"));
+    }
+    let path_prefix = wire.path_prefix.trim_end_matches('/').to_string();
+    if !path_prefix.starts_with("/xingshu-hub/assets/launcher-runtime/")
+        || path_prefix.contains("..")
+        || path_prefix.contains("//")
+        || !path_prefix.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+    {
+        return Err(error("PACKAGE_INVALID", "核心组件下载前缀不在允许路径中。"));
+    }
+    let release: Release = serde_json::from_value(wire.release.clone())
+        .map_err(|_| error("PACKAGE_INVALID", "核心组件发布清单字段缺失。"))?;
+    if release.runtime_version != rt_ver {
+        return Err(error("PACKAGE_INVALID", "核心组件清单版本号前后不一致。"));
+    }
+    if release.platforms.is_empty() || release.platforms.len() > 4 {
+        return Err(error("PACKAGE_INVALID", "核心组件清单渠道数量异常。"));
+    }
+    let mut seen = HashSet::new();
+    for platform in &release.platforms {
+        if !seen.insert(platform.id.clone()) {
+            return Err(error("PACKAGE_INVALID", "核心组件清单包含重复渠道。"));
+        }
+        let size = wire.payload_sizes.get(&platform.id).copied().unwrap_or(0);
+        validate_platform_entry(platform, size)?;
+    }
+    for entry in &wire.inventory {
+        if !is_sha256_hex(&entry.sha256)
+            || !matches!(entry.platform.as_str(), "STEAM_CN" | "TAPTAP" | "BILIBILI" | "WEGAME")
+        {
+            return Err(error("PACKAGE_INVALID", "核心组件历史版本索引包含无效条目。"));
+        }
+        validate_bundle_relative_path(&entry.platform, &entry.bundle_relative_path)?;
+    }
+    let release_raw_json = serde_json::to_vec(&wire.release)
+        .map_err(|e| error("PACKAGE_INVALID", e.to_string()))?;
+    let release_sha256 = crate::security::hash::compute_sha256_bytes(&release_raw_json);
+    wire.path_prefix = path_prefix.clone();
+    Ok(CoreManifestBundle {
+        release,
+        release_raw_json,
+        release_sha256,
+        path_prefix,
+        payload_sizes: wire.payload_sizes,
+        inventory: wire.inventory,
+        source,
+    })
+}
+
+fn embedded_core_manifest() -> HubResult<CoreManifestBundle> {
+    let release_val: serde_json::Value = serde_json::from_slice(COMPONENT_RELEASE)
+        .map_err(|_| error("PACKAGE_INVALID", "内置组件清单无法识别。"))?;
+    let runtime_version = release_val
+        .get("RuntimeVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let media: Media = serde_json::from_str(include_str!("launcher_media.json"))
+        .map_err(|_| error("PACKAGE_INVALID", "内置组件下载清单无法识别。"))?;
+    let inventory: Vec<KnownRuntime> = serde_json::from_str(include_str!("runtime_inventory.generated.json"))
+        .map_err(|_| error("PACKAGE_INVALID", "内置历史版本索引无法识别。"))?;
+    let raw = serde_json::to_vec(&serde_json::json!({
+        "formatVersion": 1,
+        "runtimeVersion": runtime_version,
+        "pathPrefix": media.path_prefix,
+        "payloadSizes": media.payload_sizes,
+        "release": release_val,
+        "inventory": inventory,
+    }))
+    .map_err(|e| error("PACKAGE_INVALID", e.to_string()))?;
+    parse_and_validate_core_manifest(&raw, "embedded")
+}
+
+fn core_manifest_cache_path() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("XingShu-Hub").join("core-manifest-cache.json"))
+}
+
+fn read_disk_cached_core_manifest() -> Option<CoreManifestBundle> {
+    let path = core_manifest_cache_path()?;
+    let bytes = std::fs::read(&path).ok()?;
+    parse_and_validate_core_manifest(&bytes, "disk_cache").ok()
+}
+
+fn write_disk_cached_core_manifest(raw: &[u8]) {
+    let Some(path) = core_manifest_cache_path() else { return };
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_ok() {
+        if let Ok(mut tmp) = tempfile::NamedTempFile::new_in(parent) {
+            use std::io::Write;
+            if tmp.write_all(raw).and_then(|_| tmp.as_file().sync_all()).is_ok() {
+                let _ = tmp.persist(&path);
+            }
+        }
+    }
+}
+
+fn cached_or_embedded_core_manifest() -> HubResult<CoreManifestBundle> {
+    {
+        let guard = core_manifest_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, _, bundle)) = guard.as_ref() {
+            return Ok(bundle.clone());
+        }
+    }
+    if let Some(disk_bundle) = read_disk_cached_core_manifest() {
+        return Ok(disk_bundle);
+    }
+    embedded_core_manifest()
+}
+
+async fn resolve_core_manifest(force_refresh: bool) -> HubResult<CoreManifestBundle> {
+    if !force_refresh {
+        let guard = core_manifest_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((fetched_at, ttl, bundle)) = guard.as_ref() {
+            if fetched_at.elapsed() < *ttl {
+                return Ok(bundle.clone());
+            }
+        }
+    }
+
+    let fetched = async {
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .read_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|_| error("NETWORK", "无法初始化核心清单网络请求。"))?;
+        let raw = crate::remote_content::read(&client, CORE_MANIFEST_PATH, CORE_MANIFEST_MAX_BYTES).await?;
+        let bundle = parse_and_validate_core_manifest(&raw, "remote")?;
+        write_disk_cached_core_manifest(&raw);
+        Ok::<CoreManifestBundle, HubError>(bundle)
+    }
+    .await;
+
+    match fetched {
+        Ok(bundle) => {
+            let mut guard = core_manifest_cache()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some((Instant::now(), CORE_MANIFEST_TTL, bundle.clone()));
+            Ok(bundle)
+        }
+        Err(_) => {
+            let fallback = cached_or_embedded_core_manifest()?;
+            let mut guard = core_manifest_cache()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some((Instant::now(), CORE_MANIFEST_OFFLINE_BACKOFF, fallback.clone()));
+            Ok(fallback)
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -129,48 +393,48 @@ fn emit_component_progress(
     );
 }
 
-async fn stage_component(channel: &str) -> HubResult<tempfile::TempDir> {
-    stage_component_with_progress(channel, |_, _| {}).await
+#[allow(dead_code)]
+async fn stage_component(bundle: &CoreManifestBundle, channel: &str) -> HubResult<tempfile::TempDir> {
+    stage_component_with_progress(bundle, channel, |_, _| {}).await
 }
 
 async fn stage_component_with_progress<F>(
+    bundle: &CoreManifestBundle,
     channel: &str,
     on_progress: F,
 ) -> HubResult<tempfile::TempDir>
 where
     F: FnMut(u64, u64),
 {
-    let release = component_release()?;
-    let platform = release.platforms.iter().find(|p| p.id == channel)
+    let platform = bundle.release.platforms.iter().find(|p| p.id == channel)
         .ok_or_else(|| error("PLATFORM_UNSUPPORTED", "该渠道暂无启动组件。"))?;
-    let media: Media = serde_json::from_str(include_str!("launcher_media.json"))
-        .map_err(|_| error("PACKAGE_INVALID", "组件下载清单无法识别。"))?;
-    let size = media.payload_sizes.get(channel).copied()
+    let size = bundle.payload_sizes.get(channel).copied()
         .ok_or_else(|| error("PACKAGE_INVALID", "组件下载清单缺少所选渠道。"))?;
     let client = crate::remote_content::client()?;
-    let payload_url = format!("{}/{}", media.path_prefix, platform.payload);
+    let payload_url = format!("{}/{}", bundle.path_prefix, platform.payload);
     let payload = crate::remote_content::verified_with_progress(
-        &client, &payload_url, &platform.payload_sha256, size, 64 * 1024 * 1024, on_progress,
+        &client, &payload_url, &platform.payload_sha256, size, MAX_CORE_PAYLOAD_BYTES as usize, on_progress,
     ).await?;
     let stage = tempfile::Builder::new().prefix("xingshu-component-").tempdir()
         .map_err(|e| error("INSTALL_FAILED", e.to_string()))?;
     let target = stage.path().join(&platform.payload);
+    let release_bytes = &bundle.release_raw_json;
     let write_files = || -> std::io::Result<()> {
         std::fs::create_dir_all(target.parent().expect("component directory"))?;
         std::fs::write(target, payload)?;
         std::fs::write(stage.path().join("星枢安装助手.exe"), COMPONENT_INSTALLER)?;
-        std::fs::write(stage.path().join("release.json"), COMPONENT_RELEASE)
+        std::fs::write(stage.path().join("release.json"), release_bytes)
     };
     write_files().map_err(|e| error("INSTALL_FAILED", e.to_string()))?;
     Ok(stage)
 }
 
-fn stage_helper_only() -> HubResult<tempfile::TempDir> {
+fn stage_helper_only(bundle: &CoreManifestBundle) -> HubResult<tempfile::TempDir> {
     let stage = tempfile::Builder::new().prefix("xingshu-helper-").tempdir()
         .map_err(|e| error("RESTORE_FAILED", e.to_string()))?;
     let write_files = || -> std::io::Result<()> {
         std::fs::write(stage.path().join("星枢安装助手.exe"), COMPONENT_INSTALLER)?;
-        std::fs::write(stage.path().join("release.json"), COMPONENT_RELEASE)
+        std::fs::write(stage.path().join("release.json"), &bundle.release_raw_json)
     };
     write_files().map_err(|e| error("RESTORE_FAILED", e.to_string()))?;
     Ok(stage)
@@ -187,7 +451,12 @@ fn canonical_game(game: &GameInstallation) -> HubResult<(PathBuf, PathBuf)> {
     Ok((root, executable))
 }
 
-fn component_fingerprint(platform: &ReleasePlatform, latest: &str, hash: &str) -> (&'static str, Option<String>) {
+fn component_fingerprint(
+    platform: &ReleasePlatform,
+    latest: &str,
+    inventory: &[KnownRuntime],
+    hash: &str,
+) -> (&'static str, Option<String>) {
     if hash.eq_ignore_ascii_case(&platform.payload_sha256) {
         return ("installed", Some(latest.to_owned()));
     }
@@ -201,15 +470,13 @@ fn component_fingerprint(platform: &ReleasePlatform, latest: &str, hash: &str) -
     if vanilla.is_some_and(|v| hash.eq_ignore_ascii_case(v)) {
         return ("installable", None);
     }
-    let inventory: Vec<KnownRuntime> = serde_json::from_str(include_str!("runtime_inventory.generated.json"))
-        .unwrap_or_default();
-    let prior = inventory.into_iter().find(|entry| {
+    let prior = inventory.iter().find(|entry| {
         entry.platform == platform.id
             && entry.bundle_relative_path == platform.bundle_relative_path
             && entry.sha256.eq_ignore_ascii_case(hash)
     });
     match prior {
-        Some(entry) => ("updateAvailable", Some(entry.version)),
+        Some(entry) => ("updateAvailable", Some(entry.version.clone())),
         None => ("updateAvailable", Some("旧版星枢".to_owned())),
     }
 }
@@ -218,22 +485,16 @@ fn can_install_component(status: &LauncherDiskState) -> bool {
     matches!(status.state, "installable" | "updateAvailable")
 }
 
-fn disk_state(game: &GameInstallation) -> HubResult<LauncherDiskState> {
+fn disk_state(game: &GameInstallation, bundle: &CoreManifestBundle) -> HubResult<LauncherDiskState> {
     let (root, _) = canonical_game(game)?;
     let mut state = LauncherDiskState { state: "packageMissing", version: None, available_version: None,
         game_version: None, resource_version: None, installer_available: false };
     {
-        let release = component_release()?;
+        let release = &bundle.release;
         let Some(platform) = release.platforms.iter().find(|p| p.id == game.platform) else {
             state.state = "unsupported";
             return Ok(state);
         };
-        let canonical = extension_center::profiles().into_iter().find(|p| p["platformId"] == game.platform);
-        let matches_profile = canonical.is_some_and(|p| {
-            p["bundleRelativePath"].as_str() == Some(&platform.bundle_relative_path)
-                && p["gameRuntimeDllSha256"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&platform.game_assembly_sha256))
-        });
-        if !matches_profile { return Err(error("PACKAGE_INVALID", "组件清单与所选渠道不匹配。")); }
         let assembly = compute_file_sha256(root.join("GameAssembly.dll"))?;
         if !assembly.eq_ignore_ascii_case(&platform.game_assembly_sha256) {
             state.state = "incompatible";
@@ -248,7 +509,8 @@ fn disk_state(game: &GameInstallation) -> HubResult<LauncherDiskState> {
             return Ok(state);
         }
         let actual = compute_file_sha256(target)?;
-        (state.state, state.version) = component_fingerprint(platform, &release.runtime_version, &actual);
+        (state.state, state.version) =
+            component_fingerprint(platform, &release.runtime_version, &bundle.inventory, &actual);
         if state.state != "incompatible" {
             state.resource_version = platform.resource_version.clone();
         }
@@ -265,9 +527,14 @@ pub struct LauncherSession {
 }
 
 #[tauri::command]
-pub async fn launcher_check(installation_id: String, center: State<'_, ExtensionCenter>) -> HubResult<LauncherDiskState> {
+pub async fn launcher_check(
+    installation_id: String,
+    force_refresh: Option<bool>,
+    center: State<'_, ExtensionCenter>,
+) -> HubResult<LauncherDiskState> {
     let game = extension_center::get_game(&center.db, &installation_id)?;
-    tauri::async_runtime::spawn_blocking(move || disk_state(&game)).await
+    let bundle = resolve_core_manifest(force_refresh.unwrap_or(false)).await?;
+    tauri::async_runtime::spawn_blocking(move || disk_state(&game, &bundle)).await
         .map_err(|_| error("CHECK_FAILED", "游戏组件检查未完成。"))?
 }
 
@@ -299,10 +566,12 @@ async fn install_core_component_for_game(
     app: &tauri::AppHandle,
     replace_conflicts: bool,
 ) -> HubResult<LauncherDiskState> {
+    let bundle = resolve_core_manifest(true).await?;
     let probe = game.clone();
+    let bundle_probe = bundle.clone();
     let status = tauri::async_runtime::spawn_blocking(move || {
         let (_, exe) = canonical_game(&probe)?;
-        let status = disk_state(&probe)?;
+        let status = disk_state(&probe, &bundle_probe)?;
         if can_install_component(&status) || (replace_conflicts && status.state == "incompatible") {
             ProcessGate::check_target(&exe)?;
         }
@@ -314,7 +583,7 @@ async fn install_core_component_for_game(
     }
     let channel = game.platform.clone();
     emit_component_progress(app, &channel, "downloading", 0, 0, 5, "正在下载星枢官方插件 Mod…");
-    let stage = match stage_component_with_progress(&channel, |dl, total| {
+    let stage = match stage_component_with_progress(&bundle, &channel, |dl, total| {
         let pct = crate::workshop::scaled_download_percent(dl, total);
         emit_component_progress(app, &channel, "downloading", dl, total, pct, "正在下载并校验官方插件 Mod…");
     }).await {
@@ -326,7 +595,8 @@ async fn install_core_component_for_game(
     };
     emit_component_progress(app, &channel, "installing", 1, 1, 94, "正在备份原版文件并安装官方插件 Mod…");
     let game_owned = game.clone();
-    let res = tauri::async_runtime::spawn_blocking(move || install_component(&game_owned, stage.path(), replace_conflicts)).await
+    let bundle_install = bundle.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || install_component(&game_owned, stage.path(), &bundle_install, replace_conflicts)).await
         .map_err(|_| error("INSTALL_FAILED", "组件安装未完成。"))?;
     match &res {
         Ok(_) => emit_component_progress(app, &channel, "done", 1, 1, 100, "星枢官方插件 Mod 安装完成"),
@@ -347,9 +617,9 @@ pub async fn launcher_install(
     install_core_component_for_game(&game, &app, replace_conflicts.unwrap_or(false)).await
 }
 
-fn install_component(game: &GameInstallation, stage: &Path, replace_conflicts: bool) -> HubResult<LauncherDiskState> {
+fn install_component(game: &GameInstallation, stage: &Path, bundle: &CoreManifestBundle, replace_conflicts: bool) -> HubResult<LauncherDiskState> {
     let (root, executable) = canonical_game(game)?;
-    let status = disk_state(game)?;
+    let status = disk_state(game, bundle)?;
     if status.state == "installed" && !replace_conflicts { return Ok(status); }
     if !can_install_component(&status) && !(replace_conflicts && status.state == "incompatible") {
         return Err(error("INCOMPATIBLE", "所选渠道的版本需要检查。"));
@@ -357,6 +627,7 @@ fn install_component(game: &GameInstallation, stage: &Path, replace_conflicts: b
     ProcessGate::check_target(&executable)?;
     let mut command = Command::new(stage.join("星枢安装助手.exe"));
     command.current_dir(stage);
+    command.arg("--manifest-sha256").arg(&bundle.release_sha256);
     if replace_conflicts {
         command.arg("--replace-conflicts");
     }
@@ -371,7 +642,7 @@ fn install_component(game: &GameInstallation, stage: &Path, replace_conflicts: b
         let code = if message.contains("CONFLICT_CONFIRM_REQUIRED") { "CONFLICT_CONFIRM_REQUIRED" } else { "INSTALL_FAILED" };
         return Err(error(code, message.lines().take(6).collect::<Vec<_>>().join("\n")));
     }
-    let installed = disk_state(game)?;
+    let installed = disk_state(game, bundle)?;
     if installed.state != "installed" { return Err(error("INSTALL_FAILED", "安装后组件指纹核验失败。")); }
     Ok(installed)
 }
@@ -382,12 +653,15 @@ pub async fn launcher_inspect_conflicts(
     center: State<'_, ExtensionCenter>,
 ) -> HubResult<ConflictInspectReport> {
     let game = extension_center::get_game(&center.db, &installation_id)?;
+    let bundle = resolve_core_manifest(true).await?;
     tauri::async_runtime::spawn_blocking(move || {
         let (root, _) = canonical_game(&game)?;
-        let stage = stage_helper_only()?;
+        let stage = stage_helper_only(&bundle)?;
         let mut command = Command::new(stage.path().join("星枢安装助手.exe"));
         command
             .current_dir(stage.path())
+            .arg("--manifest-sha256")
+            .arg(&bundle.release_sha256)
             .arg("--inspect-json")
             .arg(&game.platform)
             .arg(&root);
@@ -422,14 +696,21 @@ pub async fn launcher_restore(
 ) -> HubResult<LauncherDiskState> {
     let _guard = INSTALLATION_CHANGE.lock().await;
     let game = extension_center::get_game(&center.db, &installation_id)?;
+    let bundle = resolve_core_manifest(false).await?;
     let channel = game.platform.clone();
     emit_component_progress(&app, &channel, "installing", 1, 1, 35, "正在校验原版备份并卸载官方插件 Mod…");
     let res = tauri::async_runtime::spawn_blocking(move || {
         let (root, executable) = canonical_game(&game)?;
         ProcessGate::check_target(&executable)?;
-        let stage = stage_helper_only()?;
+        let stage = stage_helper_only(&bundle)?;
         let mut command = Command::new(stage.path().join("星枢安装助手.exe"));
-        command.current_dir(stage.path()).arg("--restore").arg(&game.platform).arg(&root);
+        command
+            .current_dir(stage.path())
+            .arg("--manifest-sha256")
+            .arg(&bundle.release_sha256)
+            .arg("--restore")
+            .arg(&game.platform)
+            .arg(&root);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -444,7 +725,7 @@ pub async fn launcher_restore(
                 if trimmed.is_empty() { "还原官方原版未成功，请通过「检查冲突」核对备份。".to_string() } else { trimmed },
             ));
         }
-        disk_state(&game)
+        disk_state(&game, &bundle)
     })
     .await
     .map_err(|_| error("RESTORE_FAILED", "卸载并还原任务未完成。"))?;
@@ -461,12 +742,14 @@ pub async fn launcher_start(installation_id: String, center: State<'_, Extension
     let _guard = INSTALLATION_CHANGE.lock().await;
     let game = extension_center::get_game(&center.db, &installation_id)?;
     let (root, exe) = canonical_game(&game)?;
+    let bundle = resolve_core_manifest(false).await?;
     // Non-Steam launch is limited to a recognized game binary's install root.
     if !game.platform.starts_with("STEAM_") {
         let hash = tauri::async_runtime::spawn_blocking(move || compute_file_sha256(root.join("GameAssembly.dll")))
             .await.map_err(|_| error("CHECK_FAILED", "无法核对渠道。"))??;
-        let verified = extension_center::profiles().into_iter().any(|p| p["platformId"] == game.platform
-            && p["gameRuntimeDllSha256"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&hash)));
+        let verified = bundle.release.platforms.iter().any(|p| p.id == game.platform && p.game_assembly_sha256.eq_ignore_ascii_case(&hash))
+            || extension_center::profiles().into_iter().any(|p| p["platformId"] == game.platform
+                && p["gameRuntimeDllSha256"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&hash)));
         if !verified { return Err(error("INCOMPATIBLE", "请从官方渠道启动新版游戏，核对安装位置后重试。")); }
     }
     crate::commands::xingshu_commands::launch_game_uri(None, Some(game.platform), Some(exe.to_string_lossy().into_owned())).await
@@ -534,7 +817,9 @@ pub(crate) fn snapshot_modules_for_game(
     game: &GameInstallation,
 ) -> HubResult<(bool, std::collections::BTreeMap<String, &'static str>)> {
     let (root, _) = canonical_game(game)?;
-    let ready = disk_state(game).is_ok_and(|s| modular_core_ready(&s));
+    let ready = cached_or_embedded_core_manifest()
+        .and_then(|bundle| disk_state(game, &bundle))
+        .is_ok_and(|s| modular_core_ready(&s));
     let mut states = std::collections::BTreeMap::new();
     for module in modules()? {
         let (active, disabled) = module.paths(&root)?;
@@ -551,7 +836,7 @@ pub(crate) fn snapshot_modules_for_game(
 }
 
 fn modular_core_ready(state: &LauncherDiskState) -> bool {
-    state.state == "installed" && state.version.as_deref() == Some(MODULE_RUNTIME)
+    state.state == "installed" && state.version.is_some()
 }
 
 #[derive(Serialize)]
@@ -571,11 +856,12 @@ pub struct LauncherMods { modules: Vec<LauncherModRow>, ready: bool }
 pub async fn launcher_mods(installation_id: Option<String>, center: State<'_, ExtensionCenter>) -> HubResult<LauncherMods> {
     let db = center.db.clone();
     let game = installation_id.map(|id| extension_center::get_game(&db, &id)).transpose()?;
+    let bundle = resolve_core_manifest(false).await?;
     tauri::async_runtime::spawn_blocking(move || {
         let location = game.as_ref().map(canonical_game).transpose()?;
-        let ready = game.as_ref().and_then(|g| disk_state(g).ok()).is_some_and(|s| modular_core_ready(&s));
+        let ready = game.as_ref().and_then(|g| disk_state(g, &bundle).ok()).is_some_and(|s| modular_core_ready(&s));
         let available = game.as_ref().is_some_and(|game| {
-            component_release().is_ok_and(|release| release.platforms.iter().any(|platform| platform.id == game.platform))
+            bundle.release.platforms.iter().any(|platform| platform.id == game.platform)
         });
         let repo = crate::storage::repositories::ExtensionRepository::new(db);
         let rows = modules()?.into_iter().map(|definition| {
@@ -935,11 +1221,12 @@ pub async fn launcher_install_all_official_mods(
         .map_err(|_| error("MOD_PATH", "无法定位模组备份目录。"))?
         .join("backups");
 
+    let bundle = resolve_core_manifest(include_core).await?;
     let game_check = game.clone();
     let initial_disk = tauri::async_runtime::spawn_blocking(move || {
         let (_, exe) = canonical_game(&game_check)?;
         ProcessGate::check_target(&exe)?;
-        disk_state(&game_check)
+        disk_state(&game_check, &bundle)
     })
     .await
     .map_err(|_| error("MOD_INSTALL", "安装环境核验未完成。"))??;
@@ -1124,44 +1411,159 @@ mod tests {
 
     #[test]
     fn verified_previous_components_are_updatable_on_their_own_channels() {
-        let release = component_release().unwrap();
-        let previous: Vec<KnownRuntime> =
-            serde_json::from_str(include_str!("runtime_inventory.generated.json")).unwrap();
+        let bundle = embedded_core_manifest().unwrap();
+        let release = &bundle.release;
         for platform in &release.platforms {
             let vanilla = platform
                 .vanilla_sha256
                 .as_deref()
                 .unwrap_or(&platform.accepted_hashes[0]);
             assert_eq!(
-                component_fingerprint(platform, &release.runtime_version, vanilla),
+                component_fingerprint(platform, &release.runtime_version, &bundle.inventory, vanilla),
                 ("installable", None),
             );
-            for prior in previous.iter().filter(|entry| entry.platform == platform.id) {
+            for prior in bundle.inventory.iter().filter(|entry| entry.platform == platform.id) {
                 assert_eq!(
-                    component_fingerprint(platform, &release.runtime_version, &prior.sha256),
+                    component_fingerprint(platform, &release.runtime_version, &bundle.inventory, &prior.sha256),
                     ("updateAvailable", Some(prior.version.clone())),
                 );
             }
             for old_hash in platform.accepted_hashes.iter().skip(1) {
-                let (state, version) = component_fingerprint(platform, &release.runtime_version, old_hash);
+                let (state, version) =
+                    component_fingerprint(platform, &release.runtime_version, &bundle.inventory, old_hash);
                 assert_eq!(state, "updateAvailable");
                 assert!(version.is_some());
             }
             assert_eq!(
-                component_fingerprint(platform, &release.runtime_version, &platform.payload_sha256),
+                component_fingerprint(platform, &release.runtime_version, &bundle.inventory, &platform.payload_sha256),
                 ("installed", Some(release.runtime_version.clone())),
             );
             assert_eq!(
-                component_fingerprint(platform, &release.runtime_version, &"0".repeat(64)),
+                component_fingerprint(platform, &release.runtime_version, &bundle.inventory, &"0".repeat(64)),
                 ("incompatible", None),
             );
         }
     }
 
     #[test]
-    fn built_official_module_xspkg_passes_package_parser_for_all_18_modules() {
+    fn remote_core_manifest_hot_update_and_validation() {
+        let r841 = "1".repeat(64);
+        let r842 = "2".repeat(64);
+        let vanilla = "3".repeat(64);
+        let new_game_ga = "4".repeat(64);
+        let new_bundle_rel = format!(
+            "AstralParty_CN_Data\\com.unity.addressables\\AssetBundles\\{}\\{}\\__data",
+            "a".repeat(32),
+            "b".repeat(32)
+        );
+        let remote_raw = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "runtimeVersion": "1.0.0-game-ui-r8.42",
+            "pathPrefix": "/xingshu-hub/assets/launcher-runtime/r8.42",
+            "payloadSizes": { "STEAM_CN": 9100000 },
+            "release": {
+                "FormatVersion": 1,
+                "Version": "0.1.7",
+                "HubSha256": "5".repeat(64),
+                "RuntimeVersion": "1.0.0-game-ui-r8.42",
+                "Platforms": [{
+                    "Id": "STEAM_CN",
+                    "Label": "Steam 国服",
+                    "ExeName": "AstralParty_CN.exe",
+                    "GameAssemblySha256": new_game_ga,
+                    "GameVersion": "3.4.0",
+                    "ResourceVersion": "165",
+                    "BundleRelativePath": new_bundle_rel,
+                    "Payload": "Runtime/STEAM_CN/__data",
+                    "PayloadSha256": r842,
+                    "VanillaSha256": vanilla,
+                    "AcceptedHashes": [vanilla, r841]
+                }]
+            },
+            "inventory": [{
+                "platform": "STEAM_CN",
+                "version": "1.0.0-game-ui-r8.41",
+                "sha256": r841,
+                "bundleRelativePath": new_bundle_rel
+            }]
+        }))
+        .unwrap();
+
+        let bundle = parse_and_validate_core_manifest(&remote_raw, "remote").unwrap();
+        assert_eq!(bundle.release.runtime_version, "1.0.0-game-ui-r8.42");
+        assert_eq!(bundle.path_prefix, "/xingshu-hub/assets/launcher-runtime/r8.42");
+        let steam = &bundle.release.platforms[0];
+        assert_eq!(
+            component_fingerprint(steam, &bundle.release.runtime_version, &bundle.inventory, &r841),
+            ("updateAvailable", Some("1.0.0-game-ui-r8.41".to_string())),
+        );
+        assert_eq!(
+            component_fingerprint(steam, &bundle.release.runtime_version, &bundle.inventory, &r842),
+            ("installed", Some("1.0.0-game-ui-r8.42".to_string())),
+        );
+
+        // Tampered pathPrefix must be rejected.
+        let bad_prefix = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "runtimeVersion": "1.0.0-game-ui-r8.42",
+            "pathPrefix": "https://evil.example/payload",
+            "payloadSizes": { "STEAM_CN": 9100000 },
+            "release": serde_json::from_slice::<serde_json::Value>(&bundle.release_raw_json).unwrap(),
+            "inventory": []
+        }))
+        .unwrap();
+        assert!(parse_and_validate_core_manifest(&bad_prefix, "remote").is_err());
+
+        // Path traversal in BundleRelativePath must be rejected.
+        let bad_rel = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "runtimeVersion": "1.0.0-game-ui-r8.42",
+            "pathPrefix": "/xingshu-hub/assets/launcher-runtime/r8.42",
+            "payloadSizes": { "STEAM_CN": 9100000 },
+            "release": {
+                "RuntimeVersion": "1.0.0-game-ui-r8.42",
+                "Platforms": [{
+                    "Id": "STEAM_CN",
+                    "GameAssemblySha256": new_game_ga,
+                    "BundleRelativePath": "AstralParty_CN_Data\\..\\..\\evil\\__data",
+                    "Payload": "Runtime/STEAM_CN/__data",
+                    "PayloadSha256": r842,
+                    "VanillaSha256": vanilla,
+                    "AcceptedHashes": [vanilla]
+                }]
+            },
+            "inventory": []
+        }))
+        .unwrap();
+        assert!(parse_and_validate_core_manifest(&bad_rel, "remote").is_err());
+
+        // Malformed SHA-256 must be rejected.
+        let bad_sha = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "runtimeVersion": "1.0.0-game-ui-r8.42",
+            "pathPrefix": "/xingshu-hub/assets/launcher-runtime/r8.42",
+            "payloadSizes": { "STEAM_CN": 9100000 },
+            "release": {
+                "RuntimeVersion": "1.0.0-game-ui-r8.42",
+                "Platforms": [{
+                    "Id": "STEAM_CN",
+                    "GameAssemblySha256": "not-a-sha256",
+                    "BundleRelativePath": new_bundle_rel,
+                    "Payload": "Runtime/STEAM_CN/__data",
+                    "PayloadSha256": r842,
+                    "AcceptedHashes": [vanilla]
+                }]
+            },
+            "inventory": []
+        }))
+        .unwrap();
+        assert!(parse_and_validate_core_manifest(&bad_sha, "remote").is_err());
+    }
+
+    #[test]
+    fn built_official_module_xspkg_passes_package_parser_for_all_19_modules() {
         let all = modules().unwrap();
-        assert_eq!(all.len(), 18, "Expected 18 official launcher modules");
+        assert_eq!(all.len(), 19, "Expected 19 official launcher modules");
         for module in all {
             let bytes = build_official_module_xspkg(&module).unwrap();
             let tmp = tempfile::NamedTempFile::new().unwrap();

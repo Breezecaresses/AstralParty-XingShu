@@ -94,4 +94,10 @@ public final class InstallerService extends IInstaller.Stub {
         caller();
         return engine.setOfficialModules(packageName, moduleIdsCsv, enable, remove);
     }
+
+    @Override
+    public synchronized String setCoreSpec(String specJson) {
+        caller();
+        return engine.updateCoreSpec(specJson);
+    }
 }

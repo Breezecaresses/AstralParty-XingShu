@@ -97,6 +97,7 @@ def main():
     parser.add_argument('--hooks-dll', type=Path, default=DLL, help='Use an isolated runtime build without replacing the default build output')
     parser.add_argument('--profiles', type=Path, default=PROFILES, help='Use separately verified platform profiles for a new official resource version')
     parser.add_argument('--platform', choices=['STEAM_CN', 'TAPTAP', 'BILIBILI', 'WEGAME'], action='append', help='Prepare only selected Windows channels')
+    parser.add_argument('--official-baselines', type=Path, help='Audited directory containing PLATFORM/vanilla.__data')
     args = parser.parse_args()
     OUT = args.out.resolve()
     DLL = args.hooks_dll.resolve()
@@ -114,22 +115,29 @@ def main():
         target = Path(profile['installRoot']) / profile['bundleRelativePath']
         folder = OUT / platform
         folder.mkdir(exist_ok=True)
-        original = target.read_bytes()
-        known_installed = any(
-            p['target'] == str(target) and (
-                p['candidateSha256'] == sha(original) or (
-                    p['beforeSha256'] == sha(original) and Path(p['backup']).is_file()
-                    and sha(Path(p['backup']).read_bytes()) == sha(original)
-                )
-            ) for p in previous
-        )
-        if sha(original).upper() != profile['containerSha256'].upper() and not known_installed:
-            raise RuntimeError(f'{platform}: cache differs from selected current baseline; update compatibility data first')
-        backup = folder / ('__data.before.' + sha(original)[:12])
-        if backup.exists() and sha(backup.read_bytes()) != sha(original):
-            raise RuntimeError(f'{platform}: original changed since preparation')
-        if not backup.exists():
-            backup.write_bytes(original)
+        if args.official_baselines:
+            baseline_path = (args.official_baselines / platform / 'vanilla.__data').resolve(strict=True)
+            original = baseline_path.read_bytes()
+            if sha(original).upper() != profile['containerSha256'].upper():
+                raise RuntimeError(f'{platform}: official baseline differs from selected current baseline')
+            backup = baseline_path
+        else:
+            original = target.read_bytes()
+            known_installed = any(
+                p['target'] == str(target) and (
+                    p['candidateSha256'] == sha(original) or (
+                        p['beforeSha256'] == sha(original) and Path(p['backup']).is_file()
+                        and sha(Path(p['backup']).read_bytes()) == sha(original)
+                    )
+                ) for p in previous
+            )
+            if sha(original).upper() != profile['containerSha256'].upper() and not known_installed:
+                raise RuntimeError(f'{platform}: cache differs from selected current baseline; update compatibility data first')
+            backup = folder / ('__data.before.' + sha(original)[:12])
+            if backup.exists() and sha(backup.read_bytes()) != sha(original):
+                raise RuntimeError(f'{platform}: original changed since preparation')
+            if not backup.exists():
+                backup.write_bytes(original)
         env = UnityPy.load(original)
         before = assets(env)
         runtime_objects = [o for o in env.objects if o.type.name == 'TextAsset' and o.read().m_Name == 'AstralParty.Runtime.dll']
@@ -150,7 +158,7 @@ def main():
         runtime.save()
         put_hooks(env, dll)
         candidate = folder / '__data'
-        candidate.write_bytes(env.file.save())
+        candidate.write_bytes(env.file.save(packer='lz4'))
         after = assets(UnityPy.load(str(candidate)))
         assert set(before) | {99992000} == set(after)
         assert after[99992000] == ('XingShu.Runtime.dll', sha(dll))

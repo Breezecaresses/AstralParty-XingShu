@@ -1,12 +1,17 @@
 //! Mod / Card / Skin Workshop downloader, SHA-256 verifier, atomic installer, and restorer.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::application::install_service::InstallService;
 use crate::domain::error::{HubError, HubResult};
@@ -18,10 +23,11 @@ use crate::remote_content;
 use crate::security::hash::compute_file_sha256;
 use crate::security::path_guard::PathGuard;
 
-const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
-const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_ZIP_UNCOMPRESSED_BYTES: u64 = 160 * 1024 * 1024;
-const MAX_ZIP_ENTRIES: usize = 512;
+const MAX_PAYLOAD_BYTES: usize = 512 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_ZIP_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_ZIP_ENTRIES: usize = 4000;
+const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 const VALID_DATA_DIRS: &[&str] = &[
     "AstralParty_CN_Data",
     "吉星派对_Data",
@@ -53,6 +59,8 @@ pub struct WorkshopDownloadFile {
 pub struct WorkshopInstallRequest {
     pub installation_id: String,
     pub mod_id: String,
+    #[serde(default)]
+    pub skip_conflicts: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +162,137 @@ pub(crate) fn scaled_download_percent(downloaded: u64, total: u64) -> u8 {
     }
     let ratio = ((downloaded.saturating_mul(86)) / total).min(86) as u8;
     4 + ratio
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveModInstallProgress {
+    pub installation_id: String,
+    pub mod_id: String,
+    pub task_id: u64,
+    pub stage: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: u8,
+    pub detail: String,
+}
+
+static ACTIVE_INSTALLS: OnceLock<Mutex<HashMap<String, ActiveModInstallProgress>>> = OnceLock::new();
+static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
+
+fn active_installs() -> &'static Mutex<HashMap<String, ActiveModInstallProgress>> {
+    ACTIVE_INSTALLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct ActiveInstallGuard {
+    installation_id: String,
+    task_id: u64,
+}
+
+impl ActiveInstallGuard {
+    fn try_acquire(installation_id: &str, mod_id: &str) -> HubResult<Self> {
+        let trimmed = installation_id.trim();
+        let key = if trimmed.is_empty() {
+            installation_id.to_string()
+        } else {
+            trimmed.to_string()
+        };
+        let mut guard = active_installs()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = guard.get(&key) {
+            return Err(HubError::new(
+                "MOD_INSTALL_IN_PROGRESS",
+                format!("当前目录正在处理「{}」，请等待完成后再操作。", existing.mod_id),
+                "WORKSHOP",
+            )
+            .with_recoverable(true));
+        }
+        let task_id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
+        guard.insert(
+            key.clone(),
+            ActiveModInstallProgress {
+                installation_id: key.clone(),
+                mod_id: mod_id.to_string(),
+                task_id,
+                stage: "fetching_meta".into(),
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                percent: 2,
+                detail: "正在获取模组清单…".into(),
+            },
+        );
+        Ok(Self {
+            installation_id: key,
+            task_id,
+        })
+    }
+}
+
+impl Drop for ActiveInstallGuard {
+    fn drop(&mut self) {
+        let mut guard = active_installs()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard.get(&self.installation_id).is_some_and(|e| e.task_id == self.task_id) {
+            guard.remove(&self.installation_id);
+        }
+    }
+}
+
+fn emit_tracked_mod_progress(
+    app: &AppHandle,
+    installation_id: &str,
+    task_id: u64,
+    mod_id: &str,
+    stage: &str,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    percent: u8,
+    detail: impl Into<String>,
+) {
+    let detail_str = detail.into();
+    let (clamped_dl, clamped_pct) = {
+        let mut guard = active_installs()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = guard.get_mut(installation_id) {
+            if entry.task_id == task_id {
+                let next_dl = if stage == "downloading" && entry.stage == "downloading" {
+                    entry.downloaded_bytes.max(downloaded_bytes)
+                } else {
+                    downloaded_bytes
+                };
+                let next_pct = if stage == "downloading" && entry.stage == "downloading" {
+                    entry.percent.max(percent)
+                } else {
+                    percent
+                };
+                entry.mod_id = mod_id.to_string();
+                entry.stage = stage.to_string();
+                entry.downloaded_bytes = next_dl;
+                entry.total_bytes = total_bytes;
+                entry.percent = next_pct;
+                entry.detail = detail_str.clone();
+                (next_dl, next_pct)
+            } else {
+                (downloaded_bytes, percent)
+            }
+        } else {
+            (downloaded_bytes, percent)
+        }
+    };
+    emit_mod_progress(app, mod_id, stage, clamped_dl, total_bytes, clamped_pct, detail_str);
+}
+
+#[tauri::command]
+pub fn workshop_active_install_progress(installation_id: String) -> Option<ActiveModInstallProgress> {
+    let trimmed = installation_id.trim();
+    let lookup = if trimmed.is_empty() { installation_id.as_str() } else { trimmed };
+    let guard = active_installs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.get(lookup).cloned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,6 +477,47 @@ fn xspkg_payload_path(root: &Path, mod_id: &str) -> HubResult<PathBuf> {
     )
 }
 
+fn payload_cache_dir(root: &Path) -> HubResult<PathBuf> {
+    confined(root, ".xingshu-mods/payload-cache")
+}
+
+fn cached_payload_file(cache_dir: &Path, expected_sha256: &str) -> Option<PathBuf> {
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(cache_dir.join(format!("{}.bundle", expected_sha256.to_ascii_lowercase())))
+}
+
+fn read_verified_cached_payload(
+    cache_dir: &Path,
+    expected_sha256: &str,
+    expected_size: u64,
+) -> Option<Vec<u8>> {
+    let path = cached_payload_file(cache_dir, expected_sha256)?;
+    if !path.is_file() {
+        return None;
+    }
+    let Ok(bytes) = fs::read(&path) else {
+        return None;
+    };
+    let size_ok = expected_size == 0 || bytes.len() as u64 == expected_size;
+    let hash_ok = sha256_hex(&bytes).eq_ignore_ascii_case(expected_sha256);
+    if size_ok && hash_ok {
+        return Some(bytes);
+    }
+    let _ = fs::remove_file(&path);
+    None
+}
+
+fn write_cached_payload(cache_dir: &Path, expected_sha256: &str, bytes: &[u8]) {
+    let Some(path) = cached_payload_file(cache_dir, expected_sha256) else {
+        return;
+    };
+    if fs::create_dir_all(cache_dir).is_ok() {
+        let _ = atomic_write(&path, bytes);
+    }
+}
+
 fn read_workshop_receipt(root: &Path, mod_id: &str) -> HubResult<Option<WorkshopReceipt>> {
     let path = receipt_path(root, mod_id)?;
     if !path.is_file() {
@@ -443,7 +623,7 @@ fn extract_bundle_entries_from_zip(
         }
         total_uncompressed = total_uncompressed.saturating_add(entry.size());
         if total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES {
-            return Err(HubError::security_violation("压缩包解压体积超过 160MB 安全上限。"));
+            return Err(HubError::security_violation("压缩包解压体积超过 2GB 安全上限。"));
         }
         let clean_entry = PathGuard::sanitize_relative_path(&raw_name)?
             .to_string_lossy()
@@ -542,13 +722,65 @@ pub(crate) fn validate_community_package(archive: &Path) -> HubResult<()> {
     Ok(())
 }
 
+fn is_addressables_target(target_rel: &str) -> bool {
+    let clean = target_rel.trim().replace('\\', "/");
+    clean
+        .split_once('/')
+        .is_some_and(|(_, sub)| sub.starts_with(ADDRESSABLES_REL_PREFIX))
+}
+
+fn format_conflict_error(conflicts: &[(String, String)], action: &str) -> HubError {
+    let mut distinct_owners: Vec<String> = Vec::new();
+    for (_, owner) in conflicts {
+        if !distinct_owners.iter().any(|existing| existing == owner) {
+            distinct_owners.push(owner.clone());
+        }
+    }
+    let owners_str = if distinct_owners.is_empty() {
+        "其他已启用模组".to_string()
+    } else {
+        distinct_owners.join("、")
+    };
+    let sample_files: Vec<String> = conflicts
+        .iter()
+        .take(3)
+        .map(|(target, _)| {
+            Path::new(target)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(target)
+                .to_string()
+        })
+        .collect();
+    let suffix = if conflicts.len() > 3 { " 等" } else { "" };
+    let msg = if action == "启用" {
+        format!(
+            "目标资源与已启用模组冲突（共 {} 个文件）：已由 {} 占用（如 {}{}）。请先停用冲突项。",
+            conflicts.len(),
+            owners_str,
+            sample_files.join("、"),
+            suffix
+        )
+    } else {
+        format!(
+            "目标资源与已启用模组冲突（共 {} 个文件）：已由 {} 管理（如 {}{}）。请先停用冲突模组，或选择「跳过冲突文件继续安装」。",
+            conflicts.len(),
+            owners_str,
+            sample_files.join("、"),
+            suffix
+        )
+    };
+    HubError::new("MOD_TARGET_CONFLICT", msg, "WORKSHOP").with_recoverable(true)
+}
+
 pub(crate) fn install_bundle_entries(
     game: &GameInstallation,
     root: &Path,
     mod_id: &str,
     mod_name: &str,
     staged: &[StagedBundle],
-) -> HubResult<WorkshopReceipt> {
+    skip_conflicts: bool,
+) -> HubResult<(WorkshopReceipt, usize)> {
     let clean_id = sanitize_mod_id(mod_id)?;
     if staged.is_empty() {
         return Err(HubError::invalid_manifest("模组不含任何可安装的文件。"));
@@ -574,58 +806,82 @@ pub(crate) fn install_bundle_entries(
 
     let mut unique = HashSet::new();
     let owners = crate::dropped_mods::collect_active_target_owners(root, "")?;
-    let mut targets_and_baselines: Vec<(PathBuf, String)> = Vec::with_capacity(staged.len());
+    let mut conflicts: Vec<(String, String)> = Vec::new();
+    let mut normalized_entries: Vec<(&StagedBundle, String, PathBuf, bool)> = Vec::with_capacity(staged.len());
 
-    // Preflight every file and backup before mutating any game file.
     for entry in staged {
         let (norm_target, target_abs) = validate_bundle_target(root, &entry.target_rel)?;
         let target_id = target_key(&norm_target);
         if !unique.insert(target_id.clone()) {
             return Err(HubError::invalid_manifest("模组内包含重复的目标路径。"));
         }
-        if owners.contains_key(&target_id) {
-            return Err(HubError::security_violation("目标资源由其他模组管理，请先停用冲突项。"));
+        if let Some(owner) = owners.get(&target_id) {
+            conflicts.push((norm_target, owner.clone()));
+            continue;
         }
-        if !target_abs.is_file() {
-            return Err(HubError::invalid_manifest(
-                "游戏目标资产文件不存在，当前游戏版本或渠道可能尚未适配。",
-            ));
-        }
+        let is_addr = is_addressables_target(&norm_target);
+        normalized_entries.push((entry, norm_target, target_abs, is_addr));
+    }
+
+    if !conflicts.is_empty() && !skip_conflicts {
+        return Err(format_conflict_error(&conflicts, "安装"));
+    }
+    if normalized_entries.is_empty() {
+        return Err(HubError::invalid_manifest("所有目标资源均与其他已启用模组冲突，无剩余可安装文件。"));
+    }
+    let skipped_count = conflicts.len();
+
+    let mut targets_and_baselines: Vec<(PathBuf, String, bool)> = Vec::with_capacity(normalized_entries.len());
+
+    // Preflight every remaining file and verify checksums before mutating any game file.
+    for (entry, _norm_target, target_abs, is_addr) in &normalized_entries {
         if sha256_hex(&entry.bytes) != entry.expected_sha256 {
             return Err(HubError::security_violation("暂存的模组字节校验失败。"));
         }
-        let current_hash = compute_file_sha256(&target_abs)?;
-        if !entry.expected_original_sha256.is_empty()
-            && !current_hash.eq_ignore_ascii_case(&entry.expected_original_sha256)
-        {
-            return Err(HubError::security_violation(
-                "游戏原始资产哈希与适配基线不一致（可能版本不匹配或已被其他模组修改），已停止安装。",
-            ));
-        }
-        if current_hash.eq_ignore_ascii_case(&entry.expected_sha256) {
+        let baseline_hash = if target_abs.is_file() {
+            let current_hash = compute_file_sha256(target_abs)?;
+            if !entry.expected_original_sha256.is_empty()
+                && !current_hash.eq_ignore_ascii_case(&entry.expected_original_sha256)
+            {
+                return Err(HubError::security_violation(
+                    "游戏原始资产哈希与适配基线不一致（可能版本不匹配或已被其他模组修改），已停止安装。",
+                ));
+            }
+            if current_hash.eq_ignore_ascii_case(&entry.expected_sha256) {
+                return Err(HubError::invalid_manifest(
+                    "检测到游戏目录已存在相同外部模组文件且缺少备份，请先还原原版文件后再用星枢安装。",
+                ));
+            }
+            current_hash
+        } else if *is_addr {
+            // Uncached Addressables container (__data) can be safely created and cleaned up on restore.
+            String::new()
+        } else {
             return Err(HubError::invalid_manifest(
-                "检测到游戏目录已存在相同外部模组文件且缺少备份，请先还原原版文件后再用星枢安装。",
+                "游戏目标资产文件不存在，当前游戏版本或渠道可能尚未适配。",
             ));
-        }
-        targets_and_baselines.push((target_abs, current_hash));
+        };
+        targets_and_baselines.push((target_abs.clone(), baseline_hash, *is_addr));
     }
 
-    let mut receipt_files = Vec::with_capacity(staged.len());
-    for (idx, ((target_abs, baseline_hash), entry)) in
-        targets_and_baselines.iter().zip(staged.iter()).enumerate()
+    let mut receipt_files = Vec::with_capacity(normalized_entries.len());
+    for (idx, ((target_abs, baseline_hash, _is_addr), (entry, norm_target, _, _))) in
+        targets_and_baselines.iter().zip(normalized_entries.iter()).enumerate()
     {
-        let backup_dest = backup_file_path(root, &clean_id, idx)?;
-        let baseline_bytes = fs::read(target_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
-        if sha256_hex(&baseline_bytes) != *baseline_hash {
-            return Err(HubError::security_violation("备份期间原游戏文件发生变化，已终止。"));
-        }
-        atomic_write(&backup_dest, &baseline_bytes)?;
-        if compute_file_sha256(&backup_dest)? != *baseline_hash {
-            return Err(HubError::security_violation("安装前备份校验失败。"));
+        if !baseline_hash.is_empty() {
+            let backup_dest = backup_file_path(root, &clean_id, idx)?;
+            let baseline_bytes = fs::read(target_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
+            if sha256_hex(&baseline_bytes) != *baseline_hash {
+                return Err(HubError::security_violation("备份期间原游戏文件发生变化，已终止。"));
+            }
+            atomic_write(&backup_dest, &baseline_bytes)?;
+            if compute_file_sha256(&backup_dest)? != *baseline_hash {
+                return Err(HubError::security_violation("安装前备份校验失败。"));
+            }
         }
         receipt_files.push(WorkshopReceiptFile {
             index: idx,
-            target: entry.target_rel.clone(),
+            target: norm_target.clone(),
             mod_sha256: entry.expected_sha256.clone(),
             baseline_sha256: baseline_hash.clone(),
         });
@@ -646,11 +902,20 @@ pub(crate) fn install_bundle_entries(
     save_workshop_receipt(root, &receipt)?;
 
     let commit = (|| -> HubResult<()> {
-        for (idx, ((target_abs, _baseline_hash), entry)) in
-            targets_and_baselines.iter().zip(staged.iter()).enumerate()
+        for (idx, ((target_abs, baseline_hash, is_addr), (entry, _, _, _))) in
+            targets_and_baselines.iter().zip(normalized_entries.iter()).enumerate()
         {
             if let Ok(payload_dest) = payload_file_path(root, &receipt.mod_id, idx) {
                 let _ = atomic_write(&payload_dest, &entry.bytes);
+            }
+            if *is_addr && baseline_hash.is_empty() {
+                if let Some(parent_dir) = target_abs.parent() {
+                    let info_path = parent_dir.join("__info");
+                    if !info_path.exists() {
+                        let ts = chrono::Utc::now().timestamp().max(0);
+                        let _ = atomic_write(&info_path, format!("{ts}\n1\n{ts}\n").as_bytes());
+                    }
+                }
             }
             atomic_write(target_abs, &entry.bytes)?;
             let post_hash = compute_file_sha256(target_abs)?;
@@ -671,7 +936,7 @@ pub(crate) fn install_bundle_entries(
         };
     }
 
-    Ok(receipt)
+    Ok((receipt, skipped_count))
 }
 
 pub(crate) fn restore_bundle_receipt(root: &Path, receipt: &WorkshopReceipt) -> HubResult<()> {
@@ -684,7 +949,23 @@ pub(crate) fn restore_bundle_receipt(root: &Path, receipt: &WorkshopReceipt) -> 
 
     // Verify all backups and current target states before restoring any file.
     for f in &receipt.files {
-        let (_, target_abs) = validate_bundle_target(root, &f.target)?;
+        let (norm_target, target_abs) = validate_bundle_target(root, &f.target)?;
+        let current_hash = if target_abs.is_file() {
+            compute_file_sha256(&target_abs)?
+        } else {
+            String::new()
+        };
+        if f.baseline_sha256.is_empty() {
+            if !is_addressables_target(&norm_target) {
+                return Err(HubError::storage_error("安装前备份校验标识缺失，无法还原。"));
+            }
+            if !current_hash.is_empty() && !current_hash.eq_ignore_ascii_case(&f.mod_sha256) {
+                return Err(HubError::security_violation(
+                    "目标文件已被外部修改或游戏已更新，已停止还原以防覆盖。",
+                ));
+            }
+            continue;
+        }
         let backup_abs = backup_file_path(root, &receipt.mod_id, f.index)?;
         if !backup_abs.is_file() {
             return Err(HubError::storage_error("安装前备份文件缺失，无法还原。"));
@@ -692,11 +973,6 @@ pub(crate) fn restore_bundle_receipt(root: &Path, receipt: &WorkshopReceipt) -> 
         if !compute_file_sha256(&backup_abs)?.eq_ignore_ascii_case(&f.baseline_sha256) {
             return Err(HubError::security_violation("安装前备份文件校验失败，停止还原。"));
         }
-        let current_hash = if target_abs.is_file() {
-            compute_file_sha256(&target_abs)?
-        } else {
-            String::new()
-        };
         if !current_hash.eq_ignore_ascii_case(&f.mod_sha256)
             && !current_hash.eq_ignore_ascii_case(&f.baseline_sha256)
         {
@@ -708,6 +984,12 @@ pub(crate) fn restore_bundle_receipt(root: &Path, receipt: &WorkshopReceipt) -> 
 
     for f in &receipt.files {
         let (_, target_abs) = validate_bundle_target(root, &f.target)?;
+        if f.baseline_sha256.is_empty() {
+            if target_abs.is_file() {
+                fs::remove_file(&target_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
+            }
+            continue;
+        }
         let backup_abs = backup_file_path(root, &receipt.mod_id, f.index)?;
         let baseline_bytes = fs::read(&backup_abs).map_err(|e| HubError::storage_error(e.to_string()))?;
         if !sha256_hex(&baseline_bytes).eq_ignore_ascii_case(&f.baseline_sha256) {
@@ -796,13 +1078,16 @@ pub async fn workshop_download_and_install(
     app: AppHandle,
 ) -> HubResult<WorkshopInstallResult> {
     let mod_id = sanitize_mod_id(&request.mod_id)?;
-    match run_workshop_download_and_install(&app, &mod_id, request, &center, &install_service).await {
+    let guard = ActiveInstallGuard::try_acquire(&request.installation_id, &mod_id)?;
+    let track_id = guard.installation_id.clone();
+    let task_id = guard.task_id;
+    match run_workshop_download_and_install(&app, &track_id, task_id, &mod_id, request, &center, &install_service).await {
         Ok(result) => {
-            emit_mod_progress(&app, &mod_id, "done", 1, 1, 100, result.message.clone());
+            emit_tracked_mod_progress(&app, &track_id, task_id, &mod_id, "done", 1, 1, 100, result.message.clone());
             Ok(result)
         }
         Err(err) => {
-            emit_mod_progress(&app, &mod_id, "error", 0, 0, 0, err.message.clone());
+            emit_tracked_mod_progress(&app, &track_id, task_id, &mod_id, "error", 0, 0, 0, err.message.clone());
             Err(err)
         }
     }
@@ -810,6 +1095,8 @@ pub async fn workshop_download_and_install(
 
 async fn run_workshop_download_and_install(
     app: &AppHandle,
+    installation_id: &str,
+    task_id: u64,
     mod_id: &str,
     request: WorkshopInstallRequest,
     center: &ExtensionCenter,
@@ -818,7 +1105,7 @@ async fn run_workshop_download_and_install(
     let game = get_game(&center.db, &request.installation_id)?;
     let root = game_root(&game)?;
     game_closed(&game)?;
-    emit_mod_progress(app, mod_id, "fetching_meta", 0, 0, 2, "正在获取模组清单…");
+    emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "fetching_meta", 0, 0, 2, "正在获取模组清单…");
     let client = remote_content::client()?;
     let published = published_mod(&client, mod_id).await?;
     if !published.platforms.iter().any(|p| p == &game.platform) {
@@ -831,57 +1118,246 @@ async fn run_workshop_download_and_install(
 
     // Path 1: Explicit verified bundle file mapping (Seed items & curated bundle manifests).
     if published.install_kind == "bundle_mod" && !published.files.is_empty() {
-        let total = published.files.iter().try_fold(0_u64, |sum, f| sum.checked_add(f.size));
-        if published.files.len() > MAX_ZIP_ENTRIES || total.is_none_or(|n| n > MAX_ZIP_UNCOMPRESSED_BYTES) {
+        let total_declared = published.files.iter().try_fold(0_u64, |sum, f| sum.checked_add(f.size));
+        if published.files.len() > MAX_ZIP_ENTRIES || total_declared.is_none_or(|n| n > MAX_ZIP_UNCOMPRESSED_BYTES) {
             return Err(HubError::security_violation("工坊资源数量或总大小超过限制。"));
         }
-        let total_bytes = total.unwrap_or(0);
-        let file_count = published.files.len();
-        let mut completed_bytes = 0_u64;
-        let mut staged = Vec::with_capacity(file_count);
-        for (idx, f) in published.files.iter().enumerate() {
+
+        // Preflight active target owners before downloading large payloads.
+        let owners = crate::dropped_mods::collect_active_target_owners(&root, mod_id)?;
+        let mut preflight_conflicts: Vec<(String, String)> = Vec::new();
+        let mut downloadable: Vec<(&WorkshopDownloadFile, String)> = Vec::with_capacity(published.files.len());
+        let mut unique_targets = HashSet::new();
+        for f in &published.files {
             let (norm_target, _) = validate_bundle_target(&root, &f.target)?;
+            let key = target_key(&norm_target);
+            if !unique_targets.insert(key.clone()) {
+                return Err(HubError::invalid_manifest("工坊模组清单包含重复的目标路径。"));
+            }
+            if let Some(owner) = owners.get(&key) {
+                preflight_conflicts.push((norm_target, owner.clone()));
+                continue;
+            }
+            downloadable.push((f, norm_target));
+        }
+
+        if !preflight_conflicts.is_empty() && !request.skip_conflicts {
+            return Err(format_conflict_error(&preflight_conflicts, "安装"));
+        }
+        if downloadable.is_empty() {
+            return Err(HubError::invalid_manifest("所有目标资源均与其他已启用模组冲突，无剩余可安装文件。"));
+        }
+
+        let total_bytes = downloadable.iter().fold(0_u64, |sum, (f, _)| sum.saturating_add(f.size));
+        let file_count = downloadable.len();
+        let skipped_before_download = preflight_conflicts.len();
+        let cache_dir = payload_cache_dir(&root)?;
+
+        struct DownloadPlanItem {
+            idx: usize,
+            norm_target: String,
+            expected_sha256: String,
+            expected_original_sha256: String,
+            expected_size: u64,
+            path: String,
+        }
+
+        let mut plan_items = Vec::with_capacity(file_count);
+        for (idx, (f, norm_target)) in downloadable.iter().enumerate() {
             let path = format!("/api/workshop/mods/{mod_id}/payload/{}", f.sha256);
             if f.payload_url.as_deref() != Some(&path) {
                 return Err(HubError::invalid_manifest("该资源没有星枢服务器下载地址。"));
             }
-            let detail = format!("正在下载资源 ({}/{})", idx + 1, file_count);
-            let bytes = remote_content::verified_with_progress(
-                &client,
-                &path,
-                &f.sha256,
-                f.size,
-                MAX_PAYLOAD_BYTES,
-                |dl, _| {
-                    let current = completed_bytes.saturating_add(dl);
-                    let pct = scaled_download_percent(current, total_bytes);
-                    emit_mod_progress(app, mod_id, "downloading", current, total_bytes, pct, detail.clone());
-                },
-            )
-            .await?;
-            completed_bytes = completed_bytes.saturating_add(f.size);
-            staged.push(StagedBundle {
-                target_rel: norm_target,
+            plan_items.push(DownloadPlanItem {
+                idx,
+                norm_target: norm_target.clone(),
                 expected_sha256: f.sha256.to_ascii_lowercase(),
                 expected_original_sha256: f.original_sha256.to_ascii_lowercase(),
-                bytes,
+                expected_size: f.size,
+                path,
             });
         }
 
-        emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 95, "正在备份原版文件并写入模组…");
+        let mut results: Vec<Option<StagedBundle>> = (0..file_count).map(|_| None).collect();
+        let mut pending = Vec::new();
+        let mut cached_bytes = 0_u64;
+        let mut done_files = 0_usize;
+
+        for item in plan_items {
+            if let Some(bytes) = read_verified_cached_payload(&cache_dir, &item.expected_sha256, item.expected_size) {
+                cached_bytes = cached_bytes.saturating_add(item.expected_size);
+                done_files += 1;
+                results[item.idx] = Some(StagedBundle {
+                    target_rel: item.norm_target,
+                    expected_sha256: item.expected_sha256,
+                    expected_original_sha256: item.expected_original_sha256,
+                    bytes,
+                });
+            } else {
+                pending.push(item);
+            }
+        }
+
+        if cached_bytes > 0 {
+            let pct = scaled_download_percent(cached_bytes, total_bytes);
+            let msg = if pending.is_empty() {
+                format!("已全部命中本地缓存 ({done_files}/{file_count})，准备安装…")
+            } else {
+                format!("已命中本地缓存 ({done_files}/{file_count})，正在并发下载剩余资源…")
+            };
+            emit_tracked_mod_progress(
+                app,
+                installation_id,
+                task_id,
+                mod_id,
+                "downloading",
+                cached_bytes,
+                total_bytes,
+                pct,
+                msg,
+            );
+        }
+
+        if !pending.is_empty() {
+            let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS));
+            let aggregate_bytes = Arc::new(AtomicU64::new(cached_bytes));
+            let completed_files = Arc::new(AtomicUsize::new(done_files));
+            let last_emit = Arc::new(Mutex::new(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(200))
+                    .unwrap_or_else(Instant::now),
+            ));
+            let mut join_set: JoinSet<HubResult<(usize, StagedBundle)>> = JoinSet::new();
+
+            for item in pending {
+                let sem = Arc::clone(&sem);
+                let client = client.clone();
+                let cache_dir = cache_dir.clone();
+                let app_handle = app.clone();
+                let inst_id = installation_id.to_string();
+                let mod_id_owned = mod_id.to_string();
+                let agg_bytes = Arc::clone(&aggregate_bytes);
+                let comp_files = Arc::clone(&completed_files);
+                let last_emit = Arc::clone(&last_emit);
+
+                join_set.spawn(async move {
+                    let _permit = sem
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| HubError::storage_error("下载调度信号量已关闭。"))?;
+                    let mut last_dl = 0_u64;
+                    let bytes = remote_content::verified_with_progress(
+                        &client,
+                        &item.path,
+                        &item.expected_sha256,
+                        item.expected_size,
+                        MAX_PAYLOAD_BYTES,
+                        |dl, _| {
+                            let delta = dl.saturating_sub(last_dl);
+                            last_dl = dl;
+                            let cur = agg_bytes
+                                .fetch_add(delta, Ordering::Relaxed)
+                                .saturating_add(delta);
+                            let now = Instant::now();
+                            let should_emit = if let Ok(mut guard) = last_emit.lock() {
+                                if now.duration_since(*guard).as_millis() >= 80 || cur >= total_bytes {
+                                    *guard = now;
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+                            if should_emit {
+                                let done = comp_files.load(Ordering::Relaxed);
+                                let pct = scaled_download_percent(cur, total_bytes);
+                                emit_tracked_mod_progress(
+                                    &app_handle,
+                                    &inst_id,
+                                    task_id,
+                                    &mod_id_owned,
+                                    "downloading",
+                                    cur,
+                                    total_bytes,
+                                    pct,
+                                    format!("正在并发下载资源 ({done}/{file_count})"),
+                                );
+                            }
+                        },
+                    )
+                    .await?;
+
+                    write_cached_payload(&cache_dir, &item.expected_sha256, &bytes);
+                    let done_now = comp_files.fetch_add(1, Ordering::Relaxed) + 1;
+                    let cur_now = agg_bytes.load(Ordering::Relaxed);
+                    let pct_now = scaled_download_percent(cur_now, total_bytes);
+                    emit_tracked_mod_progress(
+                        &app_handle,
+                        &inst_id,
+                        task_id,
+                        &mod_id_owned,
+                        "downloading",
+                        cur_now,
+                        total_bytes,
+                        pct_now,
+                        format!("正在并发下载资源 ({done_now}/{file_count})"),
+                    );
+                    Ok((
+                        item.idx,
+                        StagedBundle {
+                            target_rel: item.norm_target,
+                            expected_sha256: item.expected_sha256,
+                            expected_original_sha256: item.expected_original_sha256,
+                            bytes,
+                        },
+                    ))
+                });
+            }
+
+            while let Some(joined) = join_set.join_next().await {
+                match joined {
+                    Ok(Ok((idx, staged_item))) => {
+                        results[idx] = Some(staged_item);
+                    }
+                    Ok(Err(err)) => {
+                        join_set.abort_all();
+                        return Err(err);
+                    }
+                    Err(join_err) => {
+                        join_set.abort_all();
+                        return Err(net_error(format!("模组下载任务异常中止：{join_err}")));
+                    }
+                }
+            }
+        }
+
+        let staged: Vec<StagedBundle> = results
+            .into_iter()
+            .map(|entry| entry.ok_or_else(|| HubError::storage_error("模组下载结果不完整。")))
+            .collect::<HubResult<Vec<_>>>()?;
+
+        emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "installing", total_bytes, total_bytes, 95, "正在备份原版文件并写入模组…");
         let name = published.name;
         let mod_id_owned = mod_id.to_string();
-        let receipt = tokio::task::spawn_blocking(move || {
+        let skip_conflicts = request.skip_conflicts;
+        let (receipt, skipped_in_install) = tokio::task::spawn_blocking(move || {
             let _lock = operation_lock(&root)?;
-            install_bundle_entries(&game, &root, &mod_id_owned, &name, &staged)
+            install_bundle_entries(&game, &root, &mod_id_owned, &name, &staged, skip_conflicts)
         })
         .await
         .map_err(|e| HubError::storage_error(e.to_string()))??;
+        let total_skipped = skipped_before_download + skipped_in_install;
+        let installed_count = receipt.files.len();
 
         return Ok(WorkshopInstallResult {
             mod_id: receipt.mod_id,
             phase: receipt.phase,
-            message: "已下载并通过 SHA-256 核验、原子备份原版资产后完成安装。".into(),
+            message: if total_skipped > 0 {
+                format!("已跳过 {total_skipped} 个冲突文件，完成剩余 {installed_count} 个资源的 SHA-256 核验与安装。")
+            } else {
+                "已下载并通过 SHA-256 核验、原子备份原版资产后完成安装。".into()
+            },
             downloaded_path: None,
             transaction_id: None,
         });
@@ -893,7 +1369,7 @@ async fn run_workshop_download_and_install(
         return Err(HubError::invalid_manifest("该条目没有星枢服务器托管包。"));
     }
     let total_bytes = published.size_bytes;
-    emit_mod_progress(app, mod_id, "downloading", 0, total_bytes, 4, "正在连接星枢工坊下载模组包…");
+    emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "downloading", 0, total_bytes, 4, "正在连接星枢工坊下载模组包…");
     let archive_bytes = remote_content::verified_with_progress(
         &client,
         &path,
@@ -902,12 +1378,12 @@ async fn run_workshop_download_and_install(
         MAX_ARCHIVE_BYTES,
         |dl, total| {
             let pct = scaled_download_percent(dl, total);
-            emit_mod_progress(app, mod_id, "downloading", dl, total, pct, "正在下载模组包…");
+            emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "downloading", dl, total, pct, "正在下载模组包…");
         },
     )
     .await?;
 
-    emit_mod_progress(app, mod_id, "verifying", total_bytes, total_bytes, 93, "正在校验 SHA-256 与资源清单…");
+    emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "verifying", total_bytes, total_bytes, 93, "正在校验 SHA-256 与资源清单…");
 
     if published.install_kind == "xspkg" {
         if mod_id.starts_with("xingshu.launcher.") {
@@ -917,7 +1393,7 @@ async fn run_workshop_download_and_install(
         let svc = install_service;
         let mod_name = published.name;
         let mod_id_owned = mod_id.to_string();
-        emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 97, "正在备份原版文件并写入模组…");
+        emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "installing", total_bytes, total_bytes, 97, "正在备份原版文件并写入模组…");
         let receipt = tokio::task::block_in_place(|| -> HubResult<WorkshopReceipt> {
             let work = tempfile::NamedTempFile::new().map_err(|e| HubError::storage_error(e.to_string()))?;
             fs::write(work.path(), &archive_bytes).map_err(|e| HubError::storage_error(e.to_string()))?;
@@ -957,22 +1433,28 @@ async fn run_workshop_download_and_install(
     }
 
     if published.install_kind == "bundle_mod" {
-        emit_mod_progress(app, mod_id, "installing", total_bytes, total_bytes, 96, "正在解析压缩包、备份原版并写入…");
+        emit_tracked_mod_progress(app, installation_id, task_id, mod_id, "installing", total_bytes, total_bytes, 96, "正在解析压缩包、备份原版并写入…");
         let root_for_zip = root.clone();
         let name = published.name;
         let mod_id_owned = mod_id.to_string();
-        let receipt = tokio::task::spawn_blocking(move || {
+        let skip_conflicts = request.skip_conflicts;
+        let (receipt, skipped_count) = tokio::task::spawn_blocking(move || {
             let _lock = operation_lock(&root_for_zip)?;
             let staged = extract_bundle_entries_from_zip(&root_for_zip, &archive_bytes)?;
-            install_bundle_entries(&game, &root_for_zip, &mod_id_owned, &name, &staged)
+            install_bundle_entries(&game, &root_for_zip, &mod_id_owned, &name, &staged, skip_conflicts)
         })
         .await
         .map_err(|e| HubError::storage_error(e.to_string()))??;
+        let installed_count = receipt.files.len();
 
         return Ok(WorkshopInstallResult {
             mod_id: receipt.mod_id,
             phase: receipt.phase,
-            message: "已解析 Bundle 资源包、备份原版文件并完成安装。".into(),
+            message: if skipped_count > 0 {
+                format!("已跳过 {skipped_count} 个冲突文件，备份原版并安装其余 {installed_count} 个资源。")
+            } else {
+                "已解析 Bundle 资源包、备份原版文件并完成安装。".into()
+            },
             downloaded_path: None,
             transaction_id: None,
         });
@@ -1139,8 +1621,17 @@ pub async fn workshop_toggle_mod(
             "bundle_mod" => {
                 if enabled {
                     let owners = crate::dropped_mods::collect_active_target_owners(&root, &clean_id)?;
-                    if receipt.files.iter().any(|file| owners.contains_key(&target_key(&file.target))) {
-                        return Err(HubError::security_violation("此资源由其他模组使用，请先停用冲突项。"));
+                    let conflicts: Vec<(String, String)> = receipt
+                        .files
+                        .iter()
+                        .filter_map(|file| {
+                            owners
+                                .get(&target_key(&file.target))
+                                .map(|owner| (file.target.clone(), owner.clone()))
+                        })
+                        .collect();
+                    if !conflicts.is_empty() {
+                        return Err(format_conflict_error(&conflicts, "启用"));
                     }
                 }
                 let files = receipt.files.iter().map(|file| {
@@ -1218,12 +1709,13 @@ mod tests {
             bytes: modded.clone(),
         }];
 
-        let receipt = install_bundle_entries(&game, tmp.path(), "sub.test001", "Test Skin", &staged).unwrap();
+        let (receipt, skipped) = install_bundle_entries(&game, tmp.path(), "sub.test001", "Test Skin", &staged, false).unwrap();
+        assert_eq!(skipped, 0);
         assert_eq!(receipt.phase, "installed");
         assert_eq!(fs::read(tmp.path().join(&rel)).unwrap(), modded);
 
         // Duplicate install before restore is rejected.
-        assert!(install_bundle_entries(&game, tmp.path(), "sub.test001", "Test Skin", &staged).is_err());
+        assert!(install_bundle_entries(&game, tmp.path(), "sub.test001", "Test Skin", &staged, false).is_err());
 
         restore_bundle_receipt(tmp.path(), &receipt).unwrap();
         assert_eq!(fs::read(tmp.path().join(&rel)).unwrap(), orig);
@@ -1241,7 +1733,7 @@ mod tests {
             expected_original_sha256: "f".repeat(64),
             bytes: modded,
         }];
-        assert!(install_bundle_entries(&game, tmp.path(), "sub.test002", "Bad Baseline", &staged).is_err());
+        assert!(install_bundle_entries(&game, tmp.path(), "sub.test002", "Bad Baseline", &staged, false).is_err());
         assert!(!tmp.path().join(".xingshu-mods/workshop-backups").exists());
     }
 
@@ -1256,7 +1748,7 @@ mod tests {
             expected_original_sha256: sha256_hex(&orig),
             bytes: modded,
         }];
-        assert!(install_bundle_entries(&game, tmp.path(), "sub.test003", "Running Game", &staged).is_err());
+        assert!(install_bundle_entries(&game, tmp.path(), "sub.test003", "Running Game", &staged, false).is_err());
     }
 
     #[test]
@@ -1323,11 +1815,142 @@ mod tests {
         assert!(staged.iter().any(|s| s.target_rel == addr_rel));
 
         // Full install -> toggle disabled/enabled -> restore roundtrip on mixed .bundle + Addressables __data
-        let receipt = install_bundle_entries(&game, tmp.path(), "sub.mixed01", "NunNan Mixed", &staged).unwrap();
+        let (receipt, _) = install_bundle_entries(&game, tmp.path(), "sub.mixed01", "NunNan Mixed", &staged, false).unwrap();
         assert_eq!(fs::read(tmp.path().join(&bundle_rel)).unwrap(), modded);
         assert_eq!(fs::read(&addr_abs).unwrap(), b"mod-addr");
         restore_bundle_receipt(tmp.path(), &receipt).unwrap();
         assert_eq!(fs::read(tmp.path().join(&bundle_rel)).unwrap(), orig);
         assert_eq!(fs::read(&addr_abs).unwrap(), b"orig-addr");
+    }
+
+    #[test]
+    fn reports_conflicting_owner_and_supports_skip_conflicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (game, rel_a, orig_a, mod_a) = fixture_game(tmp.path());
+        let rel_b = "AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64/fedcba9876543210fedcba9876543210.bundle";
+        let abs_b = tmp.path().join(rel_b);
+        let orig_b = b"orig-bundle-b".to_vec();
+        let mod_b = b"skin-bundle-b".to_vec();
+        fs::write(&abs_b, &orig_b).unwrap();
+
+        let staged_first = vec![StagedBundle {
+            target_rel: rel_a.clone(),
+            expected_sha256: sha256_hex(&mod_a),
+            expected_original_sha256: sha256_hex(&orig_a),
+            bytes: mod_a.clone(),
+        }];
+        let (receipt_first, _) = install_bundle_entries(&game, tmp.path(), "sub.cards01", "NunNan Card Pack", &staged_first, false).unwrap();
+
+        let alt_a = b"hannah-card-override".to_vec();
+        let staged_second = vec![
+            StagedBundle {
+                target_rel: rel_a.clone(),
+                expected_sha256: sha256_hex(&alt_a),
+                expected_original_sha256: sha256_hex(&orig_a),
+                bytes: alt_a,
+            },
+            StagedBundle {
+                target_rel: rel_b.to_string(),
+                expected_sha256: sha256_hex(&mod_b),
+                expected_original_sha256: sha256_hex(&orig_b),
+                bytes: mod_b.clone(),
+            },
+        ];
+
+        let err = install_bundle_entries(&game, tmp.path(), "sub.skin01", "Hannah Skin", &staged_second, false).unwrap_err();
+        assert_eq!(err.code, "MOD_TARGET_CONFLICT");
+        assert!(err.message.contains("NunNan Card Pack"), "msg: {}", err.message);
+        assert!(err.message.contains("0123456789abcdef0123456789abcdef.bundle"), "msg: {}", err.message);
+
+        // Retry with skip_conflicts = true -> keeps NunNan's file, installs rel_b cleanly.
+        let (receipt_second, skipped) = install_bundle_entries(&game, tmp.path(), "sub.skin01", "Hannah Skin", &staged_second, true).unwrap();
+        assert_eq!(skipped, 1);
+        assert_eq!(receipt_second.files.len(), 1);
+        assert_eq!(fs::read(tmp.path().join(&rel_a)).unwrap(), mod_a);
+        assert_eq!(fs::read(&abs_b).unwrap(), mod_b);
+
+        // Both restore independently without interfering with each other.
+        restore_bundle_receipt(tmp.path(), &receipt_second).unwrap();
+        assert_eq!(fs::read(&abs_b).unwrap(), orig_b);
+        assert_eq!(fs::read(tmp.path().join(&rel_a)).unwrap(), mod_a);
+        restore_bundle_receipt(tmp.path(), &receipt_first).unwrap();
+        assert_eq!(fs::read(tmp.path().join(&rel_a)).unwrap(), orig_a);
+    }
+
+    #[test]
+    fn installs_and_restores_uncached_addressables_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (game, _, _, _) = fixture_game(tmp.path());
+        let addr_rel = "AstralParty_CN_Data/com.unity.addressables/AssetBundles/432565258568be7410c7dea80140f95c/9648aae2b918d4ab199afe74fa2a55b7/__data";
+        let addr_abs = tmp.path().join(addr_rel);
+        let mod_voice = b"custom-wwise-bank-payload".to_vec();
+
+        let staged = vec![StagedBundle {
+            target_rel: addr_rel.to_string(),
+            expected_sha256: sha256_hex(&mod_voice),
+            expected_original_sha256: "deadbeef".repeat(8),
+            bytes: mod_voice.clone(),
+        }];
+
+        let (receipt, skipped) = install_bundle_entries(&game, tmp.path(), "sub.voice01", "Hannah Voice", &staged, false).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(receipt.files[0].baseline_sha256, "");
+        assert_eq!(fs::read(&addr_abs).unwrap(), mod_voice);
+        assert!(addr_abs.parent().unwrap().join("__info").is_file());
+
+        // Toggling off/on via mod_resources::set_enabled works cleanly for empty baseline_sha256.
+        let (_, target) = validate_bundle_target(tmp.path(), addr_rel).unwrap();
+        let switch = [SwitchFile {
+            target,
+            baseline: backup_file_path(tmp.path(), "sub.voice01", 0).unwrap(),
+            payload: payload_file_path(tmp.path(), "sub.voice01", 0).unwrap(),
+            baseline_sha256: receipt.files[0].baseline_sha256.clone(),
+            mod_sha256: receipt.files[0].mod_sha256.clone(),
+        }];
+        mod_resources::set_enabled(&switch, false).unwrap();
+        assert!(!addr_abs.exists());
+        mod_resources::set_enabled(&switch, true).unwrap();
+        assert_eq!(fs::read(&addr_abs).unwrap(), mod_voice);
+
+        restore_bundle_receipt(tmp.path(), &receipt).unwrap();
+        assert!(!addr_abs.exists());
+    }
+
+    #[test]
+    fn rejects_duplicate_in_flight_install_and_releases_on_drop() {
+        let inst_id = "__test_single_flight_inst__";
+        {
+            let guard = ActiveInstallGuard::try_acquire(inst_id, "local.mod_a").unwrap();
+            let err = match ActiveInstallGuard::try_acquire(inst_id, "local.mod_b") {
+                Ok(_) => panic!("expected duplicate acquire to fail"),
+                Err(err) => err,
+            };
+            assert_eq!(err.code, "MOD_INSTALL_IN_PROGRESS");
+            assert!(err.message.contains("local.mod_a"));
+            let snapshot = workshop_active_install_progress(inst_id.to_string()).unwrap();
+            assert_eq!(snapshot.mod_id, "local.mod_a");
+            assert_eq!(snapshot.task_id, guard.task_id);
+        }
+        assert!(workshop_active_install_progress(inst_id.to_string()).is_none());
+        let reacquired = ActiveInstallGuard::try_acquire(inst_id, "local.mod_b").unwrap();
+        drop(reacquired);
+    }
+
+    #[test]
+    fn payload_cache_reuses_valid_bundle_and_purges_corrupt_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = payload_cache_dir(tmp.path()).unwrap();
+        let payload = b"valid unity asset bundle payload bytes".to_vec();
+        let digest = sha256_hex(&payload);
+
+        write_cached_payload(&cache_dir, &digest, &payload);
+        let hit = read_verified_cached_payload(&cache_dir, &digest, payload.len() as u64).unwrap();
+        assert_eq!(hit, payload);
+
+        // Corrupt file in cache -> must fail verification and purge stale file.
+        let cached_file = cached_payload_file(&cache_dir, &digest).unwrap();
+        fs::write(&cached_file, b"tampered-bytes").unwrap();
+        assert!(read_verified_cached_payload(&cache_dir, &digest, payload.len() as u64).is_none());
+        assert!(!cached_file.exists());
     }
 }

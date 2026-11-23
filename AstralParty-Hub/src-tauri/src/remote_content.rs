@@ -9,7 +9,8 @@ pub fn client() -> HubResult<reqwest::Client> {
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(120))
+        .read_timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(900))
         .build()
         .map_err(|_| network_error("无法初始化星枢下载服务。"))
 }

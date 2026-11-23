@@ -37,7 +37,13 @@ export default defineConfig(({ command, mode }) => {
     apply: 'build',
     generateBundle() {
       if (!launcher) return;
-      for (const fileName of ['brand/xingshu.svg', 'brand/xingshu-mark.svg', 'cards/card_fallback.svg']) {
+      for (const fileName of [
+        'brand/xingshu.svg',
+        'brand/xingshu-mark.svg',
+        'brand/astral-party-logo-zh.png',
+        'brand/astral-party-logo-en.png',
+        'cards/card_fallback.svg',
+      ]) {
         this.emitFile({ type: 'asset', fileName, source: readFileSync(new URL(`./public/${fileName}`, import.meta.url)) });
       }
     },

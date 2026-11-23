@@ -15,8 +15,8 @@ impl Default for ArchiveLimits {
     fn default() -> Self {
         Self {
             max_file_count: 2000,
-            max_total_uncompressed_bytes: 1024 * 1024 * 1024,      // 1 GB
-            max_single_file_uncompressed_bytes: 250 * 1024 * 1024, // 250 MB
+            max_total_uncompressed_bytes: 2 * 1024 * 1024 * 1024,  // 2 GB
+            max_single_file_uncompressed_bytes: 512 * 1024 * 1024, // 512 MB
             max_compression_ratio: 50.0,
         }
     }

@@ -16,5 +16,6 @@
   {"id":"static-portraits","name":"立绘替换","description":"独立的立绘与动态资源显示设置","types":["StaticPortraitGUI"]},
   {"id":"settlement-capture","name":"结算截图","description":"专用的结算截图入口","types":["SettlementScreenshot"]},
   {"id":"select-map-name","name":"选人地图提示","description":"在选人界面右侧显示当前地图名称","types":["SelectRoleMapNameHint"]},
-  {"id":"battle-card-points","name":"战斗卡牌点数","description":"战斗卡牌打出后显示点数与加成明细","types":["BattleCardPointHint"]}
+  {"id":"battle-card-points","name":"战斗卡牌点数","description":"战斗卡牌打出后显示点数与加成明细","types":["BattleCardPointHint"]},
+  {"id":"custom-lobby-bg","name":"自定义大厅背景","description":"在游戏内免改原包替换大厅视频/静态图/USM 背景并兼容隐藏 UI 与拖动缩放","types":["CustomLobbyBackground"]}
 ]

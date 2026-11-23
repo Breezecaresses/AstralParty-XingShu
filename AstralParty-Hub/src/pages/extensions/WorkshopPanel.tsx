@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
@@ -69,6 +69,7 @@ export function WorkshopPanel({
   const [error, setError] = useState('');
   const [localStates, setLocalStates] = useState<Record<string, WorkshopLocalItemState>>({});
   const [actionId, setActionId] = useState('');
+  const busyRef = useRef(false);
   const [notice, setNotice] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   const [detailItem, setDetailItem] = useState<WorkshopModItem | null>(null);
@@ -128,6 +129,8 @@ export function WorkshopPanel({
       setNotice({ kind: 'error', text: '请先在上方选择并定位游戏目录，再一键安装模组。' });
       return;
     }
+    if (busyRef.current || actionId) return;
+    busyRef.current = true;
     setActionId(item.id);
     onBusy?.(true);
     setNotice({ kind: 'info', text: `正在下载并校验「${item.name}」…` });
@@ -137,15 +140,23 @@ export function WorkshopPanel({
       await loadLocalStates();
       onInstalled?.();
     } catch (err) {
-      setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code || '') : '';
+      if (code === 'MOD_INSTALL_IN_PROGRESS' || msg.includes('正在处理')) {
+        setNotice({ kind: 'info', text: '当前目录已有模组下载或安装任务进行中，请等待完成。' });
+      } else {
+        setNotice({ kind: 'error', text: msg });
+      }
     } finally {
+      busyRef.current = false;
       setActionId('');
       onBusy?.(false);
     }
   };
 
   const handleDesktopRestore = async (item: WorkshopModItem) => {
-    if (!installationId) return;
+    if (!installationId || busyRef.current || actionId) return;
+    busyRef.current = true;
     setActionId(item.id);
     onBusy?.(true);
     try {
@@ -156,6 +167,7 @@ export function WorkshopPanel({
     } catch (err) {
       setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
     } finally {
+      busyRef.current = false;
       setActionId('');
       onBusy?.(false);
     }

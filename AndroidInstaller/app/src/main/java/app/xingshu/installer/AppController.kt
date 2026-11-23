@@ -156,6 +156,8 @@ internal class AppController(private val activity: Activity) {
     var runtimeProgress by mutableStateOf(RuntimeProgressState())
     var conflictPrompt by mutableStateOf<ConflictPrompt?>(null)
     var cacheBytes by mutableLongStateOf(0L)
+    var coreSpec by mutableStateOf(CoreRuntimeSpec.embedded())
+    @Volatile private var lastShizukuSpecJson: String? = null
 
     // Game channels
     val channels = mutableStateListOf<ChannelEntry>()
@@ -225,6 +227,7 @@ internal class AppController(private val activity: Activity) {
     private val shizukuDead = Shizuku.OnBinderDeadListener {
         activity.runOnUiThread {
             remoteBinder = null
+            lastShizukuSpecJson = null
             bindingShizuku = false
             appendLog("Shizuku 服务连接已断开。")
         }
@@ -243,6 +246,7 @@ internal class AppController(private val activity: Activity) {
     private val shizukuConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             remoteBinder = IInstaller.Stub.asInterface(binder)
+            lastShizukuSpecJson = null
             useShizuku = true
             bindingShizuku = false
             appendLog("Shizuku 授权通道已就绪。")
@@ -252,6 +256,7 @@ internal class AppController(private val activity: Activity) {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             remoteBinder = null
+            lastShizukuSpecJson = null
             bindingShizuku = false
         }
     }
@@ -283,6 +288,12 @@ internal class AppController(private val activity: Activity) {
         }
 
         handleIntent(initialIntent)
+        worker.execute {
+            try {
+                resolveCoreSpecBlocking(forceRefresh = false)
+            } catch (_: Exception) {
+            }
+        }
         refreshWorkshopAsync()
         checkAssistantUpdate(silent = true)
 
@@ -681,7 +692,9 @@ internal class AppController(private val activity: Activity) {
                     throw IOException("未发现可用无线调试端口，请开启开发者选项「无线调试」并核对端口号。")
                 }
                 val adb = requireLocalAdb()
+                val spec = resolveCoreSpecBlocking(forceRefresh = false)
                 adb.connect(targetHost, targetPort)
+                adb.syncCoreSpec(spec)
                 val scanJson = adb.scanPackages()
                 val modJson = adb.listInstalledMods(selectedPackageName)
                 activity.runOnUiThread {
@@ -717,9 +730,41 @@ internal class AppController(private val activity: Activity) {
 
     // ---- Scanning & Core Plugin Mod ----
 
+    private fun resolveCoreSpecBlocking(forceRefresh: Boolean): CoreRuntimeSpec {
+        val resolved = CoreRuntimeSpec.resolve(appContext.filesDir, BuildConfig.VERSION_CODE, forceRefresh)
+        activity.runOnUiThread {
+            if (!disposed) {
+                coreSpec = resolved
+            }
+        }
+        return resolved
+    }
+
+    private fun syncCoreSpecToPrivilegeBlocking(spec: CoreRuntimeSpec) {
+        if (useShizuku) {
+            val binder = remoteBinder ?: throw IOException("Shizuku 服务未就绪")
+            val canonical = spec.toCanonicalJson()
+            if (canonical != lastShizukuSpecJson) {
+                val parsed = MiniJson.parseObject(binder.setCoreSpec(canonical))
+                if (parsed["ok"] != true) {
+                    throw IOException(MiniJson.stringField(parsed, "error").ifEmpty { "同步核心组件清单失败" })
+                }
+                lastShizukuSpecJson = canonical
+            }
+        } else {
+            requireLocalAdb().syncCoreSpec(spec)
+        }
+    }
+
     fun scanPackagesAndInspect() {
         if (!isPrivilegeReady()) {
             scanOfflinePackages()
+            worker.execute {
+                try {
+                    resolveCoreSpecBlocking(forceRefresh = true)
+                } catch (_: Exception) {
+                }
+            }
             toast("已刷新本地已安装渠道列表；连接无线调试或 Shizuku 后可管理模组。")
             return
         }
@@ -727,6 +772,8 @@ internal class AppController(private val activity: Activity) {
         busy = true
         worker.execute {
             try {
+                val spec = resolveCoreSpecBlocking(forceRefresh = true)
+                syncCoreSpecToPrivilegeBlocking(spec)
                 val scanJson = if (useShizuku) remoteBinder!!.scanPackages() else requireLocalAdb().scanPackages()
                 val inspectOut = if (useShizuku) remoteBinder!!.inspect(pkg) else requireLocalAdb().inspect(pkg)
                 activity.runOnUiThread {
@@ -752,6 +799,8 @@ internal class AppController(private val activity: Activity) {
         busy = true
         worker.execute {
             val out = try {
+                val spec = resolveCoreSpecBlocking(forceRefresh = true)
+                syncCoreSpecToPrivilegeBlocking(spec)
                 if (useShizuku) remoteBinder!!.inspect(pkg) else requireLocalAdb().inspect(pkg)
             } catch (e: Exception) {
                 "检查未通过：${e.message}"
@@ -776,6 +825,8 @@ internal class AppController(private val activity: Activity) {
         busy = true
         worker.execute {
             try {
+                val spec = resolveCoreSpecBlocking(forceRefresh = true)
+                syncCoreSpecToPrivilegeBlocking(spec)
                 if (!restore && conflictHash == null) {
                     val preflight = if (useShizuku) remoteBinder!!.inspect(pkg) else requireLocalAdb().inspect(pkg)
                     if (!preflight.startsWith("游戏版本匹配") || preflight.contains("游戏仍在运行")) {
@@ -800,7 +851,7 @@ internal class AppController(private val activity: Activity) {
                     }
                 }
 
-                val out = applyCorePluginBlocking(pkg, restore, conflictHash)
+                val out = applyCorePluginBlocking(pkg, restore, conflictHash, spec)
                 val scanJson = if (useShizuku) remoteBinder!!.scanPackages() else requireLocalAdb().scanPackages()
                 activity.runOnUiThread {
                     if (disposed) return@runOnUiThread
@@ -823,16 +874,21 @@ internal class AppController(private val activity: Activity) {
         }
     }
 
-    private fun applyCorePluginBlocking(pkg: String, restore: Boolean, conflictHash: String?): String {
+    private fun applyCorePluginBlocking(
+        pkg: String,
+        restore: Boolean,
+        conflictHash: String?,
+        spec: CoreRuntimeSpec = resolveCoreSpecBlocking(forceRefresh = false),
+    ): String {
         val cacheDir = PayloadDownloadManager.cacheDir(appContext)
-        val total = if (restore) PayloadSpec.VANILLA_SIZE else PayloadSpec.CANDIDATE_SIZE
+        val total = if (restore) spec.vanillaSize else spec.candidateSize
         activity.runOnUiThread {
             runtimeProgress = RuntimeProgressState(
                 active = true,
                 received = 0L,
                 total = total,
                 speed = 0L,
-                stage = if (restore) "正在下载官方原版还原包…" else "正在下载星枢官方插件 Mod…",
+                stage = if (restore) "正在下载官方原版还原包…" else "正在下载星枢官方插件 Mod ${spec.runtimeVersion}…",
             )
         }
         val listener = PayloadDownloadManager.ProgressListener { rec, tot, spd, st ->
@@ -842,17 +898,17 @@ internal class AppController(private val activity: Activity) {
         }
         val candidateFile = if (restore) null else PayloadDownloadManager.ensureDownloaded(
             cacheDir,
-            PayloadSpec.CANDIDATE_URL,
-            PayloadSpec.PATCH,
-            PayloadSpec.CANDIDATE_SIZE,
-            "星枢官方插件 Mod ${PayloadSpec.VERSION}",
+            spec.candidateUrl,
+            spec.patchSha256,
+            spec.candidateSize,
+            "星枢官方插件 Mod ${spec.runtimeVersion}",
             listener,
         )
         val vanillaFile = if (restore) PayloadDownloadManager.ensureDownloaded(
             cacheDir,
-            PayloadSpec.VANILLA_URL,
-            PayloadSpec.VANILLA,
-            PayloadSpec.VANILLA_SIZE,
+            spec.vanillaUrl,
+            spec.vanillaSha256,
+            spec.vanillaSize,
             "官方原版备份",
             listener,
         ) else null
@@ -938,17 +994,20 @@ internal class AppController(private val activity: Activity) {
         if (busy || batchModsBusy) return
         if (!isPrivilegeReady()) {
             showConnectSheet = true
-            toast("请先连接无线调试或 Shizuku，即可一键安装全部 18 项官方模组。")
+            toast("请先连接无线调试或 Shizuku，即可一键安装全部 ${OfficialModulesCatalog.ALL.size} 项官方模组。")
             return
         }
         val pkg = selectedPackageName
         val currentState = selectedChannel()?.installState ?: ""
+        val prevRuntime = coreSpec.runtimeVersion
         batchModsBusy = true
         worker.execute {
             try {
+                val spec = resolveCoreSpecBlocking(forceRefresh = true)
+                syncCoreSpecToPrivilegeBlocking(spec)
                 var coreInstalledNow = false
-                if (includeCore && currentState != "installed") {
-                    val out = applyCorePluginBlocking(pkg, restore = false, conflictHash = null)
+                if (includeCore && (currentState != "installed" || spec.runtimeVersion != prevRuntime)) {
+                    val out = applyCorePluginBlocking(pkg, restore = false, conflictHash = null, spec = spec)
                     if (out.startsWith("未完成") || out.startsWith("检查未通过") || out.contains("同位置覆盖冲突")) {
                         val scanJson = if (useShizuku) remoteBinder!!.scanPackages() else requireLocalAdb().scanPackages()
                         activity.runOnUiThread {
@@ -1022,7 +1081,7 @@ internal class AppController(private val activity: Activity) {
                     if (parsed["ok"] == true) {
                         applyOfficialModulesMap(parsed["officialModules"])
                         activeModuleCount = MiniJson.longField(parsed, "activeModuleCount", 0L).toInt()
-                        toast("已卸载所有 18 项星枢官方功能模组；如需还原纯净原版可点击上方卸载核心插件。")
+                        toast("已卸载所有 ${OfficialModulesCatalog.ALL.size} 项星枢官方功能模组；如需还原纯净原版可点击上方卸载核心插件。")
                     } else {
                         toast(MiniJson.stringField(parsed, "error").ifEmpty { "卸载未完成" })
                     }
@@ -1110,7 +1169,7 @@ internal class AppController(private val activity: Activity) {
                             if (n == -1) break
                             bytes += n
                             if (bytes > PayloadDownloadManager.MAX_PAYLOAD_BYTES) {
-                                throw IOException("导入文件超过 128 MB 上限")
+                                throw IOException("导入文件超过 1GB 上限")
                             }
                             digest.update(buf, 0, n)
                             output.write(buf, 0, n)
@@ -1878,7 +1937,7 @@ internal class AppController(private val activity: Activity) {
     fun buildDiagnosticReport(): String = buildString {
         appendLine("=== 星枢安卓启动器 · 诊断报告 ===")
         appendLine("版本：${BuildConfig.VERSION_NAME} (code=${BuildConfig.VERSION_CODE})")
-        appendLine("官方插件目标组件：${PayloadSpec.VERSION}")
+        appendLine("官方插件目标组件：${coreSpec.runtimeVersion}（适配游戏 ${coreSpec.gameVersion} · 来源 ${coreSpec.source}）")
         appendLine("设备：${Build.MODEL} / Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         appendLine("选中渠道包名：$selectedPackageName")
         appendLine("已发现渠道数：${channels.size}")

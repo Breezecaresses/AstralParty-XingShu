@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.7">下载 v0.1.7</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8">下载 v0.1.8</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">在线网页版</a> ·
   <a href="docs/README.md">文档与验证记录</a> ·
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
@@ -35,16 +35,16 @@
 
 ## 正式版本
 
-[下载星枢 v0.1.7](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.7)（详见[发布记录](docs/records/RELEASE_0.1.7.md)），电脑端与安卓手机端同步适配《吉星派对》`3.3.0`（资源版本 `160`）。
+[下载星枢 v0.1.8](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.8)（详见[发布记录](docs/records/RELEASE_0.1.8.md)），电脑端与安卓手机端同步适配《吉星派对》`3.3.0`（资源版本 `160`）。
 
 | 平台 | 获取方式 | 说明 |
 | --- | --- | --- |
-| **Windows 桌面端** | `XingShu_Hub_0.1.7_x64-setup.exe` / `XingShu_Desktop_0.1.7.zip` | **极简纯启动器发行**：提供一键安装包与解压即用便携包（仅含 `Hub/xingshu-hub.exe` 与说明文档，彻底移除独立安装助手及冗余 `Runtime/`、`Android/` 文件夹）；内嵌冲突检测/卸载还原，并在「模组」页按需在线安装**星枢官方插件 Mod**（`r8.40`）与 18 项官方模块。 |
+| **Windows 桌面端** | `XingShu_Hub_0.1.8_x64-setup.exe` / `XingShu_Desktop_0.1.8.zip` | **极简纯启动器 + 完全独立热更新核心**：提供一键安装包与便携包（仅含 `Hub/xingshu-hub.exe` 与说明文档）。通过远端 `core-manifest.json` 热更新核心插件而无需升级启动器，集成 4 路并发 SHA-256 缓存下载、重排 Mod 详情与表情回应，并可按需安装**星枢官方插件 Mod**（`r8.41` LZ4）与 **19 项官方模块**。 |
 | **在线网页版** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | 免安装打开即用：Modrinth 风格社区**模组 / 卡牌 / 皮肤工坊**浏览下载与作者投稿、星枢平台账号体系、UID 战绩查询、`.rep` / 对局编号回放深度分析与离线全量图鉴。 |
-| **安卓手机端** | `XingShu_Android_0.1.7.apk` / `XingShu_Android_0.1.7.zip` | 全新 Kotlin + Jetpack Compose Material 3 **轻量纯启动器**：支持直装 APK 或极简 ZIP（仅含 `星枢启动器.apk` 与说明文件，彻底取消独立助手命名与重复手替文件），按需从官方 HTTPS 拉取并校验 SHA-256 运行包，支持 Shizuku 与无线/USB ADB、动态主题与自定义壁纸、PE 工坊与本地模组/卡面导入。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
+| **安卓手机端** | `XingShu_Android_0.1.8.apk` / `XingShu_Android_0.1.8.zip` | 全新 Kotlin + Jetpack Compose Material 3 **轻量纯启动器**：支持直装 APK 或极简 ZIP（仅含 `星枢启动器.apk` 与说明文件）。新增独立 `CoreRuntimeSpec`（`android-core-manifest.json`）与 Shizuku/ADB 同步，后续核心框架与游戏新版本更新无需重装 APK 即可在线热更。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
 
 > [!NOTE]
-> 软件自更新不会自动覆盖游戏内插件。应用自更新完成后，请先正常退出游戏，再前往「模组」页安装或升级**星枢官方插件 Mod**。详见[v0.1.7 发布记录](docs/records/RELEASE_0.1.7.md)与[发布打包说明](docs/guides/RELEASE_PACKAGING.md)。
+> 自 `0.1.8` 起，核心框架（**星枢官方插件 Mod**）已彻底解耦并独立托管：未来发布新版核心插件或适配游戏新版本时，老版本电脑 Hub 与手机 APK 均可在「模组」页直接在线热更核心插件，无需重装启动器。详见[v0.1.8 发布记录](docs/records/RELEASE_0.1.8.md)与[发布打包说明](docs/guides/RELEASE_PACKAGING.md)。
 
 ---
 
@@ -52,18 +52,18 @@
 
 **AstralParty-XingShu（星枢）** 是面向《Astral Party》（吉星派对）的多端纯启动器、模组工坊、回放分析平台与模块化游戏增强套件：
 
-1. **AstralParty-Hub（桌面端 & 网页版）**：基于 Tauri 2 + Rust + React 19 + TypeScript 构建。桌面端默认以纯净启动器运行，内嵌目录指纹检测、冲突扫描、跨版本备份与一键还原（彻底取消外部 WinForms 安装助手弹窗），并集成 PCL 风格动态启动与主题、在线大厅房间管理、`.rep` 逐帧回放复盘与模组工坊。
-2. **星枢官方插件 Mod（`r8.40`，C# / Unity）**：整合为模块化游戏内插件体系，提供 18 项可独立开关或一键安装的官方功能模块（队友手牌监视、防御/击飞预测、战斗卡牌点数提示、选人界面地图显示、弃牌防误触、怪物技能冷却追踪、自由缩放镜头、对局统计与原生游戏内功能中心，已修复 `Setting` 异步图集竞态导致的面板全白问题）。
-3. **全新安卓纯启动器（`AndroidInstaller`，Kotlin / Jetpack Compose）**：采用 Material 3 与原创顶部指示线底部导航栏重制，支持动态配色/壁纸、Shizuku/无线 ADB 授权安装、18 项官方模块管理、PE 模组工坊与 Windows 卡牌方案 ZIP 导入。
+1. **AstralParty-Hub（桌面端 & 网页版）**：基于 Tauri 2 + Rust + React 19 + TypeScript 构建。桌面端默认以纯净启动器运行，支持远端核心清单独立热更新、Rust 单飞锁防连点与 4 路并发 SHA-256 缓存下载、内置冲突检测与跨版本备份还原、PCL 风格启动体验与《星引擎 PARTY》官方徽标、在线大厅房间管理、`.rep` 逐帧回放复盘与表情回应工坊。
+2. **星枢官方插件 Mod（`r8.41` 电脑端 / `android-preview8.36` 手机端，C# / Unity）**：独立可热更新游戏内插件核心，现提供 **19 项**可单独开关或一键安装的官方功能模块（新增**自定义大厅背景**，并含队友手牌监视、防御/击飞预测、战斗卡牌点数提示、选人界面地图显示、弃牌防误触、怪物技能冷却追踪、自由缩放镜头、对局统计与原生游戏内功能中心）。
+3. **全新安卓纯启动器（`AndroidInstaller`，Kotlin / Jetpack Compose）**：采用 Material 3 与原创顶部指示线底部导航栏，支持远端 `CoreRuntimeSpec` 独立核心热更、动态配色/壁纸、Shizuku/无线 ADB 双通道、19 项官方模块管理、PE 模组工坊与 Windows 卡牌方案 ZIP 导入。
 
 ---
 
-## v0.1.7 核心功能亮点
+## v0.1.8 核心功能亮点
 
-- **双端纯启动器 + 模块化官方插件**：电脑端与手机端默认支持纯净启动官方客户端，亦可前往「模组」页一键安装**星枢官方插件 Mod**及全部 18 项官方模块（实时展示下载进度），随时单独启停或一键还原官方原版。
-- **内置冲突检查与残留识别（零外部弹窗）**：将旧版「星枢安装助手」能力完全并入 Hub，精确识别原版基准及 `r8.38` / `r8.39` 等历史残留版本，支持确认备份冲突文件后安全覆盖与跨版本回滚。
-- **全新 Jetpack Compose 安卓启动器**：移除冗重内置运行库，安装包大幅瘦身；按需拉取并校验官方包体，配备独立「启动 / 模组 / 工坊 / 自定义 / 设置」五栏导航与原创顶线按压交互反馈。
-- **工坊生态与图鉴覆盖追踪**：网页版与桌面端共用 Modrinth 风格项目详情、动态角色表情回应与作者主页；离线图鉴（38 角色配置、75 卡牌、93 筹码、26 地图）直接标注本地已生效 Mod 替换徽章。
+- **双端完全独立热更新核心框架**：桌面端接入 `core-manifest.json`，安卓端新增 `CoreRuntimeSpec` 对接 `android-core-manifest.json` 并通过 Shizuku IPC 与无线调试同步，核心框架与游戏适配信息脱离启动器发布周期独立热更。
+- **19 项模块化官方功能（新增「自定义大厅背景」）**：上线第 19 项官方模块 `xingshu.launcher.custom-lobby-bg`，支持局内自定义大厅背景并零依赖持久化恢复；双端保持默认纯净启动官方原版。
+- **EdgeOne CDN 加速 + LZ4 瘦身 + 并发缓存防错乱**：全站接入 EdgeOne CDN 加速并开启服务端 `tcp_bbr`，PC `r8.41` 开启 LZ4 压缩降至 ~`9.3 MB`；桌面端新增目录单飞锁与切页进度恢复、4 路并发分片与 `.xingshu-mods/payload-cache/` SHA-256 缓存，彻底根治连点下载反复横跳。
+- **桌面端 Mod 详情重排 + 表情回应 + 官方高清图标**：修复细节弹窗样式与登录框层级遮挡，新增多图灯箱与游戏内动态角色表情回应（`EmoteReactionBar`）；启动页左侧替换为游戏内提取的原生透明底《星引擎 PARTY》高清官方图标。
 - **游戏内原生功能中心 & 回放复盘**：局内按 `F1` 或点击悬浮球呼出统一 UI（支持 12 项快捷键自定义，见[快捷键说明](docs/guides/HOTKEYS.md)）；导入 `.rep` 或对局编号即可进行逐轮伤害/星币曲线分析与棋盘步进复盘。
 
 ---
@@ -89,10 +89,10 @@ flowchart TD
         SpecHook --> SpecStore --> SpecBridge
     end
 
-    subgraph RuntimeMain["主游戏客户端 (可选装星枢官方插件 r8.40)"]
+    subgraph RuntimeMain["主游戏客户端 (可选装星枢官方插件 r8.41)"]
         MainBridge["Bridge Client (Loopback TCP)"]
         TruthSource["HandTruthSource 权威数据源"]
-        Modules["18 项模块化官方插件 & 原生功能中心"]
+        Modules["19 项模块化官方插件 & 原生功能中心"]
         MainBridge --> TruthSource --> Modules
     end
 
@@ -126,7 +126,7 @@ AstralParty-XingShu/
 │   ├── src-tauri/                        # Rust 后端（TCP 通信桥、内置冲突检测与原子安装）
 │   └── public/                           # 品牌图标、离线图鉴与动态表情资源
 ├── XingShu-Dev/                          # 游戏内 C# Unity 模块化运行时
-│   ├── src/XingShu.Runtime/              # 18 项官方模块、原生功能中心、手牌真值与房间控制
+│   ├── src/XingShu.Runtime/              # 19 项官方模块、原生功能中心、手牌真值与房间控制
 │   └── tools/                            # 编译脚本、一致性校验与生命周期测试
 ├── AndroidInstaller/                     # Kotlin + Jetpack Compose 安卓纯启动器源码
 │   ├── app/                              # Compose UI、Shizuku 接入、HTTPS 按需缓存与单元测试
@@ -185,6 +185,7 @@ python tools/build_android_installer.py --help
 ## 详细文档与验证记录
 
 - [项目文档与验证记录](docs/README.md) — 文档总索引与历史发布验证记录
+- [RELEASE_0.1.8.md](docs/records/RELEASE_0.1.8.md) — v0.1.8 正式版更新与核心框架独立热更新记录
 - [RELEASE_0.1.7.md](docs/records/RELEASE_0.1.7.md) — v0.1.7 正式版更新与架构重构记录
 - [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md) — 安卓手机安装与还原指南
 - [HOTKEYS.md](docs/guides/HOTKEYS.md) — 游戏内快捷键自定义说明

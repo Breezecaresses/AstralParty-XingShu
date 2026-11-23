@@ -8,7 +8,7 @@ import java.util.Base64;
 
 /** Short-lived shell entry point under UID 2000 for multi-channel install, package discovery and BnSdk scan. */
 public final class LocalInstallerMain {
-    static final String STAGING = "/data/local/tmp/xingshu-phone/" + PayloadSpec.PATCH;
+    static final String STAGING = "/data/local/tmp/xingshu-phone/current";
 
     public static void main(String[] args) {
         String result;
@@ -18,6 +18,14 @@ public final class LocalInstallerMain {
             if (args.length < 1 || args.length > 4) throw new IllegalArgumentException("操作不匹配");
 
             InstallerEngine engine = new InstallerEngine();
+            File specFile = new File(STAGING, "core-spec.json");
+            if (specFile.isFile() && specFile.length() > 0L) {
+                if (specFile.length() > CoreRuntimeSpec.MAX_MANIFEST_BYTES) {
+                    throw new IllegalArgumentException("核心清单同步文件过大");
+                }
+                String specJson = CoreRuntimeSpec.readUtf8File(specFile, CoreRuntimeSpec.MAX_MANIFEST_BYTES);
+                engine.setActiveSpec(CoreRuntimeSpec.parseAndValidate(specJson, "staged"));
+            }
             String operation = args[0];
             String packageName = args.length >= 2 ? GamePackageCatalog.requireValidPackageName(args[1]) : GamePackageCatalog.DEFAULT_PACKAGE;
             String conflictHash = null;

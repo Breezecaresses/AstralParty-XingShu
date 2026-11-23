@@ -35,10 +35,31 @@ import java.util.zip.ZipFile;
 
 /** Multi-channel privileged installer engine running under ADB (UID 2000) or Shizuku. */
 final class InstallerEngine {
-    private static final String CATALOG_REL = "com.unity.addressables/catalog_3.3.0.json";
+    private volatile CoreRuntimeSpec activeSpec = CoreRuntimeSpec.embedded();
+
+    synchronized void setActiveSpec(CoreRuntimeSpec spec) {
+        if (spec != null) {
+            this.activeSpec = spec;
+        }
+    }
+
+    synchronized String updateCoreSpec(String specJson) {
+        try {
+            CoreRuntimeSpec parsed = CoreRuntimeSpec.parseAndValidate(specJson, "ipc");
+            this.activeSpec = parsed;
+            Map<String, Object> ok = new LinkedHashMap<>();
+            ok.put("ok", Boolean.TRUE);
+            ok.put("runtimeVersion", parsed.runtimeVersion);
+            ok.put("gameVersion", parsed.gameVersion);
+            return MiniJson.stringify(ok);
+        } catch (Exception e) {
+            return MiniJson.stringify(Collections.singletonMap("error", friendly(e)));
+        }
+    }
 
     String scanPackages() {
         try {
+            final CoreRuntimeSpec spec = this.activeSpec;
             String pmOut = command("/system/bin/pm", "list", "packages", "-3");
             List<String> candidates = GamePackageCatalog.parseThirdPartyPackages(pmOut);
             String psOut = "";
@@ -59,32 +80,33 @@ final class InstallerEngine {
 
                 GamePackageCatalog.ChannelMeta meta = GamePackageCatalog.classifyPackage(pkg);
                 File filesRoot = GamePackageCatalog.filesRoot(pkg);
-                File catalog = new File(filesRoot, CATALOG_REL);
+                File catalog = new File(filesRoot, spec.catalogRelativePath);
                 boolean hasCatalog = catalog.isFile();
                 boolean isRunning = Pattern.compile("(?m)\\s" + Pattern.quote(pkg) + "(?::[^\\s]+)?\\s*$")
                     .matcher(psOut).find();
                 String installState = "version_mismatch";
                 String resolvedRel = "";
 
-                if ("3.3.0".equals(ver)) {
+                if (spec.gameVersion.equals(ver)) {
                     if (!hasCatalog) {
                         installState = "no_catalog";
                     } else {
                         try {
-                            resolvedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog);
+                            resolvedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(
+                                filesRoot, catalog, spec.bundleRelativePath);
                             File target = new File(filesRoot, resolvedRel);
                             if (!target.isFile()) {
                                 installState = "no_bundle";
                             } else {
                                 String hash = hash(target);
                                 List<File> companions = CacheConflict.findCompanions(filesRoot, target);
-                                if (hash.equals(PayloadSpec.PATCH) && companions.isEmpty()) {
+                                if (hash.equals(spec.patchSha256) && companions.isEmpty()) {
                                     installState = "installed";
-                                } else if (hash.equals(PayloadSpec.VANILLA) && companions.isEmpty()) {
+                                } else if (hash.equals(spec.vanillaSha256) && companions.isEmpty()) {
                                     installState = "vanilla";
-                                } else if (known(hash) && companions.isEmpty()) {
+                                } else if (spec.isKnownHash(hash) && companions.isEmpty()) {
                                     installState = "upgrade";
-                                } else if (CacheConflict.replaceableTarget(target, catalog, PayloadSpec.CATALOG, resolvedRel, PayloadSpec.RELATIVE)) {
+                                } else if (CacheConflict.replaceableTarget(target, catalog, spec.catalogSha256, resolvedRel, spec.bundleRelativePath)) {
                                     installState = "conflict";
                                 } else {
                                     installState = "incompatible";
@@ -115,26 +137,27 @@ final class InstallerEngine {
 
     String inspect(String packageName) {
         try {
+            final CoreRuntimeSpec spec = this.activeSpec;
             String pkg = GamePackageCatalog.requireValidPackageName(packageName);
             GamePackageCatalog.ChannelMeta meta = GamePackageCatalog.classifyPackage(pkg);
             File filesRoot = GamePackageCatalog.filesRoot(pkg);
-            File catalog = new File(filesRoot, CATALOG_REL);
+            File catalog = new File(filesRoot, spec.catalogRelativePath);
 
-            checkGame(pkg, meta);
+            checkGame(pkg, meta, spec);
             if (!catalog.isFile()) {
-                throw new IOException("未找到 " + meta.label + "（" + pkg + "）的 catalog_3.3.0.json。\n请先打开该渠道游戏更新资源并进入大厅一次，再正常退出后检查。");
+                throw new IOException("未找到 " + meta.label + "（" + pkg + "）的 " + spec.catalogFileName() + "。\n请先打开该渠道游戏更新资源并进入大厅一次，再正常退出后检查。");
             }
-            String resolvedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog);
+            String resolvedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog, spec.bundleRelativePath);
             File target = new File(filesRoot, resolvedRel);
             String hash = hash(target);
             probe(target);
 
             List<File> companions = CacheConflict.findCompanions(filesRoot, target);
-            boolean targetConflict = !known(hash);
+            boolean targetConflict = !spec.isKnownHash(hash);
             String state;
             if (targetConflict || !companions.isEmpty()) {
                 boolean replaceable = CacheConflict.replaceableTarget(
-                    target, catalog, PayloadSpec.CATALOG, resolvedRel, PayloadSpec.RELATIVE);
+                    target, catalog, spec.catalogSha256, resolvedRel, spec.bundleRelativePath);
                 if (!replaceable) {
                     String catHash = catalog.isFile() ? CacheConflict.hash(catalog) : "缺失";
                     state = "未知版本，禁止替换；资源清单或容器与本版不匹配（" + meta.label
@@ -157,8 +180,8 @@ final class InstallerEngine {
                     state = detail.toString();
                 }
             } else {
-                state = hash.equals(PayloadSpec.PATCH) ? "本版星枢"
-                    : hash.equals(PayloadSpec.VANILLA) ? "官方原版"
+                state = hash.equals(spec.patchSha256) ? "本版星枢"
+                    : hash.equals(spec.vanillaSha256) ? "官方原版"
                     : "可升级的旧版星枢";
             }
             return "游戏版本匹配，目录可读取并写入。\n目标渠道：" + meta.label + "（" + pkg + "）\n定位资源：" + resolvedRel
@@ -172,32 +195,33 @@ final class InstallerEngine {
     synchronized String apply(String packageName, boolean restore, String conflictHash,
             InputStream candidate, InputStream vanilla) {
         try {
+            final CoreRuntimeSpec spec = this.activeSpec;
             String pkg = GamePackageCatalog.requireValidPackageName(packageName);
-            File backups = GamePackageCatalog.backupRoot(pkg);
+            File backups = GamePackageCatalog.backupRoot(pkg, spec.vanillaSha256);
             if (!backups.isDirectory() && !backups.mkdirs()) {
                 throw new IOException("无法创建备份目录");
             }
             try (RandomAccessFile guard = new RandomAccessFile(new File(backups, "transaction.lock"), "rw");
                  FileLock lock = guard.getChannel().tryLock()) {
                 if (lock == null) throw new IOException("另一个安装操作正在进行，请稍后重试");
-                return applyLocked(pkg, backups, restore, conflictHash, candidate, vanilla);
+                return applyLocked(pkg, backups, spec, restore, conflictHash, candidate, vanilla);
             }
         } catch (Exception e) {
             return "未完成：" + friendly(e);
         }
     }
 
-    private String applyLocked(String pkg, File backups, boolean restore, String conflictHash,
+    private String applyLocked(String pkg, File backups, CoreRuntimeSpec spec, boolean restore, String conflictHash,
             InputStream candidate, InputStream vanilla) {
         File staged = null, original = null, snapshot = null;
         try {
             GamePackageCatalog.ChannelMeta meta = GamePackageCatalog.classifyPackage(pkg);
             File filesRoot = GamePackageCatalog.filesRoot(pkg);
-            File catalog = new File(filesRoot, CATALOG_REL);
+            File catalog = new File(filesRoot, spec.catalogRelativePath);
 
-            checkGame(pkg, meta);
+            checkGame(pkg, meta, spec);
             if (running(pkg)) throw new IOException("游戏仍在运行，请正常退出后重试，不会中断对局");
-            String resolvedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog);
+            String resolvedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog, spec.bundleRelativePath);
             File target = new File(filesRoot, resolvedRel);
 
             String before = hash(target);
@@ -205,9 +229,9 @@ final class InstallerEngine {
                 throw new IOException("冲突文件在确认后发生变化，请重新检查，未修改游戏");
             }
             List<File> companions = restore ? Collections.emptyList() : CacheConflict.findCompanions(filesRoot, target);
-            boolean conflict = !known(before) || !companions.isEmpty();
+            boolean conflict = !spec.isKnownHash(before) || !companions.isEmpty();
             boolean replaceable = CacheConflict.replaceableTarget(
-                target, catalog, PayloadSpec.CATALOG, resolvedRel, PayloadSpec.RELATIVE);
+                target, catalog, spec.catalogSha256, resolvedRel, spec.bundleRelativePath);
             if (conflict && (restore || conflictHash == null || !replaceable)) {
                 throw new IOException("目标是其他覆盖文件、残留冲突插件或未知资源。请先检查冲突；仅资源清单匹配且确认备份删除冲突后才能安装，未修改文件");
             }
@@ -218,22 +242,22 @@ final class InstallerEngine {
             if (restore) {
                 original = new File(backups, "vanilla.staging");
                 if (vanilla != null) {
-                    receive(vanilla, original, PayloadSpec.VANILLA);
-                    if (!backup.exists() || !hash(backup).equals(PayloadSpec.VANILLA)) copy(original, backup);
-                } else if (backup.isFile() && hash(backup).equals(PayloadSpec.VANILLA)) {
+                    receive(vanilla, original, spec.vanillaSha256);
+                    if (!backup.exists() || !hash(backup).equals(spec.vanillaSha256)) copy(original, backup);
+                } else if (backup.isFile() && hash(backup).equals(spec.vanillaSha256)) {
                     copy(backup, original);
                 } else {
                     throw new IOException("缺少官方原版备份，请联网下载后重试还原");
                 }
-                if (!hash(backup).equals(PayloadSpec.VANILLA)) throw new IOException("原版备份校验失败，已停止");
+                if (!hash(backup).equals(spec.vanillaSha256)) throw new IOException("原版备份校验失败，已停止");
             } else {
                 staged = new File(backups, "candidate.staging");
-                receive(candidate, staged, PayloadSpec.PATCH);
+                receive(candidate, staged, spec.patchSha256);
                 if (vanilla != null) {
                     original = new File(backups, "vanilla.staging");
-                    receive(vanilla, original, PayloadSpec.VANILLA);
-                    if (!backup.exists() || !hash(backup).equals(PayloadSpec.VANILLA)) copy(original, backup);
-                } else if (before.equals(PayloadSpec.VANILLA) && (!backup.isFile() || !hash(backup).equals(PayloadSpec.VANILLA))) {
+                    receive(vanilla, original, spec.vanillaSha256);
+                    if (!backup.exists() || !hash(backup).equals(spec.vanillaSha256)) copy(original, backup);
+                } else if (before.equals(spec.vanillaSha256) && (!backup.isFile() || !hash(backup).equals(spec.vanillaSha256))) {
                     copy(target, backup);
                 }
             }
@@ -243,14 +267,14 @@ final class InstallerEngine {
             if (!companions.isEmpty()) CacheConflict.archiveAndDeleteCompanions(filesRoot, companions, snapshot.getParentFile());
             if (running(pkg) || !hash(target).equals(before)) throw new IOException("游戏已启动或缓存已变化，请退出后重试");
 
-            String recheckedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog);
+            String recheckedRel = AddressablesCatalog.resolveManagedRuntimeRelativePath(filesRoot, catalog, spec.bundleRelativePath);
             if (!recheckedRel.equals(resolvedRel) || !CacheConflict.replaceableTarget(
-                    target, catalog, PayloadSpec.CATALOG, recheckedRel, PayloadSpec.RELATIVE)) {
+                    target, catalog, spec.catalogSha256, recheckedRel, spec.bundleRelativePath)) {
                 throw new IOException("官方资源清单已变化，请重新检查，未修改游戏");
             }
 
             File source = restore ? original : staged;
-            String expected = restore ? PayloadSpec.VANILLA : PayloadSpec.PATCH;
+            String expected = restore ? spec.vanillaSha256 : spec.patchSha256;
             if (!before.equals(expected)) {
                 try {
                     // Overwrite existing inode to preserve game UID ownership and SELinux context.
@@ -264,7 +288,7 @@ final class InstallerEngine {
                     throw new IOException("写入失败，已恢复安装前缓存：" + writeError.getMessage());
                 }
             }
-            return (restore ? "已还原官方原版" : "已安装 / 更新星枢 " + PayloadSpec.VERSION)
+            return (restore ? "已还原官方原版" : "已安装 / 更新星枢 " + spec.runtimeVersion)
                 + "（" + meta.label + "），SHA256 校验通过。\n"
                 + (conflict ? "同位置冲突插件及关联文件（共 " + companions.size() + " 个附加项）已备份删除并替换；其他模组未移动。\n" : "")
                 + "安装前文件与记录：" + snapshot.getParent() + "\n现在可以从该渠道入口启动游戏。";
@@ -552,8 +576,8 @@ final class InstallerEngine {
         }
     }
 
-    private static final int MAX_MOD_ENTRIES = 2000;
-    private static final long MAX_MOD_UNPACKED_BYTES = 256L * 1024L * 1024L;
+    private static final int MAX_MOD_ENTRIES = 4000;
+    private static final long MAX_MOD_UNPACKED_BYTES = 2L * 1024L * 1024L * 1024L;
     private static final Pattern XSPKG_MODULE_TARGET_PATTERN = Pattern.compile(
         "^xingshu/plugins/xingshu\\.launcher\\.[a-z0-9-]{1,64}\\.module$"
     );
@@ -1242,16 +1266,11 @@ final class InstallerEngine {
         }
     }
 
-    private boolean known(String hash) {
-        return hash.equals(PayloadSpec.VANILLA) || hash.equals(PayloadSpec.PATCH)
-            || Arrays.asList(PayloadSpec.PREVIOUS).contains(hash);
-    }
-
-    private void checkGame(String pkg, GamePackageCatalog.ChannelMeta meta) throws Exception {
+    private void checkGame(String pkg, GamePackageCatalog.ChannelMeta meta, CoreRuntimeSpec spec) throws Exception {
         String dump = command("/system/bin/dumpsys", "package", pkg);
         String ver = GamePackageCatalog.extractVersionName(dump);
-        if (!"3.3.0".equals(ver)) {
-            throw new IOException("仅适配 3.3.0 版本（" + meta.label + " " + pkg + " 当前为 "
+        if (!spec.gameVersion.equals(ver)) {
+            throw new IOException("仅适配 " + spec.gameVersion + " 版本（" + meta.label + " " + pkg + " 当前为 "
                 + (ver.isEmpty() ? "未安装/未检测到版本" : ver) + "），请勿使用于其他版本或分身目录");
         }
     }

@@ -219,7 +219,7 @@ internal fun XingShuMobileApp(controller: AppController) {
                 ) {
                     Text("配置本地文件访问授权", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        text = "纯启动游戏无需授权；当你需要安装/卸载「星枢官方插件 Mod」、管理 18 项官方模组或导入外部 Mod 时，请选择以下任一授权方式：",
+                        text = "纯启动游戏无需授权；当你需要安装/卸载「星枢官方插件 Mod」、管理 19 项官方模组或导入外部 Mod 时，请选择以下任一授权方式：",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

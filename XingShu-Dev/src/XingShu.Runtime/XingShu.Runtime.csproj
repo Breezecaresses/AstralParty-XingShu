@@ -107,6 +107,10 @@
       <HintPath>..\..\references\unity\UnityEngine.ImageConversionModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.VideoModule">
+      <HintPath>..\..\references\unity\UnityEngine.VideoModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="UnityEngine.JSONSerializeModule">
       <HintPath>..\..\references\unity\UnityEngine.JSONSerializeModule.dll</HintPath>
       <Private>False</Private>

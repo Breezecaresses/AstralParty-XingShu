@@ -1,0 +1,1554 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using FairyGUI;
+using UI;
+using UnityEngine;
+using UnityEngine.Video;
+using XingShuRuntime.Core;
+using XingShuRuntime.UI;
+
+namespace XingShuRuntime.Utilities
+{
+    /// <summary>
+    /// Independent modular lobby background replacement for Astral Party 3.3.0+.
+    /// Attaches a non-destructive FairyGUI GLoader above HomePanel.Com_BGSet.loader_Video
+    /// (and optionally BackgroundPanel.loader_BG) supporting local MP4/WebM/MOV videos,
+    /// PNG/JPG images, CriWare .usm movies, and 3.3.0 VKVLoop .bundle assets without
+    /// modifying game files.
+    /// </summary>
+    internal sealed class CustomLobbyBackground : MonoBehaviour
+    {
+        internal static CustomLobbyBackground Instance { get; private set; }
+
+        private const string LoaderName = "XingShu_CustomLobbyBg";
+        private const string VideoGoName = "[XingShu] LobbyVideoPlayer";
+        private const float AutoRescanInterval = 2.5f;
+        private const float VideoPrepareTimeoutSeconds = 8.0f;
+
+        private enum CriSwitchPhase
+        {
+            Idle = 0,
+            WaitingStop = 1,
+        }
+
+        // Persisted settings
+        private bool _enabled = XingShuConfigKeys.CustomLobbyBgEnabledDefault;
+        private bool _syncSubPanels = XingShuConfigKeys.CustomLobbyBgSyncSubPanelsDefault;
+        private bool _randomOnLobby = XingShuConfigKeys.CustomLobbyBgRandomOnLobbyDefault;
+        private string _selectedFile = XingShuConfigKeys.CustomLobbyBgSelectedFileDefault;
+        private string _folderPath = XingShuConfigKeys.CustomLobbyBgFolderPathDefault;
+        private LobbyBgFillMode _fillMode = LobbyBgFillMode.Cover;
+        private float _brightness = XingShuConfigKeys.CustomLobbyBgBrightnessDefault;
+        private float _speed = XingShuConfigKeys.CustomLobbyBgSpeedDefault;
+        private bool _muted = XingShuConfigKeys.CustomLobbyBgMutedDefault;
+        private float _volume = XingShuConfigKeys.CustomLobbyBgVolumeDefault;
+
+        // Media catalog state
+        private readonly List<string> _mediaFiles = new List<string>();
+        private int _currentIndex = -1;
+        private float _lastScanTime = -99f;
+        private bool _defaultFolderCreated;
+
+        // Status readout for UI
+        internal string StatusMsg { get; private set; } = "";
+        internal string ActiveMediaLabel { get; private set; } = "未加载自定义素材";
+        internal LobbyBgMediaKind ActiveMediaKind { get; private set; } = LobbyBgMediaKind.Unknown;
+
+        // Live FairyGUI overlay + media resources
+        private GLoader _homeLoader;
+        private GLoader _subLoader;
+        private GGraph _attachedHomeGraph;
+        private GGraph _attachedSubGraph;
+        private NTexture _activeNTexture;
+        private Texture2D _loadedImageTex;
+        private RenderTexture _videoRt;
+        private AssetBundle _loadedCriBundle;
+        private VideoPlayer _videoPlayer;
+        private GameObject _videoGo;
+
+        // Runtime playback / suppression state
+        private bool _videoPreparing;
+        private float _videoPrepareStartedAt;
+        private bool _videoStarted;
+        private float _videoStartedAt;
+        private bool _pausedForAway;
+        private bool _wasHomeVisible;
+        private bool _suppressedHomeCri;
+        private bool _suppressedSubCri;
+        private bool _criOverrideApplied;
+        private CriSwitchPhase _criPhase = CriSwitchPhase.Idle;
+        private string _pendingCriPath = "";
+        private LobbyBgMediaKind _pendingCriKind = LobbyBgMediaKind.Unknown;
+        private float _pendingCriStartedAt;
+
+        // Cached reflection handles (Android IL2CPP stripped-API safe)
+        private static bool _reflInit;
+        private static FieldInfo _cachedPanelDictField;
+        private static MethodInfo _showStartVideoMethod;
+        private static MethodInfo _bgRefreshMethod;
+        private static PropertyInfo _criPlayerProp;
+        private static MethodInfo _criPlayerPauseMethod;
+        private static MethodInfo _criPlayerStopMethod;
+        private static MethodInfo _criPlayerStartMethod;
+        private static MethodInfo _criPlayerLoopMethod;
+        private static MethodInfo _criPlayerSetSpeedMethod;
+        private static MethodInfo _criPlayerSetVolumeMethod;
+        private static MethodInfo _criPlayerSetFileMethod;
+        private static PropertyInfo _criPlayerStatusProp;
+        private static MethodInfo _criCtrlSetAssetMethod;
+        private static PropertyInfo _vpIsLoopingProp;
+        private static PropertyInfo _vpAudioModeProp;
+        private static MethodInfo _vpSetMuteMethod;
+        private static MethodInfo _vpSetVolMethod;
+        private static Type _criCtrlType;
+        private static Type _criUsmAssetType;
+
+        internal static void Install(GameObject host)
+        {
+            if (host != null && host.GetComponent<CustomLobbyBackground>() == null)
+            {
+                host.AddComponent<CustomLobbyBackground>();
+            }
+        }
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(this);
+                return;
+            }
+            Instance = this;
+            InitReflection();
+            LoadConfig();
+            EnsureDefaultFolderOnce();
+            ScanFilesInternal(applyIfChanged: false);
+            if (_enabled && _mediaFiles.Count > 0)
+            {
+                ApplySelectedOrFirst(forceReload: false);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            try
+            {
+                TeardownActiveMedia(restoreVanilla: true);
+                DestroyOverlayLoaders();
+            }
+            catch
+            {
+            }
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Public Configuration Properties & Actions
+        // ------------------------------------------------------------------
+
+        internal bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value) return;
+                _enabled = value;
+                XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgEnabled, value);
+                XingShuConfigService.Save();
+                if (!value)
+                {
+                    TeardownActiveMedia(restoreVanilla: true);
+                    StatusMsg = "已暂停自定义大厅背景，恢复原版大厅";
+                }
+                else
+                {
+                    ScanFilesInternal(applyIfChanged: false);
+                    ApplySelectedOrFirst(forceReload: true);
+                }
+            }
+        }
+
+        internal bool SyncSubPanels
+        {
+            get => _syncSubPanels;
+            set
+            {
+                if (_syncSubPanels == value) return;
+                _syncSubPanels = value;
+                XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgSyncSubPanels, value);
+                XingShuConfigService.Save();
+                if (!value)
+                {
+                    RestoreSubPanelVanilla();
+                    SetLoaderVisible(_subLoader, false);
+                }
+            }
+        }
+
+        internal bool RandomOnLobby
+        {
+            get => _randomOnLobby;
+            set
+            {
+                if (_randomOnLobby == value) return;
+                _randomOnLobby = value;
+                XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgRandomOnLobby, value);
+                XingShuConfigService.Save();
+            }
+        }
+
+        internal string FolderPathInput
+        {
+            get => _folderPath;
+            set
+            {
+                string next = value != null ? value.Trim() : "";
+                if (string.Equals(_folderPath, next, StringComparison.Ordinal)) return;
+                _folderPath = next;
+                XingShuConfigService.SetString(XingShuConfigKeys.CustomLobbyBgFolderPath, next);
+                XingShuConfigService.Save();
+                ScanFilesInternal(applyIfChanged: true);
+            }
+        }
+
+        internal LobbyBgFillMode FillMode
+        {
+            get => _fillMode;
+            set
+            {
+                if (_fillMode == value) return;
+                _fillMode = value;
+                XingShuConfigService.SetInt(XingShuConfigKeys.CustomLobbyBgFillMode, (int)value);
+                XingShuConfigService.Save();
+                ApplyOverlayVisualStyle();
+            }
+        }
+
+        internal float Brightness
+        {
+            get => _brightness;
+            set
+            {
+                float clamped = CustomLobbyBgPolicy.ClampBrightness(value);
+                if (Mathf.Abs(_brightness - clamped) < 0.005f) return;
+                _brightness = clamped;
+                XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgBrightness, clamped);
+                XingShuConfigService.Save();
+                ApplyOverlayVisualStyle();
+            }
+        }
+
+        internal float Speed
+        {
+            get => _speed;
+            set
+            {
+                float clamped = CustomLobbyBgPolicy.ClampSpeed(value);
+                if (Mathf.Abs(_speed - clamped) < 0.005f) return;
+                _speed = clamped;
+                XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, clamped);
+                XingShuConfigService.Save();
+                ApplyVideoPlaybackSettings();
+            }
+        }
+
+        internal bool Muted
+        {
+            get => _muted;
+            set
+            {
+                if (_muted == value) return;
+                _muted = value;
+                XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuted, value);
+                XingShuConfigService.Save();
+                ApplyVideoPlaybackSettings();
+            }
+        }
+
+        internal float Volume
+        {
+            get => _volume;
+            set
+            {
+                float clamped = CustomLobbyBgPolicy.ClampVolume(value);
+                if (Mathf.Abs(_volume - clamped) < 0.005f) return;
+                _volume = clamped;
+                XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgVolume, clamped);
+                XingShuConfigService.Save();
+                ApplyVideoPlaybackSettings();
+            }
+        }
+
+        internal bool SupportsAudioControl =>
+            _vpAudioModeProp != null && _vpSetMuteMethod != null && _vpSetVolMethod != null;
+
+        internal int FileCount => _mediaFiles.Count;
+
+        internal int CurrentIndex => _currentIndex;
+
+        internal string CurrentFileName =>
+            (_currentIndex >= 0 && _currentIndex < _mediaFiles.Count)
+                ? Path.GetFileName(_mediaFiles[_currentIndex])
+                : "";
+
+        internal IList<string> GetFileNamesSnapshot()
+        {
+            var names = new List<string>(_mediaFiles.Count);
+            for (int i = 0; i < _mediaFiles.Count; i++)
+            {
+                names.Add(Path.GetFileName(_mediaFiles[i]));
+            }
+            return names;
+        }
+
+        internal string GetDefaultFolder()
+        {
+            if (XingShuMobileUIHelper.IsMobile)
+            {
+                return Path.Combine(Application.persistentDataPath ?? "", "lobbybg").Replace('\\', '/');
+            }
+            string dataPath = Application.dataPath ?? "";
+            try
+            {
+                string parentDir = Path.GetDirectoryName(dataPath.TrimEnd('/', '\\'));
+                if (!string.IsNullOrEmpty(parentDir))
+                {
+                    return Path.Combine(parentDir, "lobbybg").Replace('\\', '/');
+                }
+            }
+            catch
+            {
+            }
+            return Path.Combine(dataPath, "lobbybg").Replace('\\', '/');
+        }
+
+        internal string ResolveMediaDirectory()
+        {
+            if (string.IsNullOrEmpty(_folderPath))
+            {
+                return GetDefaultFolder();
+            }
+            string trimmed = _folderPath.Trim();
+            try
+            {
+                if (Path.IsPathRooted(trimmed))
+                {
+                    return trimmed.Replace('\\', '/');
+                }
+                string dataDir = (Application.dataPath ?? "").TrimEnd('/', '\\');
+                string parentDir = Path.GetDirectoryName(dataDir);
+                string baseRoot = XingShuMobileUIHelper.IsMobile
+                    ? (Application.persistentDataPath ?? "")
+                    : (!string.IsNullOrEmpty(parentDir) ? parentDir : (Application.dataPath ?? ""));
+                return Path.GetFullPath(Path.Combine(baseRoot, trimmed)).Replace('\\', '/');
+            }
+            catch
+            {
+                return GetDefaultFolder();
+            }
+        }
+
+        internal bool EnsureDirectoryExists(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return false;
+            try
+            {
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+                return Directory.Exists(dir);
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"创建目录失败: {ex.Message}";
+                return false;
+            }
+        }
+
+#if !XINGSHU_ANDROID_PREVIEW
+        internal void OpenMediaDirectory()
+        {
+            string dir = ResolveMediaDirectory();
+            if (!EnsureDirectoryExists(dir)) return;
+            try
+            {
+                string winDir = dir.Replace('/', Path.DirectorySeparatorChar);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(winDir)
+                {
+                    UseShellExecute = true
+                });
+                StatusMsg = $"已打开目录: {dir}";
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"无法打开目录: {ex.Message}";
+            }
+        }
+#endif
+
+        internal void RefreshFiles()
+        {
+            ScanFilesInternal(applyIfChanged: true);
+        }
+
+        internal void SelectIndex(int index)
+        {
+            if (index < 0 || index >= _mediaFiles.Count) return;
+            _currentIndex = index;
+            SaveSelectedFile(_mediaFiles[index]);
+            if (_enabled)
+            {
+                LoadMediaAt(index);
+            }
+            else
+            {
+                ActiveMediaLabel = Path.GetFileName(_mediaFiles[index]);
+                StatusMsg = $"已选中: {ActiveMediaLabel}（请开启总开关生效）";
+            }
+        }
+
+        internal void CycleNext(int delta)
+        {
+            if (_mediaFiles.Count == 0)
+            {
+                ScanFilesInternal(applyIfChanged: false);
+            }
+            if (_mediaFiles.Count == 0)
+            {
+                StatusMsg = $"目录内暂无可用素材: {ResolveMediaDirectory()}";
+                return;
+            }
+            int next = CustomLobbyBgPolicy.PickNextIndex(_currentIndex, _mediaFiles.Count, delta);
+            SelectIndex(next);
+        }
+
+        internal void SelectRandom()
+        {
+            if (_mediaFiles.Count == 0)
+            {
+                ScanFilesInternal(applyIfChanged: false);
+            }
+            if (_mediaFiles.Count == 0)
+            {
+                StatusMsg = $"目录内暂无可用素材: {ResolveMediaDirectory()}";
+                return;
+            }
+            int next = CustomLobbyBgPolicy.PickRandomIndex(_currentIndex, _mediaFiles.Count, n => UnityEngine.Random.Range(0, n));
+            SelectIndex(next);
+        }
+
+        internal void ResetDisplayDefaults()
+        {
+            _fillMode = LobbyBgFillMode.Cover;
+            _brightness = XingShuConfigKeys.CustomLobbyBgBrightnessDefault;
+            _speed = XingShuConfigKeys.CustomLobbyBgSpeedDefault;
+            _muted = XingShuConfigKeys.CustomLobbyBgMutedDefault;
+            _volume = XingShuConfigKeys.CustomLobbyBgVolumeDefault;
+            XingShuConfigService.SetInt(XingShuConfigKeys.CustomLobbyBgFillMode, (int)_fillMode);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgBrightness, _brightness);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, _speed);
+            XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuted, _muted);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgVolume, _volume);
+            XingShuConfigService.Save();
+            ApplyOverlayVisualStyle();
+            ApplyVideoPlaybackSettings();
+            StatusMsg = "已恢复画面与音量默认参数";
+        }
+
+        // ------------------------------------------------------------------
+        // Lifecycle & Frame Synchronization
+        // ------------------------------------------------------------------
+
+        private void Update()
+        {
+            try
+            {
+                float now = Time.unscaledTime;
+                if (now - _lastScanTime >= AutoRescanInterval)
+                {
+                    _lastScanTime = now;
+                    // Auto-pick when new files are dropped while UI Center is open or waiting on empty dir
+                    if (_mediaFiles.Count == 0 || XingShuUICenter.IsOpen)
+                    {
+                        ScanFilesInternal(applyIfChanged: _enabled && _mediaFiles.Count == 0);
+                    }
+                }
+
+                HomePanel home = FindHomePanel();
+                BackgroundPanel bgPanel = _syncSubPanels ? FindBackgroundPanel() : null;
+                bool homeVisible = IsPanelVisibleOnStage(home, out UIHomePanel uiHome);
+                UIBackgroundPanel uiBg = null;
+                bool bgVisible = _syncSubPanels && IsPanelVisibleOnStage(bgPanel, out uiBg);
+
+                if (homeVisible && !_wasHomeVisible && _enabled && _randomOnLobby && _mediaFiles.Count > 1)
+                {
+                    int next = CustomLobbyBgPolicy.PickRandomIndex(_currentIndex, _mediaFiles.Count, n => UnityEngine.Random.Range(0, n));
+                    if (next >= 0 && next != _currentIndex)
+                    {
+                        _currentIndex = next;
+                        SaveSelectedFile(_mediaFiles[next]);
+                        LoadMediaAt(next);
+                    }
+                }
+                _wasHomeVisible = homeVisible;
+
+                if (!_enabled || _currentIndex < 0 || _currentIndex >= _mediaFiles.Count)
+                {
+                    if (_suppressedHomeCri || _suppressedSubCri)
+                    {
+                        RestoreAllVanillaCri(home, bgPanel);
+                    }
+                    SetLoaderVisible(_homeLoader, false);
+                    SetLoaderVisible(_subLoader, false);
+                    return;
+                }
+
+                TickPendingCriSwitch(home);
+                TickVideoPlayback();
+
+                bool anyLobbySurfaceVisible = homeVisible || bgVisible;
+                UpdateVideoPowerState(anyLobbySurfaceVisible);
+
+                GGraph homeGraph = uiHome != null && uiHome.Com_BGSet != null ? uiHome.Com_BGSet.loader_Video : null;
+                GGraph subGraph = uiBg != null ? uiBg.loader_BG : null;
+
+                bool overlayActive = (ActiveMediaKind == LobbyBgMediaKind.Image || ActiveMediaKind == LobbyBgMediaKind.Video) && _activeNTexture != null;
+                if (overlayActive)
+                {
+                    if (homeGraph != null && !homeGraph.isDisposed)
+                    {
+                        EnsureOverlayAttached(ref _homeLoader, ref _attachedHomeGraph, homeGraph, "Home");
+                        SyncOverlayTransform(_homeLoader, homeGraph, homeVisible);
+                        SuppressVanillaCri(homeGraph, true, ref _suppressedHomeCri);
+                    }
+                    else
+                    {
+                        SetLoaderVisible(_homeLoader, false);
+                    }
+
+                    if (bgVisible && subGraph != null && !subGraph.isDisposed)
+                    {
+                        EnsureOverlayAttached(ref _subLoader, ref _attachedSubGraph, subGraph, "Sub");
+                        SyncOverlayTransform(_subLoader, subGraph, true);
+                        SuppressVanillaCri(subGraph, true, ref _suppressedSubCri);
+                    }
+                    else
+                    {
+                        if (_suppressedSubCri)
+                        {
+                            RestoreSubPanelVanilla();
+                        }
+                        SetLoaderVisible(_subLoader, false);
+                    }
+                }
+                else
+                {
+                    SetLoaderVisible(_homeLoader, false);
+                    SetLoaderVisible(_subLoader, false);
+                    if (_suppressedHomeCri && homeGraph != null)
+                    {
+                        SuppressVanillaCri(homeGraph, false, ref _suppressedHomeCri);
+                    }
+                    if (_suppressedSubCri)
+                    {
+                        RestoreSubPanelVanilla();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                RuntimeCompatibilityHost.LogLifecycle("[CustomLobbyBackground.Update] " + ex.Message);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Config Persistence & Directory Scan
+        // ------------------------------------------------------------------
+
+        private void LoadConfig()
+        {
+            _enabled = XingShuConfigService.GetBool(XingShuConfigKeys.CustomLobbyBgEnabled, XingShuConfigKeys.CustomLobbyBgEnabledDefault);
+            _syncSubPanels = XingShuConfigService.GetBool(XingShuConfigKeys.CustomLobbyBgSyncSubPanels, XingShuConfigKeys.CustomLobbyBgSyncSubPanelsDefault);
+            _randomOnLobby = XingShuConfigService.GetBool(XingShuConfigKeys.CustomLobbyBgRandomOnLobby, XingShuConfigKeys.CustomLobbyBgRandomOnLobbyDefault);
+            _selectedFile = XingShuConfigService.GetString(XingShuConfigKeys.CustomLobbyBgSelectedFile, XingShuConfigKeys.CustomLobbyBgSelectedFileDefault) ?? "";
+            _folderPath = XingShuConfigService.GetString(XingShuConfigKeys.CustomLobbyBgFolderPath, XingShuConfigKeys.CustomLobbyBgFolderPathDefault) ?? "";
+            _fillMode = CustomLobbyBgPolicy.NormalizeFillMode(XingShuConfigService.GetInt(XingShuConfigKeys.CustomLobbyBgFillMode, XingShuConfigKeys.CustomLobbyBgFillModeDefault));
+            _brightness = CustomLobbyBgPolicy.ClampBrightness(XingShuConfigService.GetFloat(XingShuConfigKeys.CustomLobbyBgBrightness, XingShuConfigKeys.CustomLobbyBgBrightnessDefault));
+            _speed = CustomLobbyBgPolicy.ClampSpeed(XingShuConfigService.GetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, XingShuConfigKeys.CustomLobbyBgSpeedDefault));
+            _muted = XingShuConfigService.GetBool(XingShuConfigKeys.CustomLobbyBgMuted, XingShuConfigKeys.CustomLobbyBgMutedDefault);
+            _volume = CustomLobbyBgPolicy.ClampVolume(XingShuConfigService.GetFloat(XingShuConfigKeys.CustomLobbyBgVolume, XingShuConfigKeys.CustomLobbyBgVolumeDefault));
+        }
+
+        private void EnsureDefaultFolderOnce()
+        {
+            if (_defaultFolderCreated || !string.IsNullOrEmpty(_folderPath)) return;
+            _defaultFolderCreated = true;
+            try
+            {
+                string defDir = GetDefaultFolder();
+                if (!Directory.Exists(defDir))
+                {
+                    Directory.CreateDirectory(defDir);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private void SaveSelectedFile(string fullPath)
+        {
+            string fileName = string.IsNullOrEmpty(fullPath) ? "" : Path.GetFileName(fullPath);
+            _selectedFile = fileName;
+            XingShuConfigService.SetString(XingShuConfigKeys.CustomLobbyBgSelectedFile, fileName);
+            XingShuConfigService.Save();
+        }
+
+        private void ScanFilesInternal(bool applyIfChanged)
+        {
+            string dir = ResolveMediaDirectory();
+            List<string> nextList = new List<string>();
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+            {
+                try
+                {
+                    string[] rawFiles = Directory.GetFiles(dir);
+                    nextList = CustomLobbyBgPolicy.SortMediaFiles(rawFiles);
+                }
+                catch (Exception ex)
+                {
+                    StatusMsg = $"读取目录失败: {ex.Message}";
+                }
+            }
+
+            string prevActive = (_currentIndex >= 0 && _currentIndex < _mediaFiles.Count) ? _mediaFiles[_currentIndex] : "";
+            _mediaFiles.Clear();
+            _mediaFiles.AddRange(nextList);
+
+            int matched = -1;
+            if (!string.IsNullOrEmpty(_selectedFile))
+            {
+                for (int i = 0; i < _mediaFiles.Count; i++)
+                {
+                    if (string.Equals(Path.GetFileName(_mediaFiles[i]), _selectedFile, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(_mediaFiles[i], _selectedFile, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matched = i;
+                        break;
+                    }
+                }
+            }
+            if (matched < 0 && _mediaFiles.Count > 0)
+            {
+                matched = 0;
+            }
+            _currentIndex = matched;
+
+            if (_mediaFiles.Count == 0)
+            {
+                ActiveMediaLabel = "目录暂无素材（保留原版）";
+                ActiveMediaKind = LobbyBgMediaKind.Unknown;
+                if (_enabled && !string.IsNullOrEmpty(prevActive))
+                {
+                    TeardownActiveMedia(restoreVanilla: true);
+                }
+                if (Directory.Exists(dir))
+                {
+                    StatusMsg = $"未检测到素材，请将 MP4 / PNG / JPG / USM 放入 {dir}";
+                }
+                return;
+            }
+
+            if (applyIfChanged && _enabled && _currentIndex >= 0)
+            {
+                string nextActive = _mediaFiles[_currentIndex];
+                if (!string.Equals(prevActive, nextActive, StringComparison.OrdinalIgnoreCase) || ActiveMediaKind == LobbyBgMediaKind.Unknown)
+                {
+                    LoadMediaAt(_currentIndex);
+                }
+            }
+        }
+
+        private void ApplySelectedOrFirst(bool forceReload)
+        {
+            if (_mediaFiles.Count == 0)
+            {
+                ActiveMediaLabel = "目录暂无素材（保留原版）";
+                StatusMsg = $"目录暂无可用素材: {ResolveMediaDirectory()}";
+                return;
+            }
+            if (_currentIndex < 0 || _currentIndex >= _mediaFiles.Count)
+            {
+                _currentIndex = 0;
+            }
+            if (forceReload || ActiveMediaKind == LobbyBgMediaKind.Unknown)
+            {
+                LoadMediaAt(_currentIndex);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Media Loading & Switching
+        // ------------------------------------------------------------------
+
+        private void LoadMediaAt(int index)
+        {
+            if (index < 0 || index >= _mediaFiles.Count) return;
+            string fullPath = _mediaFiles[index];
+            if (!File.Exists(fullPath))
+            {
+                StatusMsg = $"文件不存在: {fullPath}";
+                return;
+            }
+
+            LobbyBgMediaKind kind = CustomLobbyBgPolicy.ClassifyExtension(fullPath);
+            string fileName = Path.GetFileName(fullPath);
+            bool hadCriOverride = _criOverrideApplied;
+            TeardownActiveMedia(restoreVanilla: false);
+
+            switch (kind)
+            {
+                case LobbyBgMediaKind.Image:
+                    if (hadCriOverride) RestoreHomeVanillaCri(FindHomePanel());
+                    LoadImageFile(fullPath, fileName);
+                    break;
+                case LobbyBgMediaKind.Video:
+                    if (hadCriOverride) RestoreHomeVanillaCri(FindHomePanel());
+                    LoadVideoFile(fullPath, fileName);
+                    break;
+                case LobbyBgMediaKind.CriUsm:
+                case LobbyBgMediaKind.UnityBundle:
+                    BeginCriOverride(fullPath, fileName, kind);
+                    break;
+                default:
+                    StatusMsg = $"不支持的文件格式: {fileName}";
+                    if (hadCriOverride) RestoreHomeVanillaCri(FindHomePanel());
+                    break;
+            }
+        }
+
+        private void LoadImageFile(string fullPath, string fileName)
+        {
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(fullPath);
+                if (bytes == null || bytes.Length < 16)
+                {
+                    StatusMsg = $"图片数据过小或损坏: {fileName}";
+                    return;
+                }
+                Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                if (!ImageConversion.LoadImage(tex, bytes, false))
+                {
+                    Destroy(tex);
+                    StatusMsg = $"无法解码图片: {fileName}";
+                    return;
+                }
+                tex.name = "XingShu_LobbyBg_" + fileName;
+                tex.wrapMode = TextureWrapMode.Clamp;
+                _loadedImageTex = tex;
+
+                NTexture nt = new NTexture(tex);
+                nt.destroyMethod = DestroyMethod.None;
+                nt.AddRef();
+                _activeNTexture = nt;
+                ActiveMediaKind = LobbyBgMediaKind.Image;
+                ActiveMediaLabel = $"{fileName} ({tex.width}x{tex.height} 图片)";
+                BindNTextureToLoaders(nt);
+                StatusMsg = $"已应用静态背景: {fileName} ({tex.width}×{tex.height})";
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"加载图片失败: {ex.Message}";
+                TeardownActiveMedia(restoreVanilla: true);
+            }
+        }
+
+        private void LoadVideoFile(string fullPath, string fileName)
+        {
+            try
+            {
+                EnsureVideoPlayer();
+                _videoPlayer.Stop();
+                _videoPlayer.source = VideoSource.Url;
+                _videoPlayer.url = CustomLobbyBgPolicy.BuildFileUri(fullPath);
+                _videoPlayer.renderMode = VideoRenderMode.RenderTexture;
+                _videoPlayer.aspectRatio = VideoAspectRatio.NoScaling;
+                _videoPlayer.playOnAwake = false;
+                _videoPlayer.playbackSpeed = _speed;
+                ApplyVideoPlaybackSettings();
+
+                _videoPreparing = true;
+                _videoStarted = false;
+                _pausedForAway = false;
+                _videoPrepareStartedAt = Time.unscaledTime;
+                ActiveMediaKind = LobbyBgMediaKind.Video;
+                ActiveMediaLabel = $"{fileName} (准备视频中…)";
+                StatusMsg = $"正在加载视频: {fileName}…";
+
+                _videoPlayer.Prepare();
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"初始化视频失败: {ex.Message}";
+                TeardownActiveMedia(restoreVanilla: true);
+            }
+        }
+
+        private void EnsureVideoPlayer()
+        {
+            if (_videoGo == null)
+            {
+                _videoGo = new GameObject(VideoGoName);
+                _videoGo.transform.SetParent(transform, false);
+            }
+            if (_videoPlayer == null)
+            {
+                _videoPlayer = _videoGo.GetComponent<VideoPlayer>() ?? _videoGo.AddComponent<VideoPlayer>();
+            }
+        }
+
+        private void TickVideoPlayback()
+        {
+            if (ActiveMediaKind != LobbyBgMediaKind.Video || _videoPlayer == null)
+            {
+                return;
+            }
+
+            if (_videoPreparing)
+            {
+                int vw = 0;
+                int vh = 0;
+                try
+                {
+                    vw = (int)_videoPlayer.width;
+                    vh = (int)_videoPlayer.height;
+                }
+                catch
+                {
+                }
+
+                if (vw > 0 && vh > 0)
+                {
+                    _videoPreparing = false;
+                    CustomLobbyBgPolicy.ComputeRenderTextureSize(vw, vh, XingShuMobileUIHelper.IsMobile, out int rtW, out int rtH);
+                    ReleaseRenderTexture();
+                    _videoRt = new RenderTexture(rtW, rtH, 0, RenderTextureFormat.ARGB32);
+                    _videoRt.name = "XingShu_LobbyBg_RT";
+                    _videoRt.Create();
+
+                    _videoPlayer.targetTexture = _videoRt;
+                    _videoPlayer.playbackSpeed = _speed;
+                    ApplyVideoPlaybackSettings();
+                    _videoPlayer.Play();
+                    _videoStarted = true;
+                    _videoStartedAt = Time.unscaledTime;
+
+                    ReleaseActiveNTexture();
+                    NTexture nt = new NTexture(_videoRt);
+                    nt.destroyMethod = DestroyMethod.None;
+                    nt.AddRef();
+                    _activeNTexture = nt;
+                    BindNTextureToLoaders(nt);
+
+                    string fn = CurrentFileName;
+                    ActiveMediaLabel = $"{fn} ({rtW}x{rtH} 视频)";
+                    StatusMsg = $"已应用动态视频背景: {fn} ({rtW}×{rtH})";
+                    return;
+                }
+
+                if (Time.unscaledTime - _videoPrepareStartedAt > VideoPrepareTimeoutSeconds)
+                {
+                    string fn = CurrentFileName;
+                    _videoPreparing = false;
+                    StatusMsg = $"视频解码超时或编码不受支持: {fn}（建议使用 H.264 MP4）";
+                    TeardownActiveMedia(restoreVanilla: true);
+                }
+                return;
+            }
+
+            // Software loop guard (essential on Android IL2CPP where VideoPlayer.isLooping may be stripped)
+            if (_videoStarted && !_pausedForAway)
+            {
+                bool playing = false;
+                bool paused = false;
+                try
+                {
+                    playing = _videoPlayer.isPlaying;
+                    paused = _videoPlayer.isPaused;
+                }
+                catch
+                {
+                }
+                if (!playing && !paused)
+                {
+                    double len = 0;
+                    double cur = 0;
+                    try
+                    {
+                        len = _videoPlayer.length;
+                        cur = _videoPlayer.time;
+                    }
+                    catch
+                    {
+                    }
+                    bool reachedEnd = (len > 0.05 && cur >= len - 0.15) || (Time.unscaledTime - _videoStartedAt > 0.35f);
+                    if (reachedEnd)
+                    {
+                        try
+                        {
+                            _videoPlayer.time = 0.0;
+                            _videoPlayer.Play();
+                            _videoStartedAt = Time.unscaledTime;
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+            }
+        }
+
+        private void UpdateVideoPowerState(bool anyLobbyVisible)
+        {
+            if (ActiveMediaKind != LobbyBgMediaKind.Video || _videoPlayer == null || _videoPreparing || !_videoStarted)
+            {
+                return;
+            }
+            if (!anyLobbyVisible && !_pausedForAway)
+            {
+                _pausedForAway = true;
+                try { _videoPlayer.Pause(); } catch { }
+            }
+            else if (anyLobbyVisible && _pausedForAway)
+            {
+                _pausedForAway = false;
+                try
+                {
+                    _videoPlayer.Play();
+                    _videoStartedAt = Time.unscaledTime;
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private void ApplyVideoPlaybackSettings()
+        {
+            if (_videoPlayer == null) return;
+            try
+            {
+                _videoPlayer.playbackSpeed = _speed;
+            }
+            catch
+            {
+            }
+            try
+            {
+                if (_vpIsLoopingProp != null)
+                {
+                    _vpIsLoopingProp.SetValue(_videoPlayer, true, null);
+                }
+            }
+            catch
+            {
+            }
+            try
+            {
+                if (_vpAudioModeProp != null)
+                {
+                    object directMode = Enum.ToObject(_vpAudioModeProp.PropertyType, 1); // VideoAudioOutputMode.Direct
+                    _vpAudioModeProp.SetValue(_videoPlayer, directMode, null);
+                }
+                if (_vpSetMuteMethod != null)
+                {
+                    _vpSetMuteMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted });
+                }
+                if (_vpSetVolMethod != null)
+                {
+                    _vpSetVolMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted ? 0f : _volume });
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // CriWare (.usm & 3.3.0 VKVLoop .bundle) Override
+        // ------------------------------------------------------------------
+
+        private void BeginCriOverride(string fullPath, string fileName, LobbyBgMediaKind kind)
+        {
+            _pendingCriPath = fullPath;
+            _pendingCriKind = kind;
+            _pendingCriStartedAt = Time.unscaledTime;
+            _criPhase = CriSwitchPhase.WaitingStop;
+            ActiveMediaKind = kind;
+            ActiveMediaLabel = $"{fileName} ({CustomLobbyBgPolicy.KindLabel(kind)})";
+
+            HomePanel home = FindHomePanel();
+            GGraph graph = home != null && home.UIObject != null && home.UIObject.Com_BGSet != null
+                ? home.UIObject.Com_BGSet.loader_Video
+                : null;
+            if (graph != null && !graph.isDisposed)
+            {
+                if (TryGetCriControllerAndPlayer(graph, out _, out object player) && player != null)
+                {
+                    try { _criPlayerStopMethod?.Invoke(player, null); } catch { }
+                }
+                StatusMsg = $"正在切换 CriWare 大厅动效: {fileName}…";
+            }
+            else
+            {
+                StatusMsg = $"已选中 {fileName}，回到游戏主大厅后自动切换";
+            }
+        }
+
+        private void TickPendingCriSwitch(HomePanel home)
+        {
+            if (_criPhase != CriSwitchPhase.WaitingStop || string.IsNullOrEmpty(_pendingCriPath))
+            {
+                return;
+            }
+            if (home == null || home.UIObject == null || home.UIObject.Com_BGSet == null)
+            {
+                return;
+            }
+            GGraph graph = home.UIObject.Com_BGSet.loader_Video;
+            if (graph == null || graph.isDisposed) return;
+
+            if (!TryGetCriControllerAndPlayer(graph, out Component ctrl, out object player) || ctrl == null || player == null)
+            {
+                if (Time.unscaledTime - _pendingCriStartedAt > 5.0f)
+                {
+                    _criPhase = CriSwitchPhase.Idle;
+                    StatusMsg = "未找到大厅 CriWare 播放器组件，请改用 .mp4 或 .png 素材";
+                }
+                return;
+            }
+
+            // Wait until status == 0 (Stop) or timeout after 1.5s
+            int statusInt = -1;
+            try
+            {
+                object st = _criPlayerStatusProp?.GetValue(player, null);
+                if (st != null) statusInt = Convert.ToInt32(st);
+            }
+            catch
+            {
+            }
+            if (statusInt != 0 && (Time.unscaledTime - _pendingCriStartedAt) < 1.5f)
+            {
+                return;
+            }
+
+            _criPhase = CriSwitchPhase.Idle;
+            string path = _pendingCriPath;
+            string fn = Path.GetFileName(path);
+
+            try
+            {
+                if (_pendingCriKind == LobbyBgMediaKind.CriUsm)
+                {
+                    if (!InvokeCriSetFile(player, path))
+                    {
+                        StatusMsg = $"当前客户端不支持直接加载本地 .usm，请改用 MP4 视频: {fn}";
+                        return;
+                    }
+                    _criPlayerLoopMethod?.Invoke(player, new object[] { true });
+                    _criPlayerSetSpeedMethod?.Invoke(player, new object[] { _speed });
+                    _criPlayerSetVolumeMethod?.Invoke(player, new object[] { _muted ? 0f : _volume });
+                    _criPlayerPauseMethod?.Invoke(player, new object[] { false });
+                    _criPlayerStartMethod?.Invoke(player, null);
+                    EnsureGraphRendererVisible(graph);
+                    _criOverrideApplied = true;
+                    StatusMsg = $"已应用 CriWare USM 大厅背景: {fn}";
+                }
+                else if (_pendingCriKind == LobbyBgMediaKind.UnityBundle)
+                {
+                    ReleaseCriBundle();
+                    AssetBundle ab = AssetBundle.LoadFromFile(path);
+                    if (ab == null)
+                    {
+                        StatusMsg = $"Bundle 加载失败（可能与游戏已加载容器重名，请改放 .usm / .mp4 或用桌面端工具安装）: {fn}";
+                        return;
+                    }
+                    _loadedCriBundle = ab;
+                    UnityEngine.Object[] assets = ab.LoadAllAssets();
+                    UnityEngine.Object usmAsset = null;
+                    if (assets != null && _criUsmAssetType != null)
+                    {
+                        for (int i = 0; i < assets.Length; i++)
+                        {
+                            if (assets[i] != null && _criUsmAssetType.IsAssignableFrom(assets[i].GetType()))
+                            {
+                                usmAsset = assets[i];
+                                break;
+                            }
+                        }
+                    }
+                    if (usmAsset == null || _criCtrlSetAssetMethod == null)
+                    {
+                        ReleaseCriBundle();
+                        StatusMsg = $"未在 .bundle 中找到 3.3.0 CriManaUsmAsset（旧包需先经星枢 Hub 适配）: {fn}";
+                        return;
+                    }
+                    _criCtrlSetAssetMethod.Invoke(ctrl, new object[] { Path.GetFileNameWithoutExtension(fn), usmAsset });
+                    _criPlayerLoopMethod?.Invoke(player, new object[] { true });
+                    _criPlayerSetSpeedMethod?.Invoke(player, new object[] { _speed });
+                    _criPlayerSetVolumeMethod?.Invoke(player, new object[] { _muted ? 0f : _volume });
+                    _criPlayerPauseMethod?.Invoke(player, new object[] { false });
+                    _criPlayerStartMethod?.Invoke(player, null);
+                    EnsureGraphRendererVisible(graph);
+                    _criOverrideApplied = true;
+                    StatusMsg = $"已应用 VKVLoop 动效包: {fn}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"应用 CriWare 背景失败: {ex.Message}";
+            }
+        }
+
+        private static bool InvokeCriSetFile(object player, string filePath)
+        {
+            if (player == null || _criPlayerSetFileMethod == null) return false;
+            ParameterInfo[] ps = _criPlayerSetFileMethod.GetParameters();
+            if (ps.Length == 2)
+            {
+                _criPlayerSetFileMethod.Invoke(player, new object[] { null, filePath });
+                return true;
+            }
+            if (ps.Length == 3)
+            {
+                object setMode = Enum.ToObject(ps[2].ParameterType, 0); // SetMode.New
+                _criPlayerSetFileMethod.Invoke(player, new object[] { null, filePath, setMode });
+                return true;
+            }
+            return false;
+        }
+
+        private static void EnsureGraphRendererVisible(GGraph graph)
+        {
+            try
+            {
+                graph.visible = true;
+                MeshRenderer mr = graph.shape != null && graph.shape.graphics != null
+                    ? graph.shape.graphics.meshRenderer
+                    : null;
+                if (mr != null) mr.enabled = true;
+            }
+            catch
+            {
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // FairyGUI Overlay Attachment, Mirroring & Vanilla Suppression
+        // ------------------------------------------------------------------
+
+        private void BindNTextureToLoaders(NTexture nt)
+        {
+            if (_homeLoader != null && !_homeLoader.isDisposed)
+            {
+                _homeLoader.texture = nt;
+                ApplyStyleToLoader(_homeLoader);
+            }
+            if (_subLoader != null && !_subLoader.isDisposed)
+            {
+                _subLoader.texture = nt;
+                ApplyStyleToLoader(_subLoader);
+            }
+        }
+
+        private void ApplyOverlayVisualStyle()
+        {
+            if (_homeLoader != null && !_homeLoader.isDisposed) ApplyStyleToLoader(_homeLoader);
+            if (_subLoader != null && !_subLoader.isDisposed) ApplyStyleToLoader(_subLoader);
+        }
+
+        private void ApplyStyleToLoader(GLoader loader)
+        {
+            if (loader == null || loader.isDisposed) return;
+            loader.align = AlignType.Center;
+            loader.verticalAlign = VertAlignType.Middle;
+            switch (_fillMode)
+            {
+                case LobbyBgFillMode.Contain:
+                    loader.fill = FillType.Scale;
+                    break;
+                case LobbyBgFillMode.Stretch:
+                    loader.fill = FillType.ScaleFree;
+                    break;
+                default:
+                    loader.fill = FillType.ScaleNoBorder;
+                    break;
+            }
+            loader.color = new Color(_brightness, _brightness, _brightness, 1f);
+        }
+
+        private void EnsureOverlayAttached(ref GLoader loader, ref GGraph attachedTo, GGraph targetGraph, string tag)
+        {
+            if (loader != null && !loader.isDisposed && attachedTo == targetGraph && loader.parent == targetGraph.parent)
+            {
+                if (loader.texture != _activeNTexture && _activeNTexture != null)
+                {
+                    loader.texture = _activeNTexture;
+                }
+                return;
+            }
+
+            if (loader != null && !loader.isDisposed)
+            {
+                try { loader.Dispose(); } catch { }
+            }
+            loader = new GLoader
+            {
+                name = LoaderName + "_" + tag,
+                touchable = false,
+                visible = true,
+            };
+            targetGraph.AddAfterMe(loader);
+            attachedTo = targetGraph;
+            if (_activeNTexture != null)
+            {
+                loader.texture = _activeNTexture;
+            }
+            ApplyStyleToLoader(loader);
+        }
+
+        private void SyncOverlayTransform(GLoader loader, GGraph targetGraph, bool shouldShow)
+        {
+            if (loader == null || loader.isDisposed || targetGraph == null || targetGraph.isDisposed) return;
+            loader.pivotAsAnchor = targetGraph.pivotAsAnchor;
+            loader.SetPivot(targetGraph.pivotX, targetGraph.pivotY, targetGraph.pivotAsAnchor);
+            loader.SetXY(targetGraph.x, targetGraph.y);
+            loader.SetSize(Mathf.Max(1f, targetGraph.width), Mathf.Max(1f, targetGraph.height));
+            loader.SetScale(targetGraph.scaleX, targetGraph.scaleY);
+            loader.rotation = targetGraph.rotation;
+            loader.alpha = targetGraph.alpha;
+            loader.visible = shouldShow && targetGraph.visible && _activeNTexture != null;
+            ApplyStyleToLoader(loader);
+        }
+
+        private static void SetLoaderVisible(GLoader loader, bool visible)
+        {
+            if (loader != null && !loader.isDisposed && loader.visible != visible)
+            {
+                loader.visible = visible;
+            }
+        }
+
+        private static bool TryGetCriControllerAndPlayer(GGraph graph, out Component controller, out object player)
+        {
+            controller = null;
+            player = null;
+            if (graph == null || graph.isDisposed || graph.shape == null) return false;
+            GameObject go = graph.shape.gameObject;
+            if (go == null) return false;
+            controller = _criCtrlType != null
+                ? go.GetComponent(_criCtrlType)
+                : go.GetComponent("CriManaMovieControllerForGGraph");
+            if (controller == null) return false;
+            if (_criPlayerProp != null)
+            {
+                try { player = _criPlayerProp.GetValue(controller, null); } catch { }
+            }
+            return true;
+        }
+
+        private void SuppressVanillaCri(GGraph graph, bool suppress, ref bool flag)
+        {
+            if (graph == null || graph.isDisposed) return;
+            try
+            {
+                MeshRenderer mr = graph.shape != null && graph.shape.graphics != null
+                    ? graph.shape.graphics.meshRenderer
+                    : null;
+                if (mr != null && mr.enabled == suppress)
+                {
+                    mr.enabled = !suppress;
+                }
+                if (TryGetCriControllerAndPlayer(graph, out _, out object player) && player != null)
+                {
+                    _criPlayerPauseMethod?.Invoke(player, new object[] { suppress });
+                }
+                flag = suppress;
+            }
+            catch
+            {
+            }
+        }
+
+        private void RestoreAllVanillaCri(HomePanel home, BackgroundPanel bgPanel)
+        {
+            if (_suppressedHomeCri)
+            {
+                RestoreHomeVanillaCri(home);
+            }
+            if (_suppressedSubCri)
+            {
+                if (bgPanel != null && bgPanel.UIObject != null)
+                {
+                    SuppressVanillaCri(bgPanel.UIObject.loader_BG, false, ref _suppressedSubCri);
+                }
+                _suppressedSubCri = false;
+            }
+        }
+
+        private void RestoreHomeVanillaCri(HomePanel home)
+        {
+            if (home != null && home.UIObject != null && home.UIObject.Com_BGSet != null)
+            {
+                GGraph graph = home.UIObject.Com_BGSet.loader_Video;
+                SuppressVanillaCri(graph, false, ref _suppressedHomeCri);
+                if (_criOverrideApplied && _showStartVideoMethod != null)
+                {
+                    _criOverrideApplied = false;
+                    try { _showStartVideoMethod.Invoke(home, null); } catch { }
+                }
+            }
+            _suppressedHomeCri = false;
+            _criOverrideApplied = false;
+        }
+
+        private void RestoreSubPanelVanilla()
+        {
+            BackgroundPanel bgPanel = FindBackgroundPanel();
+            if (bgPanel != null && bgPanel.UIObject != null && bgPanel.UIObject.loader_BG != null)
+            {
+                SuppressVanillaCri(bgPanel.UIObject.loader_BG, false, ref _suppressedSubCri);
+                if (_bgRefreshMethod != null)
+                {
+                    try { _bgRefreshMethod.Invoke(bgPanel, null); } catch { }
+                }
+            }
+            _suppressedSubCri = false;
+        }
+
+        // ------------------------------------------------------------------
+        // Teardown Helpers
+        // ------------------------------------------------------------------
+
+        private void TeardownActiveMedia(bool restoreVanilla)
+        {
+            _videoPreparing = false;
+            _videoStarted = false;
+            _pausedForAway = false;
+            _criPhase = CriSwitchPhase.Idle;
+            _pendingCriPath = "";
+            ActiveMediaKind = LobbyBgMediaKind.Unknown;
+
+            if (_videoPlayer != null)
+            {
+                try
+                {
+                    _videoPlayer.Stop();
+                    _videoPlayer.targetTexture = null;
+                }
+                catch
+                {
+                }
+            }
+
+            if (_homeLoader != null && !_homeLoader.isDisposed)
+            {
+                _homeLoader.visible = false;
+                _homeLoader.texture = null;
+            }
+            if (_subLoader != null && !_subLoader.isDisposed)
+            {
+                _subLoader.visible = false;
+                _subLoader.texture = null;
+            }
+
+            ReleaseActiveNTexture();
+            ReleaseRenderTexture();
+            ReleaseImageTex();
+            ReleaseCriBundle();
+
+            if (restoreVanilla)
+            {
+                ActiveMediaLabel = "原版默认大厅";
+                RestoreAllVanillaCri(FindHomePanel(), FindBackgroundPanel());
+            }
+        }
+
+        private void ReleaseActiveNTexture()
+        {
+            if (_activeNTexture != null)
+            {
+                try
+                {
+                    _activeNTexture.ReleaseRef();
+                    _activeNTexture.Dispose();
+                }
+                catch
+                {
+                }
+                _activeNTexture = null;
+            }
+        }
+
+        private void ReleaseRenderTexture()
+        {
+            if (_videoRt != null)
+            {
+                try
+                {
+                    _videoRt.Release();
+                    Destroy(_videoRt);
+                }
+                catch
+                {
+                }
+                _videoRt = null;
+            }
+        }
+
+        private void ReleaseImageTex()
+        {
+            if (_loadedImageTex != null)
+            {
+                try { Destroy(_loadedImageTex); } catch { }
+                _loadedImageTex = null;
+            }
+        }
+
+        private void ReleaseCriBundle()
+        {
+            if (_loadedCriBundle != null)
+            {
+                try { _loadedCriBundle.Unload(true); } catch { }
+                _loadedCriBundle = null;
+            }
+        }
+
+        private void DestroyOverlayLoaders()
+        {
+            if (_homeLoader != null)
+            {
+                try { if (!_homeLoader.isDisposed) _homeLoader.Dispose(); } catch { }
+                _homeLoader = null;
+            }
+            if (_subLoader != null)
+            {
+                try { if (!_subLoader.isDisposed) _subLoader.Dispose(); } catch { }
+                _subLoader = null;
+            }
+            _attachedHomeGraph = null;
+            _attachedSubGraph = null;
+        }
+
+        // ------------------------------------------------------------------
+        // Panel Discovery & Reflection Initialization
+        // ------------------------------------------------------------------
+
+        private static HomePanel FindHomePanel()
+        {
+            UIManager mgr = UIManager.inst;
+            if (mgr == null) return null;
+            if (mgr.currentPanel is HomePanel hp) return hp;
+            if (_cachedPanelDictField != null)
+            {
+                try
+                {
+                    var dict = _cachedPanelDictField.GetValue(mgr) as Dictionary<UIPanelType, IBasePanel>;
+                    if (dict != null && dict.TryGetValue(UIPanelType.Home, out IBasePanel panel))
+                    {
+                        return panel as HomePanel;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return null;
+        }
+
+        private static BackgroundPanel FindBackgroundPanel()
+        {
+            UIManager mgr = UIManager.inst;
+            return mgr != null ? mgr.backgroundPanel as BackgroundPanel : null;
+        }
+
+        private static bool IsPanelVisibleOnStage<TUi>(BasePanel<TUi> panel, out TUi uiObj) where TUi : GComponent
+        {
+            uiObj = null;
+            if (panel == null || !panel.IsOpen()) return false;
+            uiObj = panel.UIObject;
+            return uiObj != null && !uiObj.isDisposed && uiObj.visible && uiObj.onStage;
+        }
+
+        private static void InitReflection()
+        {
+            if (_reflInit) return;
+            _reflInit = true;
+
+            const BindingFlags anyInst = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            _cachedPanelDictField = typeof(UIManager).GetField("_cachedPanelDict", anyInst);
+            _showStartVideoMethod = typeof(HomePanel).GetMethod("ShowStartVideo", anyInst);
+            _bgRefreshMethod = typeof(BackgroundPanel).GetMethod("InitComponents", anyInst);
+
+            // Stripped-safe VideoPlayer properties/methods on Android IL2CPP
+            Type vpType = typeof(VideoPlayer);
+            _vpIsLoopingProp = vpType.GetProperty("isLooping", anyInst);
+            _vpAudioModeProp = vpType.GetProperty("audioOutputMode", anyInst);
+            _vpSetMuteMethod = vpType.GetMethod("SetDirectAudioMute", anyInst);
+            _vpSetVolMethod = vpType.GetMethod("SetDirectAudioVolume", anyInst);
+
+            // CriWare runtime reflection (avoids hard compile dependency on CriMw DLLs)
+            try
+            {
+                Type ctrlType = typeof(HomePanel).Assembly.GetType("UI.CriManaMovieControllerForGGraph");
+                _criCtrlType = ctrlType;
+                if (ctrlType != null)
+                {
+                    _criCtrlSetAssetMethod = ctrlType.GetMethod("SetAsset", anyInst);
+                    _criPlayerProp = ctrlType.GetProperty("player", anyInst);
+                    if (_criPlayerProp != null)
+                    {
+                        Type playerType = _criPlayerProp.PropertyType;
+                        _criPlayerPauseMethod = playerType.GetMethod("Pause", anyInst);
+                        _criPlayerStopMethod = playerType.GetMethod("Stop", anyInst);
+                        _criPlayerStartMethod = playerType.GetMethod("Start", anyInst);
+                        _criPlayerLoopMethod = playerType.GetMethod("Loop", anyInst);
+                        _criPlayerSetSpeedMethod = playerType.GetMethod("SetSpeed", anyInst);
+                        _criPlayerSetVolumeMethod = playerType.GetMethod("SetVolume", anyInst);
+                        _criPlayerStatusProp = playerType.GetProperty("status", anyInst);
+                        MethodInfo[] methods = playerType.GetMethods(anyInst);
+                        for (int i = 0; i < methods.Length; i++)
+                        {
+                            if (methods[i].Name == "SetFile" && methods[i].GetParameters().Length >= 2)
+                            {
+                                _criPlayerSetFileMethod = methods[i];
+                                break;
+                            }
+                        }
+                    }
+                }
+                Assembly[] loaded = AppDomain.CurrentDomain.GetAssemblies();
+                for (int i = 0; i < loaded.Length; i++)
+                {
+                    Type t = loaded[i].GetType("CriWare.Assets.CriManaUsmAsset", false, false);
+                    if (t != null)
+                    {
+                        _criUsmAssetType = t;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+}

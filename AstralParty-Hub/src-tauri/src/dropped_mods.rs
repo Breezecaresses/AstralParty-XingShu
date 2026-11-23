@@ -24,10 +24,10 @@ use crate::mod_resources::{self, SwitchFile, target_key};
 use crate::workshop::operation_lock;
 use crate::storage::repositories::BackupRepository;
 
-const MAX_DROP_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_DROP_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_DROP_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
-const MAX_DROP_ENTRIES: usize = 2000;
+const MAX_DROP_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_DROP_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_DROP_PAYLOAD_BYTES: usize = 512 * 1024 * 1024;
+const MAX_DROP_ENTRIES: usize = 4000;
 
 const FORBIDDEN_EXTS: &[&str] = &[
     ".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".msi", ".msp",
@@ -142,6 +142,8 @@ struct DroppedModReceipt {
 struct DiscoveredTargets {
     /// Lowercase 32-hex bundle id -> list of `(relative_path_under_root, target_kind)`
     by_hex: HashMap<String, Vec<(String, String)>>,
+    /// Lowercase 32-hex Addressables group folder -> list of `(relative_path_under_root, target_kind)`
+    by_addr_group: HashMap<String, Vec<(String, String)>>,
     /// Relative path under `StreamingAssets/aa/` (lowercased) -> `(relative_path_under_root, target_kind)`
     by_aa_rel: HashMap<String, (String, String)>,
     /// Exact `<DataDir>/StreamingAssets/aa/catalog.bundle` targets
@@ -350,6 +352,7 @@ fn runtime_bundle_id_for_platform(platform: &str) -> Option<String> {
 
 fn discover_game_targets(game: &GameInstallation, root: &Path) -> HubResult<DiscoveredTargets> {
     let mut by_hex: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut by_addr_group: HashMap<String, Vec<(String, String)>> = HashMap::new();
     let mut by_aa_rel: HashMap<String, (String, String)> = HashMap::new();
     let mut catalog_targets = Vec::new();
 
@@ -430,7 +433,19 @@ fn discover_game_targets(game: &GameInstallation, root: &Path) -> HubResult<Disc
                             by_hex
                                 .entry(parent_hex.to_ascii_lowercase())
                                 .or_default()
-                                .push((rel, "addressables".into()));
+                                .push((rel.clone(), "addressables".into()));
+                            if let Some(group_hex) = path
+                                .parent()
+                                .and_then(Path::parent)
+                                .and_then(|p| p.file_name())
+                                .and_then(|s| s.to_str())
+                                .filter(|s| is_hex32(s))
+                            {
+                                by_addr_group
+                                    .entry(group_hex.to_ascii_lowercase())
+                                    .or_default()
+                                    .push((rel, "addressables".into()));
+                            }
                         }
                     }
                 }
@@ -442,9 +457,14 @@ fn discover_game_targets(game: &GameInstallation, root: &Path) -> HubResult<Disc
         targets.sort();
         targets.dedup();
     }
+    for targets in by_addr_group.values_mut() {
+        targets.sort();
+        targets.dedup();
+    }
 
     Ok(DiscoveredTargets {
         by_hex,
+        by_addr_group,
         by_aa_rel,
         catalog_targets,
         protected_runtime_bundle_id: runtime_bundle_id_for_platform(&game.platform),
@@ -602,7 +622,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
             }
             entry_count += 1;
             if entry_count > MAX_DROP_ENTRIES {
-                return Err(HubError::security_violation("拖入文件夹包含文件数量超过安全上限（2000）。"));
+                return Err(HubError::security_violation("拖入文件夹包含文件数量超过安全上限（4000）。"));
             }
             let rel = entry
                 .path()
@@ -619,7 +639,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
             let meta = entry.metadata().map_err(|e| HubError::storage_error(e.to_string()))?;
             total_bytes = total_bytes.saturating_add(meta.len());
             if total_bytes > MAX_DROP_UNCOMPRESSED_BYTES {
-                return Err(HubError::security_violation("拖入文件夹总体积超过 512MB 安全上限。"));
+                return Err(HubError::security_violation("拖入文件夹总体积超过 2GB 安全上限。"));
             }
 
             let file_name = Path::new(&lower).file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -650,7 +670,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
 
     let meta = fs::metadata(source_path).map_err(|e| HubError::storage_error(e.to_string()))?;
     if meta.len() == 0 || meta.len() > MAX_DROP_ARCHIVE_BYTES {
-        return Err(HubError::security_violation("拖入文件为空或超过 256MB 安全上限。"));
+        return Err(HubError::security_violation("拖入文件为空或超过 1GB 安全上限。"));
     }
 
     if lower_name.ends_with(".bundle") {
@@ -712,7 +732,7 @@ fn read_source_entries(source_path: &Path) -> HubResult<(String, String, Vec<Raw
         }
         total_uncompressed = total_uncompressed.saturating_add(entry.size());
         if total_uncompressed > MAX_DROP_UNCOMPRESSED_BYTES {
-            return Err(HubError::security_violation("压缩包解压总体积超过 512MB 安全上限。"));
+            return Err(HubError::security_violation("压缩包解压总体积超过 2GB 安全上限。"));
         }
         let clean = PathGuard::sanitize_relative_path(&raw_name)?
             .to_string_lossy()
@@ -768,6 +788,65 @@ pub(crate) fn is_xspkg_archive(source_path: &Path) -> HubResult<bool> {
     };
     let has_manifest = zf.by_name("manifest.json").is_ok();
     Ok(has_manifest)
+}
+
+fn extract_trailing_hex32(stem: &str) -> Option<String> {
+    if stem.len() <= 32 {
+        return None;
+    }
+    let split_idx = stem.len() - 32;
+    if !stem.is_char_boundary(split_idx) {
+        return None;
+    }
+    let prefix = &stem[..split_idx];
+    let suffix = &stem[split_idx..];
+    if !is_hex32(suffix) {
+        return None;
+    }
+    if prefix.chars().last().is_some_and(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(suffix.to_ascii_lowercase())
+}
+
+fn extract_embedded_unityfs_bundle_id(bytes: &[u8]) -> Option<String> {
+    if !bytes.starts_with(b"UnityFS") {
+        return None;
+    }
+    let scan = &bytes[..bytes.len().min(128 * 1024)];
+    const SUFFIX: &[u8] = b".bundle";
+    if scan.len() < 32 + SUFFIX.len() {
+        return None;
+    }
+    for idx in 32..=scan.len() - SUFFIX.len() {
+        if !scan[idx..idx + SUFFIX.len()].eq_ignore_ascii_case(SUFFIX) {
+            continue;
+        }
+        let hex_slice = &scan[idx - 32..idx];
+        if !hex_slice.iter().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        if idx > 32 && scan[idx - 33].is_ascii_hexdigit() {
+            continue;
+        }
+        if let Some(&after) = scan.get(idx + SUFFIX.len()) {
+            if after.is_ascii_alphanumeric() || after == b'_' {
+                continue;
+            }
+        }
+        return Some(String::from_utf8_lossy(hex_slice).to_ascii_lowercase());
+    }
+    None
+}
+
+fn lookup_hex_targets<'a>(
+    discovered: &'a DiscoveredTargets,
+    hex_id: &str,
+) -> Option<&'a Vec<(String, String)>> {
+    discovered
+        .by_hex
+        .get(hex_id)
+        .or_else(|| discovered.by_addr_group.get(hex_id))
 }
 
 fn inspect_against_game(
@@ -843,6 +922,7 @@ fn inspect_against_game(
     let mut warnings = Vec::new();
     let mut seen_targets = HashSet::new();
     let mut has_catalog_bundle = false;
+    let mut addr_group_fallback_count = 0usize;
 
     for raw in raw_payloads {
         let entry_lower = raw.source_entry.to_ascii_lowercase();
@@ -883,12 +963,27 @@ fn inspect_against_game(
                 .and_then(|s| s.to_str())
                 .filter(|s| is_hex32(s))
                 .map(|s| s.to_ascii_lowercase());
+            let grandparent_hex = path_obj
+                .parent()
+                .and_then(Path::parent)
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .filter(|s| is_hex32(s))
+                .map(|s| s.to_ascii_lowercase());
             if let Some(hex_id) = parent_hex {
                 if let Some(targets) = discovered.by_hex.get(&hex_id) {
                     for (t_rel, t_kind) in targets {
                         if t_kind == "addressables" || targets.len() == 1 {
                             candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false));
                         }
+                    }
+                } else if let Some((group_id, targets)) = grandparent_hex
+                    .as_deref()
+                    .and_then(|gid| discovered.by_addr_group.get(gid).map(|t| (gid.to_string(), t)))
+                {
+                    addr_group_fallback_count += 1;
+                    for (t_rel, t_kind) in targets {
+                        candidate_targets.push((group_id.clone(), t_rel.clone(), t_kind.clone(), false));
                     }
                 } else {
                     unmatched_files.push(DroppedModUnmatchedFile {
@@ -908,7 +1003,7 @@ fn inspect_against_game(
             }
         } else if let Some(stem) = path_obj.file_stem().and_then(|s| s.to_str()).filter(|s| is_hex32(s)) {
             let hex_id = stem.to_ascii_lowercase();
-            if let Some(targets) = discovered.by_hex.get(&hex_id) {
+            if let Some(targets) = lookup_hex_targets(&discovered, &hex_id) {
                 for (t_rel, t_kind) in targets {
                     candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false));
                 }
@@ -916,6 +1011,31 @@ fn inspect_against_game(
                 unmatched_files.push(DroppedModUnmatchedFile {
                     source_entry: raw.source_entry,
                     reason: format!("当前游戏目录未找到对应 Bundle（{hex_id}.bundle），可能版本或渠道不一致"),
+                    size: raw.bytes.len() as u64,
+                });
+                continue;
+            }
+        } else if let Some(hex_id) = path_obj
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(extract_trailing_hex32)
+        {
+            if discovered
+                .protected_runtime_bundle_id
+                .as_deref()
+                .is_some_and(|rt_id| rt_id.eq_ignore_ascii_case(&hex_id))
+            {
+                conflicts.push(format!("{file_name} 属于星枢运行时核心容器，第三方模组无法覆盖。"));
+                continue;
+            }
+            if let Some(targets) = lookup_hex_targets(&discovered, &hex_id) {
+                for (t_rel, t_kind) in targets {
+                    candidate_targets.push((hex_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                }
+            } else {
+                unmatched_files.push(DroppedModUnmatchedFile {
+                    source_entry: raw.source_entry,
+                    reason: format!("检测到带前缀 Bundle ID（{hex_id}），但当前游戏目录未找到该版本资源"),
                     size: raw.bytes.len() as u64,
                 });
                 continue;
@@ -938,6 +1058,33 @@ fn inspect_against_game(
                 "modimg".into(),
                 false,
             ));
+        } else if let Some(embedded_id) = file_lower
+            .ends_with(".bundle")
+            .then(|| extract_embedded_unityfs_bundle_id(&raw.bytes))
+            .flatten()
+        {
+            if discovered
+                .protected_runtime_bundle_id
+                .as_deref()
+                .is_some_and(|rt_id| rt_id.eq_ignore_ascii_case(&embedded_id))
+            {
+                conflicts.push(format!("{file_name} 属于星枢运行时核心容器，第三方模组无法覆盖。"));
+                continue;
+            }
+            if let Some(targets) = lookup_hex_targets(&discovered, &embedded_id) {
+                for (t_rel, t_kind) in targets {
+                    candidate_targets.push((embedded_id.clone(), t_rel.clone(), t_kind.clone(), false));
+                }
+            } else {
+                unmatched_files.push(DroppedModUnmatchedFile {
+                    source_entry: raw.source_entry,
+                    reason: format!(
+                        "重命名 Bundle 文件（内置容器 ID {embedded_id}）与当前游戏版本不匹配，需重新适配 3.3.0"
+                    ),
+                    size: raw.bytes.len() as u64,
+                });
+                continue;
+            }
         } else {
             unmatched_files.push(DroppedModUnmatchedFile {
                 source_entry: raw.source_entry,
@@ -1000,6 +1147,11 @@ fn inspect_against_game(
         }
     }
 
+    if addr_group_fallback_count > 0 {
+        warnings.push(format!(
+            "已通过 Addressables 分组自动对齐 {addr_group_fallback_count} 个热更缓存目标（目录 Hash 已随游戏更新）。"
+        ));
+    }
     if has_catalog_bundle {
         warnings.push(
             "检测到 catalog.bundle（高风险 · 游戏版本敏感）：仅与作者同版本游戏兼容，跨版本覆盖可能导致游戏白屏或闪退。建议优先仅安装非 catalog 的 Bundle，或确认版本一致后再勾选包含 catalog.bundle。"
@@ -1578,7 +1730,7 @@ fn percent_decode_utf8(input: &str) -> String {
 
 fn save_staged_drop_file(app: &tauri::AppHandle, file_name: &str, bytes: &[u8]) -> HubResult<String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_DROP_ARCHIVE_BYTES {
-        return Err(HubError::security_violation("选择的文件为空或超过 256MB 安全上限。"));
+        return Err(HubError::security_violation("选择的文件为空或超过 1GB 安全上限。"));
     }
     let raw_name = Path::new(file_name)
         .file_name()
@@ -1943,5 +2095,108 @@ mod tests {
 
         restore_dropped_by_id(&game, &game_dir, &installed.mod_id, None).unwrap();
         assert!(!modimg_target.exists());
+    }
+
+    #[test]
+    fn raises_drop_and_payload_safety_limits_to_one_gb() {
+        assert_eq!(MAX_DROP_ARCHIVE_BYTES, 1024 * 1024 * 1024);
+        assert_eq!(MAX_DROP_UNCOMPRESSED_BYTES, 2 * 1024 * 1024 * 1024);
+        assert_eq!(MAX_DROP_PAYLOAD_BYTES, 512 * 1024 * 1024);
+        assert_eq!(MAX_DROP_ENTRIES, 4000);
+        let default_limits = ArchiveLimits::default();
+        assert_eq!(default_limits.max_total_uncompressed_bytes, 2 * 1024 * 1024 * 1024);
+        assert_eq!(default_limits.max_single_file_uncompressed_bytes, 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn matches_addr_group_fallback_prefixed_hex_and_renamed_unityfs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("game");
+        fs::create_dir_all(&game_dir).unwrap();
+        let game = fixture_game(&game_dir);
+
+        // Add an Addressables group <group_hex>/<active_hash>/__data and a target StreamingAssets bundle TEST_HEX_C
+        let group_hex = "22103a2740055e170c9a3ab8ab7726e0";
+        let active_hash = "0cd1009cf6e68f76bcdd73c29baa9f8d";
+        let stale_hash = "6a05659c8dc249397ef9ce7778695662";
+        let addr_active = game_dir.join(format!("AstralParty_CN_Data/com.unity.addressables/AssetBundles/{group_hex}/{active_hash}/__data"));
+        fs::create_dir_all(addr_active.parent().unwrap()).unwrap();
+        fs::write(&addr_active, b"orig-bgm").unwrap();
+
+        let hex_c = "ce45386e584499fd057d72a70920c2c5";
+        let aa_c = game_dir.join(format!("AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64/{hex_c}.bundle"));
+        fs::write(&aa_c, b"orig-walk").unwrap();
+
+        let hex_d = "454ded72450418a1eb5f4ae2d5059aed";
+        let aa_d = game_dir.join(format!("AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64/{hex_d}.bundle"));
+        fs::write(&aa_d, b"orig-kv").unwrap();
+
+        let mut renamed_unityfs = b"UnityFS\x00\x00\x00\x00\x07\x00\x00CAB-123\x00".to_vec();
+        renamed_unityfs.extend_from_slice(format!("{hex_d}.bundle\x00").as_bytes());
+        let old_id = "4a6b48e0b60886e0248edf829d1651aa";
+        let mut stale_unityfs = b"UnityFS\x00\x00\x00\x00\x07\x00\x00CAB-999\x00".to_vec();
+        stale_unityfs.extend_from_slice(format!("{old_id}.bundle\x00").as_bytes());
+
+        let zip_path = tmp.path().join("smart_match.zip");
+        write_zip(&zip_path, &[
+            (&format!("缓存/{group_hex}/{stale_hash}/__data"), b"mod-bgm"),
+            (&format!("Mod/WALK原皮{hex_c}.bundle"), b"mod-walk"),
+            ("Mod/WALK原皮ce45386e584499fd057d72a70920c2c5.bundle.bak", b"bak-should-ignore"),
+            ("__data_renamed.bundle", &renamed_unityfs),
+            ("__data (2).bundle", &stale_unityfs),
+        ]);
+
+        let (inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &zip_path).unwrap();
+        assert_eq!(inspect.matched_files.len(), 3, "matched: {:?}", inspect.matched_files);
+        assert!(inspect.matched_files.iter().any(|m| m.target_rel.ends_with(&format!("{group_hex}/{active_hash}/__data"))));
+        assert!(inspect.matched_files.iter().any(|m| m.target_rel.ends_with(&format!("{hex_c}.bundle"))));
+        assert!(inspect.matched_files.iter().any(|m| m.target_rel.ends_with(&format!("{hex_d}.bundle"))));
+        assert_eq!(inspect.unmatched_files.len(), 1);
+        assert!(inspect.unmatched_files[0].reason.contains(old_id));
+        // Prefix guard: a 64-hex string must NOT be sliced to trailing 32-hex
+        assert_eq!(extract_trailing_hex32(&"a".repeat(64)), None);
+        assert_eq!(extract_trailing_hex32(&format!("WALK原皮{hex_c}")), Some(hex_c.to_string()));
+    }
+
+    #[test]
+    #[ignore = "requires local large archive via XINGSHU_TEST_LARGE_MOD"]
+    fn inspects_real_large_archive_from_env() {
+        let path = PathBuf::from(std::env::var_os("XINGSHU_TEST_LARGE_MOD").unwrap());
+        let (kind, name, payloads, _, _) = read_source_entries(&path).unwrap();
+        assert_eq!(kind, "community_zip");
+        assert!(!name.is_empty());
+        assert!(!payloads.is_empty());
+        println!("VERIFIED LARGE ARCHIVE: kind={kind} name={name} payloads={}", payloads.len());
+        if let Some(game_dir) = std::env::var_os("XINGSHU_TEST_GAME_ROOT").map(PathBuf::from) {
+            let game = GameInstallation {
+                id: "inst-real".into(),
+                platform: "STEAM_CN".into(),
+                platform_app_id: Some("2622000".into()),
+                install_path: game_dir.display().to_string(),
+                executable_path: Some(game_dir.join("AstralParty_CN.exe").display().to_string()),
+                detected_build_id: None,
+                detected_version: None,
+                detection_method: "TEST".into(),
+                is_valid: true,
+                is_primary: true,
+                last_verified_at: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            let (inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &path).unwrap();
+            println!(
+                "REAL INSPECT: matched={} unmatched={} conflicts={}",
+                inspect.matched_files.len(),
+                inspect.unmatched_files.len(),
+                inspect.conflicts.len()
+            );
+            assert!(inspect.unmatched_files.is_empty(), "unmatched: {:?}", inspect.unmatched_files);
+            assert!(!inspect.matched_files.is_empty());
+            if let Some(expected) = std::env::var_os("XINGSHU_TEST_EXPECT_MATCHED")
+                .and_then(|s| s.to_string_lossy().parse::<usize>().ok())
+            {
+                assert_eq!(inspect.matched_files.len(), expected);
+            }
+        }
     }
 }

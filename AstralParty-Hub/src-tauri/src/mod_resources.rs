@@ -10,7 +10,7 @@ use crate::{
     security::hash::{compute_file_sha256, compute_sha256_bytes},
 };
 
-const MAX_RESOURCE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_RESOURCE_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub(crate) struct SwitchFile {
     pub target: PathBuf,

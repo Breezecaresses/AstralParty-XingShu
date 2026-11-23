@@ -130,7 +130,7 @@ final class AddressablesCatalog {
 
     static String managedBundleId(File catalogFile) throws IOException {
         if (catalogFile == null || !catalogFile.isFile()) {
-            throw new IOException("缺少游戏资源清单 catalog_3.3.0.json");
+            throw new IOException("缺少游戏资源清单 " + (catalogFile == null ? "catalog.json" : catalogFile.getName()));
         }
         if (catalogFile.length() > MAX_CATALOG_BYTES) {
             throw new IOException("资源清单体积异常，超过安全限制");

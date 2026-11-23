@@ -78,6 +78,7 @@ export function LauncherHome() {
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refreshes, setRefreshes] = useState(0);
+  const forceCoreRefresh = useRef(false);
   const launching = useRef(false);
   const mounted = useRef(true);
 
@@ -114,7 +115,9 @@ export function LauncherHome() {
     setPhase('idle');
     if (!installationId) return;
     let active = true;
-    invoke<LauncherDiskState>('launcher_check', { installationId })
+    const forceRefresh = forceCoreRefresh.current;
+    forceCoreRefresh.current = false;
+    invoke<LauncherDiskState>('launcher_check', { installationId, forceRefresh })
       .then((value) => {
         if (active) setDiskRead({ id: installationId, value });
       })
@@ -242,6 +245,7 @@ export function LauncherHome() {
   };
 
   const refresh = async () => {
+    forceCoreRefresh.current = true;
     await target.refresh();
     if (mounted.current) setRefreshes((count) => count + 1);
   };
@@ -486,7 +490,11 @@ export function LauncherHome() {
             <div className="pcl-dock-center">
               <div className="pcl-emblem-stage">
                 <div className="pcl-emblem-ring" aria-hidden="true" />
-                <img src={assetUrl('brand/xingshu.svg')} alt="" className="pcl-emblem-img" />
+                <img
+                  src={assetUrl(zh ? 'brand/astral-party-logo-zh.png' : 'brand/astral-party-logo-en.png')}
+                  alt={zh ? '吉星派对' : 'Astral Party'}
+                  className="pcl-emblem-img"
+                />
               </div>
               <div className="pcl-title-lockup">
                 <span className={`pcl-edition-chip ${session?.runtimeVersion ? 'is-live' : ''}`}>

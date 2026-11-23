@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -34,6 +34,7 @@ import {
   X,
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
+import { EmoteReactionBar } from '../../components/platform/EmoteReactionBar';
 import { useTranslation } from '../../i18n';
 import { api, type DroppedModRecord, type WorkshopLocalItemState } from '../../shared/api/tauri';
 import officialModules from '../../shared/launcherModules.json';
@@ -59,6 +60,7 @@ import {
 import { ExternalModsPanel } from '../extensions/ExternalModsPanel';
 import { ModDropInspector } from '../extensions/ModDropInspector';
 import { type ConflictInspectReport, type LauncherDiskState, errorMessage } from './launcherModel';
+import { useLauncherTheme } from './launcherTheme';
 import {
   OFFICIAL_SUB_GROUPS,
   getCategoryVisualMeta,
@@ -265,6 +267,7 @@ interface UnifiedModItem {
 
 export function LauncherMods() {
   const zh = useTranslation().locale === 'zh-CN';
+  const { theme } = useLauncherTheme();
   const target = useExtensionTarget();
   const installationId = target.selected?.id ?? '';
   const location = useLocation();
@@ -307,6 +310,8 @@ export function LauncherMods() {
     percent: number;
     detail: string;
   } | null>(null);
+  const busyRef = useRef(false);
+  const forceCoreRefreshRef = useRef(false);
   const [pendingKey, setPendingKey] = useState('');
   const [installProgress, setInstallProgress] = useState<{
     modId: string;
@@ -317,20 +322,24 @@ export function LauncherMods() {
     detail: string;
   } | null>(null);
   const [error, setError] = useState('');
+  const [conflictRetryItem, setConflictRetryItem] = useState<UnifiedModItem | null>(null);
   const [notice, setNotice] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [revision, setRevision] = useState(0);
   const [detailKey, setDetailKey] = useState<string | null>(null);
-  const [detailVersions, setDetailVersions] = useState<WorkshopVersionEntry[]>([]);
-  const [detailVersionsLoading, setDetailVersionsLoading] = useState(false);
+  const [detailFull, setDetailFull] = useState<WorkshopModItem | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; caption?: string } | null>(null);
   const localReady = Boolean(installationId) && currentInst === installationId;
 
   useEffect(() => {
     let active = true;
+    const forceRefresh = forceCoreRefreshRef.current;
+    forceCoreRefreshRef.current = false;
     setError('');
     void Promise.allSettled([
       invoke<ModCatalog>('launcher_mods', { installationId: installationId || null }),
       installationId
-        ? invoke<LauncherDiskState>('launcher_check', { installationId })
+        ? invoke<LauncherDiskState>('launcher_check', { installationId, forceRefresh })
         : Promise.resolve(undefined),
       installationId
         ? api.workshopListLocalState(installationId)
@@ -418,11 +427,51 @@ export function LauncherMods() {
   useEffect(() => {
     if (!detailKey) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setDetailKey(null);
+      if (e.key !== 'Escape') return;
+      if (lightboxImage) {
+        setLightboxImage(null);
+        return;
+      }
+      if (document.querySelector('.xp-modal-backdrop, .mr-emote-popover')) {
+        return;
+      }
+      setDetailKey(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [detailKey]);
+  }, [detailKey, lightboxImage]);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || !installationId) {
+      if (!busyRef.current) {
+        setPendingKey('');
+        setInstallProgress(null);
+      }
+      return;
+    }
+    let active = true;
+    void api.workshopActiveInstallProgress(installationId).then((prog) => {
+      if (!active) return;
+      if (prog) {
+        busyRef.current = true;
+        setPendingKey(prog.modId);
+        setInstallProgress({
+          modId: prog.modId,
+          stage: prog.stage,
+          downloadedBytes: prog.downloadedBytes,
+          totalBytes: prog.totalBytes,
+          percent: prog.percent,
+          detail: prog.detail,
+        });
+      } else if (!busyRef.current) {
+        setPendingKey('');
+        setInstallProgress(null);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [installationId]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -453,7 +502,32 @@ export function LauncherMods() {
       detail: string;
     }>('xingshu:mod-install-progress', ({ payload }) => {
       if (!active || !payload) return;
-      setInstallProgress(payload);
+      if (payload.stage === 'done' || payload.stage === 'error') {
+        busyRef.current = false;
+        setPendingKey('');
+        setInstallProgress(null);
+        if (payload.stage === 'done') {
+          setRevision((v) => v + 1);
+        }
+        return;
+      }
+      busyRef.current = true;
+      setPendingKey((prev) => prev || payload.modId);
+      setInstallProgress((prev) => {
+        if (
+          prev
+          && prev.modId === payload.modId
+          && prev.stage === 'downloading'
+          && payload.stage === 'downloading'
+        ) {
+          return {
+            ...payload,
+            downloadedBytes: Math.max(prev.downloadedBytes, payload.downloadedBytes),
+            percent: Math.max(prev.percent, payload.percent),
+          };
+        }
+        return payload;
+      });
     }).then((fn) => {
       if (!active) fn();
       else unlisten = fn;
@@ -615,31 +689,34 @@ export function LauncherMods() {
   }, [catalog?.modules, droppedRecords, localReady, localStates, target.selected, workshopItems, zh]);
 
   const detailItem = unifiedItems.find((item) => item.key === detailKey);
+  const detailWsId = detailItem?.workshopItem?.id || '';
 
   useEffect(() => {
-    const ws = detailItem?.workshopItem;
-    if (!ws || (ws.versionCount ?? 0) <= 1) {
-      setDetailVersions(ws?.versions || []);
-      setDetailVersionsLoading(false);
+    setLightboxImage(null);
+    if (!detailWsId) {
+      setDetailFull(null);
+      setDetailLoading(false);
       return;
     }
+    const seed = workshopItems.find((w) => w.id === detailWsId) ?? null;
+    setDetailFull(seed);
     let cancelled = false;
-    setDetailVersions(ws.versions || []);
-    setDetailVersionsLoading(true);
-    void fetchWorkshopModDetail(ws.id)
+    setDetailLoading(true);
+    void fetchWorkshopModDetail(detailWsId)
       .then((detail) => {
-        if (!cancelled) setDetailVersions(detail.versions || []);
+        if (!cancelled) setDetailFull(detail);
       })
       .catch(() => {
-        if (!cancelled) setDetailVersions(ws.versions || []);
+        // Keep catalog summary seed when network detail fetch fails
       })
       .finally(() => {
-        if (!cancelled) setDetailVersionsLoading(false);
+        if (!cancelled) setDetailLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [detailItem?.key, detailItem?.workshopItem]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailKey, detailWsId]);
 
   const installedItems = useMemo(() => {
     const q = installedQuery.trim().toLowerCase();
@@ -706,8 +783,10 @@ export function LauncherMods() {
     return list;
   }, [categoryFilter, searchInput, sortMode, sourceFilter, statusFilter, tagFilter, unifiedItems, zh]);
 
-  const handleInstall = async (item: UnifiedModItem) => {
-    if (!localReady || pendingKey) return;
+  const handleInstall = async (item: UnifiedModItem, skipConflicts = false) => {
+    if (!localReady || busyRef.current || pendingKey) return;
+    busyRef.current = true;
+    let keepBusy = false;
     setPendingKey(item.key);
     setInstallProgress({
       modId: item.id,
@@ -718,7 +797,13 @@ export function LauncherMods() {
       detail: zh ? `准备下载并安装「${item.name}」…` : `Preparing ${item.name}…`,
     });
     setError('');
-    setNotice({ kind: 'info', text: zh ? `正在下载并安装「${item.name}」…` : `Installing ${item.name}…` });
+    setConflictRetryItem(null);
+    setNotice({
+      kind: 'info',
+      text: skipConflicts
+        ? zh ? `正在跳过冲突文件并安装「${item.name}」…` : `Installing ${item.name} (skipping conflicts)…`
+        : zh ? `正在下载并安装「${item.name}」…` : `Installing ${item.name}…`,
+    });
     try {
       if (item.officialMod && item.canLocalOfficialToggle && !item.officialMod.installed) {
         await invoke('launcher_change_mod', {
@@ -734,7 +819,11 @@ export function LauncherMods() {
         });
       } else if (item.workshopItem && item.canDirectWorkshopInstall) {
         const ws = item.workshopItem;
-        const result = await api.workshopDownloadAndInstall({ installationId, modId: ws.id });
+        const result = await api.workshopDownloadAndInstall({
+          installationId,
+          modId: ws.id,
+          skipConflicts,
+        });
         setNotice({ kind: 'success', text: result.message });
       } else {
         throw new Error(
@@ -746,18 +835,68 @@ export function LauncherMods() {
       setRevision((v) => v + 1);
     } catch (issue) {
       const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      const code = issue && typeof issue === 'object' && 'code' in issue
+        ? String((issue as { code?: unknown }).code || '')
+        : '';
+      const isInProgress = code === 'MOD_INSTALL_IN_PROGRESS' || msg.includes('正在处理');
+      if (isInProgress) {
+        keepBusy = true;
+        setConflictRetryItem(null);
+        setError('');
+        setNotice({
+          kind: 'info',
+          text: zh ? '该模组或当前目录已有下载任务进行中，请等待完成。' : 'A mod install task is already running; please wait.',
+        });
+        if (installationId) {
+          void api.workshopActiveInstallProgress(installationId).then((prog) => {
+            if (prog) {
+              busyRef.current = true;
+              setPendingKey(prog.modId);
+              setInstallProgress({
+                modId: prog.modId,
+                stage: prog.stage,
+                downloadedBytes: prog.downloadedBytes,
+                totalBytes: prog.totalBytes,
+                percent: prog.percent,
+                detail: prog.detail,
+              });
+            } else {
+              busyRef.current = false;
+              setPendingKey('');
+              setInstallProgress(null);
+            }
+          });
+        }
+        return;
+      }
+      const isModConflict =
+        (code === 'MOD_TARGET_CONFLICT'
+          || msg.includes('目标资源与已启用模组冲突')
+          || msg.includes('目标资源由其他模组管理'));
+      if (!skipConflicts && isModConflict && item.workshopItem && item.canDirectWorkshopInstall) {
+        setNotice(null);
+        setConflictRetryItem(item);
+        setError(msg);
+      } else {
+        setConflictRetryItem(null);
+        setError('');
+        setNotice({ kind: 'error', text: msg });
+      }
     } finally {
-      setPendingKey('');
-      setInstallProgress(null);
+      if (!keepBusy) {
+        busyRef.current = false;
+        setPendingKey('');
+        setInstallProgress(null);
+      }
     }
   };
 
   const handleRemove = async (item: UnifiedModItem) => {
-    if (!localReady || pendingKey) return;
+    if (!localReady || busyRef.current || pendingKey) return;
+    busyRef.current = true;
     setPendingKey(item.key);
     setError('');
+    setConflictRetryItem(null);
     try {
       if (item.officialMod?.installed) {
         await invoke('launcher_change_mod', {
@@ -775,19 +914,20 @@ export function LauncherMods() {
       }
       setRevision((v) => v + 1);
     } catch (issue) {
-      const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      setNotice({ kind: 'error', text: errorMessage(issue) });
     } finally {
+      busyRef.current = false;
       setPendingKey('');
     }
   };
 
   const handleToggleMod = async (item: UnifiedModItem) => {
-    if (!localReady || pendingKey || !item.canToggle) return;
+    if (!localReady || busyRef.current || pendingKey || !item.canToggle) return;
+    busyRef.current = true;
     const nextEnabled = !item.enabled;
     setPendingKey(item.key);
     setError('');
+    setConflictRetryItem(null);
     try {
       if (item.officialMod?.installed) {
         await invoke('launcher_toggle_mod', {
@@ -812,10 +952,9 @@ export function LauncherMods() {
       });
       setRevision((v) => v + 1);
     } catch (issue) {
-      const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      setNotice({ kind: 'error', text: errorMessage(issue) });
     } finally {
+      busyRef.current = false;
       setPendingKey('');
     }
   };
@@ -830,7 +969,8 @@ export function LauncherMods() {
   };
 
   const handleInstallCorePlugin = async (replaceConflicts = false) => {
-    if (!localReady || pendingKey) return;
+    if (!localReady || busyRef.current || pendingKey) return;
+    busyRef.current = true;
     setPendingKey('xingshu.core.plugin');
     setComponentProgress({
       channel: target.channel,
@@ -857,7 +997,7 @@ export function LauncherMods() {
       setNotice({
         kind: 'success',
         text: zh
-          ? '「星枢官方插件 Mod」已安装完成。现在可自由启用下方 18 项星枢功能或使用游戏内开房。'
+          ? '「星枢官方插件 Mod」已安装完成。现在可自由启用下方 19 项星枢功能或使用游戏内开房。'
           : 'XingShu Official Plugin Mod installed cleanly.',
       });
       setRevision((v) => v + 1);
@@ -874,16 +1014,17 @@ export function LauncherMods() {
           // ignore follow-up inspect error; primary message is already set
         }
       }
-      setError(msg);
       setNotice({ kind: 'error', text: msg });
     } finally {
+      busyRef.current = false;
       setPendingKey('');
       setComponentProgress(null);
     }
   };
 
   const handleUninstallCorePlugin = async () => {
-    if (!localReady || pendingKey) return;
+    if (!localReady || busyRef.current || pendingKey) return;
+    busyRef.current = true;
     setPendingKey('xingshu.core.plugin');
     setComponentProgress({
       channel: target.channel,
@@ -907,10 +1048,9 @@ export function LauncherMods() {
       });
       setRevision((v) => v + 1);
     } catch (issue) {
-      const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      setNotice({ kind: 'error', text: errorMessage(issue) });
     } finally {
+      busyRef.current = false;
       setPendingKey('');
       setComponentProgress(null);
     }
@@ -928,16 +1068,15 @@ export function LauncherMods() {
         text: report.summary,
       });
     } catch (issue) {
-      const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      setNotice({ kind: 'error', text: errorMessage(issue) });
     } finally {
       setCheckingConflict(false);
     }
   };
 
   const handleInstallAllOfficialMods = async () => {
-    if (!localReady || pendingKey) return;
+    if (!localReady || busyRef.current || pendingKey) return;
+    busyRef.current = true;
     const key = 'xingshu.official.batch';
     setPendingKey(key);
     setInstallProgress({
@@ -946,7 +1085,7 @@ export function LauncherMods() {
       downloadedBytes: 0,
       totalBytes: officialModules.length,
       percent: 4,
-      detail: zh ? '准备安装核心插件与全部 18 项官方模组…' : 'Preparing core plugin and all 18 official modules…',
+      detail: zh ? '准备安装核心插件与全部 19 项官方模组…' : 'Preparing core plugin and all 19 official modules…',
     });
     setError('');
     setNotice({ kind: 'info', text: zh ? '正在一键安装全部官方模组…' : 'Installing all official modules…' });
@@ -967,17 +1106,17 @@ export function LauncherMods() {
       });
       setRevision((v) => v + 1);
     } catch (issue) {
-      const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      setNotice({ kind: 'error', text: errorMessage(issue) });
     } finally {
+      busyRef.current = false;
       setPendingKey('');
       setInstallProgress(null);
     }
   };
 
   const handleUninstallAllOfficialMods = async () => {
-    if (!localReady || pendingKey) return;
+    if (!localReady || busyRef.current || pendingKey) return;
+    busyRef.current = true;
     const key = 'xingshu.official.batch';
     setPendingKey(key);
     setInstallProgress({
@@ -1003,10 +1142,9 @@ export function LauncherMods() {
       });
       setRevision((v) => v + 1);
     } catch (issue) {
-      const msg = errorMessage(issue);
-      setError(msg);
-      setNotice({ kind: 'error', text: msg });
+      setNotice({ kind: 'error', text: errorMessage(issue) });
     } finally {
+      busyRef.current = false;
       setPendingKey('');
       setInstallProgress(null);
     }
@@ -1026,14 +1164,17 @@ export function LauncherMods() {
     setCategoryFilter(cat);
   };
 
-  const renderModBadge = (item: UnifiedModItem, size: 'sm' | 'md' = 'md') => {
-    const px = size === 'sm' ? 40 : 48;
-    const iconPx = size === 'sm' ? 19 : 22;
+  const renderModBadge = (item: UnifiedModItem, size: 'sm' | 'md' | 'lg' = 'md') => {
+    const px = size === 'sm' ? 40 : size === 'lg' ? 64 : 48;
+    const iconPx = size === 'sm' ? 19 : size === 'lg' ? 28 : 22;
     const previewSrc =
       item.previewUrl && !failedPreviews[item.key] ? workshopAssetUrl(item.previewUrl) : '';
     if (previewSrc) {
       return (
-        <div className={`pcl-mod-icon-badge is-${size} has-img`}>
+        <div
+          className={`pcl-mod-icon-badge is-${size} has-img`}
+          style={{ width: px, height: px }}
+        >
           <img
             src={previewSrc}
             alt=""
@@ -1065,7 +1206,7 @@ export function LauncherMods() {
   };
 
   const renderToggleSwitch = (item: UnifiedModItem) => {
-    const isBusy = pendingKey === item.key;
+    const isBusy = pendingKey === item.key || pendingKey === item.id;
     if (item.canToggle) {
       return (
         <button
@@ -1091,7 +1232,8 @@ export function LauncherMods() {
   };
 
   const activeProgressFor = (item: UnifiedModItem) => {
-    if (pendingKey !== item.key || !installProgress) return null;
+    if (!installProgress) return null;
+    if (pendingKey !== item.key && pendingKey !== item.id) return null;
     if (installProgress.modId !== item.id && installProgress.modId !== item.slug && installProgress.modId !== item.key) {
       return null;
     }
@@ -1099,7 +1241,7 @@ export function LauncherMods() {
   };
 
   const renderActionButton = (item: UnifiedModItem, compact = false) => {
-    const isBusy = pendingKey === item.key;
+    const isBusy = pendingKey === item.key || pendingKey === item.id;
     const itemProg = activeProgressFor(item);
     if (item.installed || item.downloaded) {
       const canRemove = Boolean(
@@ -1182,7 +1324,10 @@ export function LauncherMods() {
             <button
               type="button"
               className="pcl-mods-icon-link"
-              onClick={() => void target.refresh().then(() => setRevision((v) => v + 1))}
+              onClick={() => {
+                forceCoreRefreshRef.current = true;
+                void target.refresh().then(() => setRevision((v) => v + 1));
+              }}
               disabled={target.busy || Boolean(pendingKey)}
               title={zh ? '重新检测目录' : 'Rescan'}
             >
@@ -1363,7 +1508,30 @@ export function LauncherMods() {
 
         {error && (
           <div className="pcl-error-banner" role="alert">
-            {error}
+            <span>{error}</span>
+            <div className="pcl-error-banner-actions">
+              {conflictRetryItem && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={Boolean(pendingKey) || !localReady}
+                  onClick={() => void handleInstall(conflictRetryItem, true)}
+                >
+                  <ShieldCheck size={13} />
+                  <span>{zh ? '跳过冲突文件继续安装' : 'Skip Conflicts & Install'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setError('');
+                  setConflictRetryItem(null);
+                }}
+              >
+                {zh ? '关闭' : 'Dismiss'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -1412,7 +1580,7 @@ export function LauncherMods() {
                           ? `当前游戏目录仍安装着旧版星枢插件（${disk.version?.replace(/^1\\.0\\.0-game-ui-/, '') || '旧版'}），尚未还原为官方原版。可点击右侧「更新插件至新版」升级修复，或点击「卸载并还原原版」恢复纯净客户端。`
                           : `An older XingShu plugin (${disk.version || 'older'}) is still installed in this game folder. Update to the latest version or uninstall & restore to vanilla.`
                         : zh
-                          ? '星枢默认纯净启动官方游戏。仅当你需要启用下方 18 项局内功能或使用游戏内开房时，才需要在此安装此核心插件；随时可一键卸载还原回官方原版。'
+                          ? '星枢默认纯净启动官方游戏。仅当你需要启用下方 19 项局内功能或使用游戏内开房时，才需要在此安装此核心插件；随时可一键卸载还原回官方原版。'
                           : 'Hub launches the vanilla game cleanly by default. Install this optional core plugin to enable in-game modules and live room control, or restore to vanilla anytime.'}
                     </p>
                   </div>
@@ -1555,7 +1723,7 @@ export function LauncherMods() {
               <div className="pcl-official-batch-info">
                 <div className="pcl-official-batch-title">
                   <Blocks size={16} />
-                  <strong>{zh ? '星枢官方功能模组（18 项独立模块）' : 'XingShu Official Feature Modules (18)'}</strong>
+                  <strong>{zh ? '星枢官方功能模组（19 项独立模块）' : 'XingShu Official Feature Modules (19)'}</strong>
                   <span className="pcl-count-chip pcl-tabular">
                     {zh
                       ? `已开启 ${enabledOfficialCount} / ${officialModules.length} 项`
@@ -1565,7 +1733,7 @@ export function LauncherMods() {
                 <p>
                   {zh
                     ? '支持「一键全部安装并启用」（自动补全核心插件 Mod），也可以不安装或在下方逐项自由开关。'
-                    : 'Install and enable all 18 modules at once (includes core plugin), or toggle them individually below.'}
+                    : 'Install and enable all 19 modules at once (includes core plugin), or toggle them individually below.'}
                 </p>
               </div>
               <div className="pcl-official-batch-actions">
@@ -1650,7 +1818,10 @@ export function LauncherMods() {
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => setRevision((v) => v + 1)}
+                  onClick={() => {
+                    forceCoreRefreshRef.current = true;
+                    setRevision((v) => v + 1);
+                  }}
                 >
                   <RefreshCw size={14} />
                   <span>{zh ? '刷新' : 'Refresh'}</span>
@@ -1708,7 +1879,7 @@ export function LauncherMods() {
                   <strong>{zh ? '当前筛选下暂无已安装 Mod' : 'No installed mods match'}</strong>
                   <p>
                     {zh
-                      ? '可点击上方「下载新 Mod」启用 18 项官方功能模块，或从社区工坊一键安装皮肤与卡图包。'
+                      ? '可点击上方「下载新 Mod」启用 19 项官方功能模块，或从社区工坊一键安装皮肤与卡图包。'
                       : 'Explore official feature modules and community workshop packs to install your first mod.'}
                   </p>
                   <button
@@ -1858,7 +2029,10 @@ export function LauncherMods() {
                     type="button"
                     className="btn btn-secondary btn-sm"
                     disabled={workshopLoading}
-                    onClick={() => setRevision((v) => v + 1)}
+                    onClick={() => {
+                      forceCoreRefreshRef.current = true;
+                      setRevision((v) => v + 1);
+                    }}
                   >
                     <RefreshCw size={13} className={workshopLoading ? 'pcl-spin' : ''} />
                     <span>{zh ? '刷新目录' : 'Refresh'}</span>
@@ -2017,9 +2191,74 @@ export function LauncherMods() {
         )}
       </div>
 
-      {detailItem &&
-        createPortal(
-          <div className="pcl-mod-modal-backdrop" onClick={() => setDetailKey(null)}>
+      {detailItem && (() => {
+        const detailWs = detailFull?.id === detailItem.workshopItem?.id
+          ? detailFull
+          : detailItem.workshopItem || null;
+        const detailVersions: WorkshopVersionEntry[] = detailWs?.versions || [];
+        const hasMultipleVersions = detailVersions.length > 1 || (detailWs?.versionCount ?? 0) > 1;
+        const activeReactions = detailWs?.reactions || [];
+        const activeReactionTotal = detailWs?.reactionTotal
+          ?? activeReactions.reduce((sum, entry) => sum + entry.count, 0);
+        const detailGallery = detailWs?.gallery || [];
+        const webModUrl = detailItem.externalUrl
+          || (detailWs
+            ? `https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/mod/${encodeURIComponent(detailWs.slug || detailWs.id)}`
+            : null);
+        const modalRoot = typeof document !== 'undefined'
+          ? (document.querySelector('.launcher-frame') as HTMLElement | null) ?? document.body
+          : null;
+        const handleReactionUpdated = (next: {
+          reactions: NonNullable<WorkshopModItem['reactions']>;
+          reactionTotal: number;
+          viewerEmoteId: string | null;
+        }) => {
+          if (!detailWs) return;
+          const targetId = detailWs.id;
+          setDetailFull((prev) =>
+            prev && prev.id === targetId
+              ? {
+                  ...prev,
+                  reactions: next.reactions,
+                  reactionTotal: next.reactionTotal,
+                  viewerState: {
+                    following: prev.viewerState?.following ?? false,
+                    bookmarked: prev.viewerState?.bookmarked ?? false,
+                    isOwner: prev.viewerState?.isOwner ?? false,
+                    viewerEmoteId: next.viewerEmoteId,
+                  },
+                }
+              : prev,
+          );
+          setWorkshopItems((prev) =>
+            prev.map((w) =>
+              w.id === targetId
+                ? {
+                    ...w,
+                    reactions: next.reactions,
+                    reactionTotal: next.reactionTotal,
+                    viewerState: w.viewerState
+                      ? { ...w.viewerState, viewerEmoteId: next.viewerEmoteId }
+                      : {
+                          following: false,
+                          bookmarked: false,
+                          isOwner: false,
+                          viewerEmoteId: next.viewerEmoteId,
+                        },
+                  }
+                : w,
+            ),
+          );
+        };
+
+        if (!modalRoot) return null;
+
+        return createPortal(
+          <div
+            className="pcl-mod-modal-backdrop"
+            data-pcl-theme={theme}
+            onClick={() => setDetailKey(null)}
+          >
             <div
               className="pcl-mod-modal"
               role="dialog"
@@ -2028,12 +2267,36 @@ export function LauncherMods() {
               onClick={(e) => e.stopPropagation()}
             >
               <header className="pcl-mod-modal-head">
-                {renderModBadge(detailItem, 'md')}
+                {renderModBadge(detailItem, 'lg')}
                 <div className="pcl-mod-modal-title">
-                  <h3>{detailItem.name}</h3>
-                  <p>
-                    {detailItem.author} · {detailItem.categoryLabel} · {installKindLabel(detailItem.installKind)}
+                  <div className="pcl-mod-modal-title-row">
+                    <h3>{detailItem.name}</h3>
+                    <span className="pcl-mod-chip pcl-tabular">v{detailItem.version}</span>
+                    {detailItem.installed ? (
+                      <span className={`pcl-mod-chip ${detailItem.enabled ? 'is-on' : 'is-off'}`}>
+                        {detailItem.enabled ? (zh ? '已开启' : 'Enabled') : zh ? '已关闭' : 'Disabled'}
+                      </span>
+                    ) : (
+                      <span className="pcl-mod-chip">{zh ? '未安装' : 'Not installed'}</span>
+                    )}
+                  </div>
+                  <p className="pcl-mod-modal-sub pcl-tabular">
+                    <span>
+                      {detailItem.author} · {detailItem.categoryLabel} · {installKindLabel(detailItem.installKind)}
+                    </span>
+                    {(detailWs?.downloads ?? 0) > 0 && (
+                      <span>· {detailWs?.downloads} {zh ? '次下载' : 'downloads'}</span>
+                    )}
                   </p>
+                  {detailItem.tags.length > 0 && (
+                    <div className="pcl-mod-modal-tags">
+                      {detailItem.tags.slice(0, 5).map((tag) => (
+                        <span key={tag} className="pcl-mod-tag-pill">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -2045,93 +2308,195 @@ export function LauncherMods() {
                 </button>
               </header>
 
-              <p className="pcl-mod-modal-desc">{detailItem.description}</p>
-
-              <div className="pcl-mod-modal-meta">
-                <div>
-                  <small>{zh ? '标识符' : 'Identifier'}</small>
-                  <code>{detailItem.id}</code>
-                </div>
-                <div>
-                  <small>{zh ? '体积' : 'Size'}</small>
-                  <strong className="pcl-tabular">
-                    {detailItem.sizeBytes > 0 ? formatModBytes(detailItem.sizeBytes) : zh ? '本地内置包' : 'Built-in'}
-                  </strong>
-                </div>
-                <div>
-                  <small>{zh ? '适用渠道' : 'Platforms'}</small>
-                  <strong>{detailItem.platforms.join(' · ')}</strong>
-                </div>
-                {detailItem.sha256 && (
-                  <div className="is-full">
-                    <small>SHA-256</small>
-                    <code>{detailItem.sha256}</code>
-                  </div>
+              <div className="pcl-mod-modal-body">
+                {detailWs && (
+                  <section className="pcl-mod-modal-reactions" aria-label={zh ? '角色表情回应' : 'Reactions'}>
+                    <div className="pcl-mod-modal-reactions-head">
+                      <strong>{zh ? '角色表情回应' : 'Character Reactions'}</strong>
+                      <span className="pcl-tabular">
+                        {activeReactionTotal > 0
+                          ? zh
+                            ? `共 ${activeReactionTotal} 次回应`
+                            : `${activeReactionTotal} reactions`
+                          : zh
+                            ? '选一个游戏角色表情回应吧'
+                            : 'Pick a character sticker reaction'}
+                      </span>
+                    </div>
+                    <EmoteReactionBar
+                      modId={detailWs.id}
+                      reactions={activeReactions}
+                      reactionTotal={activeReactionTotal}
+                      viewerEmoteId={detailWs.viewerState?.viewerEmoteId}
+                      mode="detail"
+                      onUpdated={handleReactionUpdated}
+                    />
+                  </section>
                 )}
-                {detailItem.targetInfo && (
+
+                {detailGallery.length > 0 && (
+                  <section className="pcl-mod-modal-gallery" aria-label={zh ? '效果展示' : 'Gallery'}>
+                    {detailGallery.map((img) => {
+                      const imgUrl = workshopAssetUrl(img.url);
+                      return (
+                        <button
+                          key={img.id}
+                          type="button"
+                          className="pcl-mod-modal-thumb"
+                          onClick={() => setLightboxImage({ url: imgUrl, caption: img.caption })}
+                          title={img.caption || detailItem.name}
+                        >
+                          <img src={imgUrl} alt={img.caption || detailItem.name} loading="lazy" />
+                        </button>
+                      );
+                    })}
+                  </section>
+                )}
+
+                <div className="pcl-mod-modal-desc">
+                  {detailWs?.longDescription || detailItem.description}
+                </div>
+
+                <div className="pcl-mod-modal-meta">
+                  <div>
+                    <small>{zh ? '标识符' : 'Identifier'}</small>
+                    <code>{detailItem.id}</code>
+                  </div>
+                  <div>
+                    <small>{zh ? '资源体积' : 'Size'}</small>
+                    <strong className="pcl-tabular">
+                      {detailItem.sizeBytes > 0 ? formatModBytes(detailItem.sizeBytes) : zh ? '本地内置包' : 'Built-in'}
+                    </strong>
+                  </div>
+                  <div>
+                    <small>{zh ? '支持方案' : 'Distribution'}</small>
+                    <strong>{installKindLabel(detailItem.installKind)}</strong>
+                  </div>
                   <div className="is-full">
-                    <small>{zh ? '目标路径' : 'Target'}</small>
-                    <code>{detailItem.targetInfo}</code>
+                    <small>{zh ? '适用渠道' : 'Supported Channels'}</small>
+                    <div className="pcl-mod-modal-platforms">
+                      {detailItem.platforms.map((plat) => (
+                        <span key={plat} className="pcl-mod-chip">
+                          {plat}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  {detailItem.sha256 && (
+                    <div className="is-full">
+                      <small>SHA-256</small>
+                      <code>{detailItem.sha256}</code>
+                    </div>
+                  )}
+                  {detailItem.targetInfo && (
+                    <div className="is-full">
+                      <small>{zh ? '目标路径' : 'Target'}</small>
+                      <code>{detailItem.targetInfo}</code>
+                    </div>
+                  )}
+                </div>
+
+                {hasMultipleVersions && (
+                  <div className="pcl-mod-modal-versions">
+                    <div className="pcl-mod-modal-versions-head">
+                      <strong>{zh ? '可选版本与平台方案' : 'Available Editions & Versions'}</strong>
+                      <span className="pcl-tabular">
+                        {detailLoading && detailVersions.length === 0
+                          ? zh
+                            ? '加载中…'
+                            : 'Loading…'
+                          : zh
+                            ? `共 ${detailVersions.length} 个版本`
+                            : `${detailVersions.length} versions`}
+                      </span>
+                    </div>
+                    <div className="pcl-mod-ver-list">
+                      {detailVersions.map((ver, idx) => {
+                        const verUrl = ver.downloadUrl ? workshopAssetUrl(ver.downloadUrl) : '';
+                        const platText = ver.platformLabel || ver.platforms.join(' / ');
+                        return (
+                          <div key={ver.id || `${ver.version}-${idx}`} className="pcl-mod-ver-row">
+                            <div className="pcl-mod-ver-info">
+                              <div className="pcl-mod-ver-title">
+                                <strong>{ver.title || ver.fileName || `v${ver.version}`}</strong>
+                                <span className="pcl-mod-chip pcl-tabular">v{ver.version}</span>
+                                {platText && <span className="pcl-mod-chip is-multi">{platText}</span>}
+                              </div>
+                              <div className="pcl-mod-ver-sub pcl-tabular">
+                                <span>{ver.fileName}</span>
+                                {ver.sizeBytes > 0 && <span>· {formatModBytes(ver.sizeBytes)}</span>}
+                                {ver.gameVersion && <span>· Game {ver.gameVersion}</span>}
+                              </div>
+                              {ver.notes && <p className="pcl-mod-ver-note">{ver.notes}</p>}
+                            </div>
+                            {verUrl && (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => void openExternalUrl(verUrl)}
+                              >
+                                <Download size={13} />
+                                <span>{zh ? '下载' : 'Download'}</span>
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {detailItem.workshopItem && (detailItem.workshopItem.versionCount ?? 0) > 1 && (
-                <div className="pcl-mod-modal-versions">
-                  <div className="pcl-mod-modal-versions-head">
-                    <strong>{zh ? '可选版本与平台方案' : 'Available Editions & Versions'}</strong>
-                    <span className="pcl-tabular">
-                      {detailVersionsLoading
-                        ? (zh ? '加载中…' : 'Loading…')
-                        : (zh ? `共 ${detailVersions.length} 个版本` : `${detailVersions.length} versions`)}
-                    </span>
-                  </div>
-                  <div className="pcl-mod-ver-list">
-                    {detailVersions.map((ver, idx) => {
-                      const verUrl = ver.downloadUrl ? workshopAssetUrl(ver.downloadUrl) : '';
-                      const platText = ver.platformLabel || ver.platforms.join(' / ');
-                      return (
-                        <div key={ver.id || `${ver.version}-${idx}`} className="pcl-mod-ver-row">
-                          <div className="pcl-mod-ver-info">
-                            <div className="pcl-mod-ver-title">
-                              <strong>{ver.title || ver.fileName || `v${ver.version}`}</strong>
-                              <span className="pcl-mod-chip">v{ver.version}</span>
-                              {platText && <span className="pcl-mod-chip is-multi">{platText}</span>}
-                            </div>
-                            <div className="pcl-mod-ver-sub pcl-tabular">
-                              <span>{ver.fileName}</span>
-                              {ver.sizeBytes > 0 && <span>· {formatModBytes(ver.sizeBytes)}</span>}
-                              {ver.gameVersion && <span>· Game {ver.gameVersion}</span>}
-                            </div>
-                            {ver.notes && <p className="pcl-mod-ver-note">{ver.notes}</p>}
-                          </div>
-                          {verUrl && (
-                            <button
-                              type="button"
-                              className="btn btn-primary btn-sm"
-                              onClick={() => void openExternalUrl(verUrl)}
-                            >
-                              <Download size={13} />
-                              <span>{zh ? '下载' : 'Download'}</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               <footer className="pcl-mod-modal-foot">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDetailKey(null)}>
-                  {zh ? '关闭' : 'Close'}
-                </button>
-                {renderActionButton(detailItem)}
+                <div className="pcl-mod-modal-foot-links">
+                  {webModUrl && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void openExternalUrl(webModUrl)}
+                    >
+                      <ExternalLink size={13} />
+                      <span>{zh ? '网页工坊查看' : 'View on Web'}</span>
+                    </button>
+                  )}
+                </div>
+                <div className="pcl-mod-modal-foot-actions">
+                  {renderActionButton(detailItem)}
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDetailKey(null)}>
+                    {zh ? '关闭' : 'Close'}
+                  </button>
+                </div>
               </footer>
             </div>
+
+            {lightboxImage && (
+              <div
+                className="pcl-mod-lightbox"
+                role="dialog"
+                aria-modal="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightboxImage(null);
+                }}
+              >
+                <div className="pcl-mod-lightbox-inner" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="pcl-mod-modal-close pcl-mod-lightbox-close"
+                    onClick={() => setLightboxImage(null)}
+                    aria-label={zh ? '关闭预览图' : 'Close image'}
+                  >
+                    <X size={16} />
+                  </button>
+                  <img src={lightboxImage.url} alt={lightboxImage.caption || detailItem.name} />
+                  {lightboxImage.caption && <p>{lightboxImage.caption}</p>}
+                </div>
+              </div>
+            )}
           </div>,
-          document.body,
-        )}
+          modalRoot,
+        );
+      })()}
     </div>
   );
 }

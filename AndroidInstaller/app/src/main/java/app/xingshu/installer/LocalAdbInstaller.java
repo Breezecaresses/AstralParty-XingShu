@@ -7,6 +7,8 @@ import io.github.muntashirakon.adb.AdbStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -50,6 +52,7 @@ final class LocalAdbInstaller implements Closeable {
     boolean connected() { return manager.isConnected(); }
 
     private volatile String connectedHost = "127.0.0.1";
+    private String lastSyncedSpecJson;
 
     String connectedHost() {
         return connectedHost;
@@ -90,6 +93,7 @@ final class LocalAdbInstaller implements Closeable {
 
     void connect(String preferredLocalHost, int port) throws Exception {
         requireAndroid11();
+        lastSyncedSpecJson = null;
         manager.disconnect();
         java.util.List<String> hosts = verifiedLocalHosts(preferredLocalHost);
         Exception lastError = null;
@@ -167,6 +171,26 @@ final class LocalAdbInstaller implements Closeable {
         } catch (Throwable ignored) {
         }
         return -1;
+    }
+
+    synchronized void syncCoreSpec(CoreRuntimeSpec spec) throws Exception {
+        if (spec == null) return;
+        String json = spec.toCanonicalJson();
+        if (json.equals(lastSyncedSpecJson)) return;
+        File cacheDir = context.getCacheDir();
+        if (cacheDir != null && !cacheDir.isDirectory()) cacheDir.mkdirs();
+        File tmp = File.createTempFile("xingshu-core-spec-", ".json", cacheDir);
+        try {
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(json.getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
+            shell("mkdir -p " + quote(LocalInstallerMain.STAGING), 20000);
+            pushFile(tmp, "core-spec.json");
+            lastSyncedSpecJson = json;
+        } finally {
+            tmp.delete();
+        }
     }
 
     String scanPackages() throws Exception {
@@ -358,6 +382,7 @@ final class LocalAdbInstaller implements Closeable {
     }
 
     public void close() throws IOException {
+        lastSyncedSpecJson = null;
         timer.shutdownNow();
         manager.disconnect();
     }

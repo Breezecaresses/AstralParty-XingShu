@@ -92,11 +92,19 @@ final class GamePackageCatalog {
     }
 
     static File backupRoot(String pkg) throws IOException {
+        return backupRoot(pkg, PayloadSpec.VANILLA);
+    }
+
+    static File backupRoot(String pkg, String vanillaSha256) throws IOException {
         String valid = requireValidPackageName(pkg);
-        if (DEFAULT_PACKAGE.equals(valid)) {
-            return new File("/data/local/tmp/xingshu-installer/" + PayloadSpec.VANILLA);
+        if (!PayloadDownloadManager.isValidSha256(vanillaSha256)) {
+            throw new IOException("非法的官方基准校验值");
         }
-        return new File("/data/local/tmp/xingshu-installer/" + valid + "/" + PayloadSpec.VANILLA);
+        String cleanSha = vanillaSha256.toLowerCase(Locale.ROOT);
+        if (DEFAULT_PACKAGE.equals(valid)) {
+            return new File("/data/local/tmp/xingshu-installer/" + cleanSha);
+        }
+        return new File("/data/local/tmp/xingshu-installer/" + valid + "/" + cleanSha);
     }
 
     static List<String> parseThirdPartyPackages(String pmOutput) {

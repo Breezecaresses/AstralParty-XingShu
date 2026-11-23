@@ -164,7 +164,7 @@ internal fun ModsScreen(controller: AppController) {
                     }
 
                     Text(
-                        text = "控制目标：${selected?.label ?: controller.selectedPackageName} · 运行版本 ${PayloadSpec.VERSION}\n仅当你需要使用下方 18 项官方功能模组或游戏内开房时安装此核心插件，可随时无损还原回官方原版。",
+                        text = "控制目标：${selected?.label ?: controller.selectedPackageName} · 运行版本 ${controller.coreSpec.runtimeVersion}（适配游戏 ${controller.coreSpec.gameVersion}）\n仅当你需要使用下方 ${OfficialModulesCatalog.ALL.size} 项官方功能模组或游戏内开房时安装此核心插件，可随时无损还原回官方原版。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -218,7 +218,7 @@ internal fun ModsScreen(controller: AppController) {
             }
         }
 
-        // Batch One-Click Card: 18 Official Modules
+        // Batch One-Click Card: 19 Official Modules
         item {
             OutlinedCard(
                 colors = CardDefaults.outlinedCardColors(
@@ -234,7 +234,7 @@ internal fun ModsScreen(controller: AppController) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "星枢官方功能模组（18 项独立模块）",
+                                text = "星枢官方功能模组（19 项独立模块）",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Text(
@@ -257,7 +257,7 @@ internal fun ModsScreen(controller: AppController) {
                         ) {
                             Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(17.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("一键安装全部 (18 项)")
+                            Text("一键安装全部 (19 项)")
                         }
                         OutlinedButton(
                             onClick = { controller.uninstallAllOfficialModules() },
@@ -285,7 +285,7 @@ internal fun ModsScreen(controller: AppController) {
             }
         }
 
-        // Individual 18 Official Modules Switches
+        // Individual 19 Official Modules Switches
         items(visibleModules, key = { it.id }) { mod ->
             val diskState = controller.officialModuleStates[mod.id] ?: "not_installed"
             val checked = diskState == "enabled"

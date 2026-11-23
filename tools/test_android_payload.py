@@ -28,7 +28,7 @@ class AndroidBaselineTests(unittest.TestCase):
     def test_old_plugin_hash_is_never_accepted_for_later_resources(self):
         legacy_026 = '3d94697f4dc6d64c2cb5fcca56339090f54e920cd7dab6de7bcc1912347e5a0f'
         sample_160 = '9da1b62b7a05e00efca9f0df6640a61fa9cd09045da147f50dd56b17a09d6d32'
-        expected_counts = {'026': 1, '160': 9}
+        expected_counts = {'026': 1, '160': 10}
         with tempfile.TemporaryDirectory() as directory, patch.object(payload, 'ROOT', Path(directory)):
             for digest in payload.BASELINES:
                 manifest = self.manifest(digest)

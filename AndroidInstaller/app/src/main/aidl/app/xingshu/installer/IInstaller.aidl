@@ -14,4 +14,5 @@ interface IInstaller {
     String listInstalledMods(String packageName) = 8;
     String removeModPack(String packageName, String modId) = 9;
     String setOfficialModules(String packageName, String moduleIdsCsv, boolean enable, boolean remove) = 10;
+    String setCoreSpec(String specJson) = 11;
 }
