@@ -483,3 +483,240 @@ export function compareModsByHeat(a: WorkshopModItem, b: WorkshopModItem, locale
   if (reactDiff !== 0) return reactDiff;
   return a.name.localeCompare(b.name, locale);
 }
+
+export interface WorkshopDownloadProgress {
+  loaded: number;
+  total: number;
+  percent: number | null;
+}
+
+export interface WorkshopDownloadResult {
+  completed: boolean;
+  cancelled: boolean;
+  bytesReceived: number;
+  counted?: boolean;
+  downloads?: number;
+  versionDownloads?: number;
+}
+
+interface WritableSaveFileStream {
+  write: (data: Uint8Array) => Promise<void>;
+  close: () => Promise<void>;
+  abort: () => Promise<void>;
+}
+
+interface SaveFileHandleLike {
+  createWritable: () => Promise<WritableSaveFileStream>;
+}
+
+type ShowSaveFilePickerFn = (opts?: { suggestedName?: string }) => Promise<SaveFileHandleLike>;
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const objUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(objUrl), 10_000);
+  }
+}
+
+export async function reportWorkshopDownloadComplete(
+  modId: string,
+  payload: { versionId?: string | null; bytesReceived: number },
+  token?: string | null,
+): Promise<{ counted: boolean; downloads?: number; versionDownloads?: number }> {
+  const cleanId = encodeURIComponent(String(modId || '').trim());
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token?.trim()) {
+    headers.Authorization = `Bearer ${token.trim()}`;
+  }
+  const res = await fetch(`${webApiBaseUrl()}/api/workshop/mods/${cleanId}/download-complete`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      versionId: payload.versionId || undefined,
+      bytesReceived: payload.bytesReceived,
+    }),
+  });
+  if (!res.ok) {
+    return { counted: false };
+  }
+  try {
+    const data = (await res.json()) as {
+      counted?: boolean;
+      downloads?: number;
+      versionDownloads?: number;
+    };
+    return {
+      counted: Boolean(data?.counted),
+      downloads: typeof data?.downloads === 'number' ? data.downloads : undefined,
+      versionDownloads: typeof data?.versionDownloads === 'number' ? data.versionDownloads : undefined,
+    };
+  } catch {
+    return { counted: false };
+  }
+}
+
+export async function downloadWorkshopModWithVerification(options: {
+  modId: string;
+  urlOrPath: string;
+  fileName: string;
+  versionId?: string | null;
+  expectedBytes?: number | null;
+  token?: string | null;
+  countCompletion?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (progress: WorkshopDownloadProgress) => void;
+}): Promise<WorkshopDownloadResult> {
+  const fullUrl = workshopAssetUrl(options.urlOrPath);
+  if (!fullUrl) throw new Error('下载地址为空');
+  const fileName = (options.fileName || 'mod-package.zip').trim() || 'mod-package.zip';
+  const expectedHint = Number(options.expectedBytes || 0);
+
+  let writable: WritableSaveFileStream | null = null;
+  const picker =
+    typeof window !== 'undefined'
+      ? (window as unknown as { showSaveFilePicker?: ShowSaveFilePickerFn }).showSaveFilePicker
+      : undefined;
+  if (picker && expectedHint >= 64 * 1024 * 1024) {
+    try {
+      const handle = await picker({ suggestedName: fileName });
+      writable = await handle.createWritable();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return { completed: false, cancelled: true, bytesReceived: 0 };
+      }
+      writable = null;
+    }
+  }
+
+  const headers: Record<string, string> = {};
+  if (options.token?.trim()) {
+    headers.Authorization = `Bearer ${options.token.trim()}`;
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(fullUrl, { headers, signal: options.signal });
+  } catch (err) {
+    if (writable) {
+      await writable.abort().catch(() => {});
+    }
+    if ((err instanceof DOMException && err.name === 'AbortError') || options.signal?.aborted) {
+      return { completed: false, cancelled: true, bytesReceived: 0 };
+    }
+    throw err;
+  }
+
+  if (!res.ok) {
+    if (writable) {
+      await writable.abort().catch(() => {});
+    }
+    let msg = `下载失败 (${res.status})`;
+    try {
+      const errJson = (await res.json()) as { error?: string };
+      if (errJson?.error) msg = errJson.error;
+    } catch {
+      // ignore non-json error body
+    }
+    throw new Error(msg);
+  }
+
+  const headerLen = Number(res.headers.get('Content-Length') || 0);
+  const totalBytes = headerLen > 0 ? headerLen : expectedHint > 0 ? expectedHint : 0;
+
+  let loaded = 0;
+  let lastReportAt = 0;
+  const emitProgress = (force = false) => {
+    if (!options.onProgress) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (!force && now - lastReportAt < 80) return;
+    lastReportAt = now;
+    const pct = totalBytes > 0 ? Math.min(100, Math.round((loaded / totalBytes) * 100)) : null;
+    options.onProgress({ loaded, total: totalBytes, percent: pct });
+  };
+
+  emitProgress(true);
+
+  if (!res.body) {
+    const buf = new Uint8Array(await res.arrayBuffer());
+    loaded = buf.byteLength;
+    if ((headerLen > 0 && loaded !== headerLen) || loaded <= 0) {
+      if (writable) await writable.abort().catch(() => {});
+      throw new Error('文件下载不完整，请重试。');
+    }
+    if (writable) {
+      await writable.write(buf);
+      await writable.close();
+    } else {
+      triggerBlobDownload(new Blob([buf], { type: 'application/octet-stream' }), fileName);
+    }
+    emitProgress(true);
+  } else {
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    try {
+      while (true) {
+        if (options.signal?.aborted) {
+          throw new DOMException('Download cancelled', 'AbortError');
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength > 0) {
+          loaded += value.byteLength;
+          if (writable) {
+            await writable.write(value);
+          } else {
+            chunks.push(value);
+          }
+          emitProgress(false);
+        }
+      }
+      if ((headerLen > 0 && loaded !== headerLen) || loaded <= 0) {
+        throw new Error('文件传输未完整结束，请重试。');
+      }
+      if (writable) {
+        await writable.close();
+      } else {
+        triggerBlobDownload(new Blob(chunks as BlobPart[], { type: 'application/octet-stream' }), fileName);
+      }
+      emitProgress(true);
+    } catch (err) {
+      await reader.cancel().catch(() => {});
+      if (writable) {
+        await writable.abort().catch(() => {});
+      }
+      if ((err instanceof DOMException && err.name === 'AbortError') || options.signal?.aborted) {
+        return { completed: false, cancelled: true, bytesReceived: loaded };
+      }
+      throw err;
+    }
+  }
+
+  if (options.countCompletion !== false) {
+    try {
+      const receipt = await reportWorkshopDownloadComplete(
+        options.modId,
+        { versionId: options.versionId, bytesReceived: loaded },
+        options.token,
+      );
+      return {
+        completed: true,
+        cancelled: false,
+        bytesReceived: loaded,
+        counted: receipt.counted,
+        downloads: receipt.downloads,
+        versionDownloads: receipt.versionDownloads,
+      };
+    } catch {
+      return { completed: true, cancelled: false, bytesReceived: loaded };
+    }
+  }
+  return { completed: true, cancelled: false, bytesReceived: loaded };
+}

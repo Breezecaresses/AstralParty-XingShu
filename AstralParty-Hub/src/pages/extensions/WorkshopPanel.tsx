@@ -23,6 +23,7 @@ import { isTauriRuntime, openExternalUrl } from '../../shared/runtime';
 import type { GameInstallation } from '../../shared/types';
 import {
   WORKSHOP_CATEGORIES,
+  downloadWorkshopModWithVerification,
   fetchWorkshopMods,
   formatModBytes,
   installKindLabel,
@@ -74,6 +75,19 @@ export function WorkshopPanel({
 
   const [detailItem, setDetailItem] = useState<WorkshopModItem | null>(null);
   const [failedPreviews, setFailedPreviews] = useState<Record<string, boolean>>({});
+  const [webDlState, setWebDlState] = useState<{
+    modId: string;
+    percent: number | null;
+    controller: AbortController;
+  } | null>(null);
+  const webDlControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      webDlControllerRef.current?.abort();
+      webDlControllerRef.current = null;
+    };
+  }, []);
   const loadLocalStates = useCallback(async () => {
     if (!isDesktop || !installationId) {
       setLocalStates({});
@@ -170,6 +184,61 @@ export function WorkshopPanel({
       busyRef.current = false;
       setActionId('');
       onBusy?.(false);
+    }
+  };
+
+  const handleWebVerifiedDownload = async (item: WorkshopModItem) => {
+    if (!item.downloadUrl) return;
+    if (webDlControllerRef.current) {
+      if (webDlState?.modId === item.id) {
+        webDlControllerRef.current.abort();
+        webDlControllerRef.current = null;
+        setWebDlState(null);
+      } else {
+        setNotice({ kind: 'info', text: '已有文件正在下载，请等待完成或先点击取消。' });
+      }
+      return;
+    }
+    const controller = new AbortController();
+    webDlControllerRef.current = controller;
+    setWebDlState({ modId: item.id, percent: 0, controller });
+    setNotice({ kind: 'info', text: `正在下载「${item.name}」…` });
+    try {
+      const defaultVer = item.versions?.[0];
+      const res = await downloadWorkshopModWithVerification({
+        modId: item.id,
+        urlOrPath: item.downloadUrl,
+        fileName: item.packageFile || defaultVer?.fileName || `${item.slug || item.id}.zip`,
+        versionId: defaultVer?.id || defaultVer?.version || undefined,
+        expectedBytes: item.sizeBytes || defaultVer?.sizeBytes || 0,
+        countCompletion: !item.status || item.status === 'approved',
+        signal: controller.signal,
+        onProgress: (prog) => {
+          setWebDlState((prev) =>
+            prev && prev.controller === controller ? { ...prev, percent: prog.percent } : prev,
+          );
+        },
+      });
+      if (res.cancelled) {
+        setNotice({ kind: 'info', text: `已取消下载「${item.name}」（未计入下载量）。` });
+        return;
+      }
+      if (res.completed) {
+        setNotice({ kind: 'success', text: `「${item.name}」已下载保存。` });
+        if (typeof res.downloads === 'number') {
+          setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, downloads: res.downloads } : it)));
+          setDetailItem((prev) => (prev && prev.id === item.id ? { ...prev, downloads: res.downloads } : prev));
+        }
+      }
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        setNotice({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
+      }
+    } finally {
+      if (webDlControllerRef.current === controller) {
+        webDlControllerRef.current = null;
+      }
+      setWebDlState((prev) => (prev && prev.controller === controller ? null : prev));
     }
   };
 
@@ -384,14 +453,16 @@ export function WorkshopPanel({
                   ) : (
                     <div className="workshop-footer-actions">
                       {webApiDownload && item.downloadUrl ? (
-                        <a
+                        <button
+                          type="button"
                           className="btn btn-primary btn-sm"
-                          href={workshopAssetUrl(item.downloadUrl)}
-                          download
+                          onClick={() => void handleWebVerifiedDownload(item)}
                         >
                           <Download size={14} />
-                          下载模组包
-                        </a>
+                          {webDlState?.modId === item.id
+                            ? `取消下载 (${webDlState.percent ?? 0}%)`
+                            : '下载模组包'}
+                        </button>
                       ) : item.externalUrl ? (
                         <button
                           type="button"
@@ -502,9 +573,16 @@ export function WorkshopPanel({
                 关闭
               </button>
               {detailItem.downloadable && detailItem.downloadUrl?.startsWith('/api/') && (
-                <a className="btn btn-secondary" href={workshopAssetUrl(detailItem.downloadUrl)} download>
-                  <Download size={14} /> 下载文件包
-                </a>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => void handleWebVerifiedDownload(detailItem)}
+                >
+                  <Download size={14} />
+                  {webDlState?.modId === detailItem.id
+                    ? `取消下载 (${webDlState.percent ?? 0}%)`
+                    : '下载文件包'}
+                </button>
               )}
               {detailItem.externalUrl && (
                 <button

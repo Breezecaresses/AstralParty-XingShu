@@ -4436,3 +4436,77 @@ a.mr-side-chip:hover {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.mr-dl-progress-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  background: rgba(30, 41, 59, 0.72);
+}
+
+.mr-dl-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--mr-text);
+}
+
+.mr-dl-progress-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mr-dl-progress-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mr-dl-progress-stats {
+  color: var(--mr-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mr-dl-progress-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+
+.mr-dl-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--mr-accent);
+  transition: width 0.12s ease-out;
+}
+
+.mr-dl-progress-fill.is-indeterminate {
+  width: 40%;
+}
+
+.mr-dl-cancel-btn {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mr-dl-cancel-btn:hover {
+  background: rgba(248, 113, 113, 0.22);
+}

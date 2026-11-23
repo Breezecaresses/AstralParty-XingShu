@@ -60,6 +60,7 @@ import { PROJECT_SOURCE } from '../../shared/projectSource';
 import {
   WORKSHOP_CATEGORIES,
   WORKSHOP_UPLOAD_CHANNEL_PRESETS,
+  downloadWorkshopModWithVerification,
   fetchWorkshopModDetail,
   formatModBytes,
   formatWorkshopChannelName,
@@ -314,6 +315,16 @@ export const ModrinthProjectDetailPage: React.FC = () => {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewNoteInput, setReviewNoteInput] = useState('');
 
+  const [activeDownload, setActiveDownload] = useState<{
+    key: string;
+    fileName: string;
+    loaded: number;
+    total: number;
+    percent: number | null;
+    controller: AbortController;
+  } | null>(null);
+  const activeDownloadRef = useRef<AbortController | null>(null);
+
   const syncDraftsFromItem = useCallback((mod: WorkshopModItem) => {
     setImgFailed(false);
     setPromoHeadDraft(mod.promoHeadline || '');
@@ -373,6 +384,13 @@ export const ModrinthProjectDetailPage: React.FC = () => {
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
+
+  useEffect(() => {
+    return () => {
+      activeDownloadRef.current?.abort();
+      activeDownloadRef.current = null;
+    };
+  }, [modId]);
 
   useEffect(() => {
     const t = searchParams.get('tab') as DetailTab | null;
@@ -765,6 +783,89 @@ export const ModrinthProjectDetailPage: React.FC = () => {
     }
   };
 
+  const handleCancelActiveDownload = () => {
+    activeDownloadRef.current?.abort();
+    activeDownloadRef.current = null;
+    setActiveDownload(null);
+  };
+
+  const handleVerifiedDownload = async (opts: {
+    urlOrPath: string;
+    fileName: string;
+    versionId?: string | null;
+    expectedBytes?: number | null;
+    key: string;
+  }) => {
+    if (activeDownloadRef.current) {
+      setFeedback({
+        kind: 'err',
+        text: zh ? '当前已有文件正在下载，请等待完成或点击「取消下载」。' : 'A download is already in progress.',
+      });
+      return;
+    }
+    const controller = new AbortController();
+    activeDownloadRef.current = controller;
+    setFeedback(null);
+    setActiveDownload({
+      key: opts.key,
+      fileName: opts.fileName,
+      loaded: 0,
+      total: Number(opts.expectedBytes || 0),
+      percent: 0,
+      controller,
+    });
+    try {
+      const res = await downloadWorkshopModWithVerification({
+        modId: item.id,
+        urlOrPath: opts.urlOrPath,
+        fileName: opts.fileName,
+        versionId: opts.versionId,
+        expectedBytes: opts.expectedBytes,
+        token: platform.token || null,
+        countCompletion: !item.status || item.status === 'approved',
+        signal: controller.signal,
+        onProgress: (prog) => {
+          setActiveDownload((prev) =>
+            prev && prev.controller === controller
+              ? { ...prev, loaded: prog.loaded, total: prog.total, percent: prog.percent }
+              : prev,
+          );
+        },
+      });
+      if (res.cancelled) {
+        setFeedback({ kind: 'ok', text: zh ? '已取消下载（未计入下载量）' : 'Download cancelled (not counted).' });
+        return;
+      }
+      if (res.completed && (typeof res.downloads === 'number' || typeof res.versionDownloads === 'number')) {
+        setItem((prev) => {
+          if (!prev) return prev;
+          const nextVersions =
+            opts.versionId && typeof res.versionDownloads === 'number' && Array.isArray(prev.versions)
+              ? prev.versions.map((v) =>
+                  v.id === opts.versionId || v.version === opts.versionId
+                    ? { ...v, downloads: res.versionDownloads }
+                    : v,
+                )
+              : prev.versions;
+          return {
+            ...prev,
+            downloads: typeof res.downloads === 'number' ? res.downloads : prev.downloads,
+            versions: nextVersions,
+          };
+        });
+      }
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        setFeedback({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+      }
+    } finally {
+      if (activeDownloadRef.current === controller) {
+        activeDownloadRef.current = null;
+      }
+      setActiveDownload((prev) => (prev && prev.controller === controller ? null : prev));
+    }
+  };
+
   const handleQuickAdminReview = async (
     action: 'approve' | 'reject' | 'unpublish' | 'restore' | 'delete',
     versionId?: string,
@@ -972,14 +1073,32 @@ export const ModrinthProjectDetailPage: React.FC = () => {
                   <span>{zh ? '审阅下载包体' : 'Download for Review'}</span>
                 </button>
               ) : (
-                <a
-                  href={workshopAssetUrl(item.downloadUrl)}
-                  download={item.packageFile || undefined}
+                <button
+                  type="button"
                   className="mr-btn-emerald mr-btn-lg"
+                  disabled={Boolean(activeDownload)}
+                  onClick={() => {
+                    const defaultVer = versions[0];
+                    void handleVerifiedDownload({
+                      urlOrPath: item.downloadUrl!,
+                      fileName: item.packageFile || defaultVer?.fileName || `${item.slug || item.id}.zip`,
+                      versionId: defaultVer?.id || defaultVer?.version || undefined,
+                      expectedBytes: item.sizeBytes || defaultVer?.sizeBytes || 0,
+                      key: 'header',
+                    });
+                  }}
                 >
                   <Download size={16} />
-                  <span>{zh ? '下载' : 'Download'}</span>
-                </a>
+                  <span>
+                    {activeDownload?.key === 'header'
+                      ? zh
+                        ? `下载中 ${activeDownload.percent ?? ''}%`
+                        : `Downloading ${activeDownload.percent ?? ''}%`
+                      : zh
+                        ? '下载'
+                        : 'Download'}
+                  </span>
+                </button>
               )
             ) : (
               <a href={item.downloadUrl} target="_blank" rel="noreferrer" className="mr-btn-emerald mr-btn-lg">
@@ -1072,6 +1191,33 @@ export const ModrinthProjectDetailPage: React.FC = () => {
           )}
         </div>
       </header>
+
+      {activeDownload && (
+        <section className="mr-dl-progress-banner" role="status" aria-live="polite">
+          <div className="mr-dl-progress-head">
+            <div className="mr-dl-progress-meta">
+              <Download size={15} color="var(--mr-accent)" />
+              <strong>{zh ? `正在下载：${activeDownload.fileName}` : `Downloading: ${activeDownload.fileName}`}</strong>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="mr-dl-progress-stats">
+                {formatModBytes(activeDownload.loaded)}
+                {activeDownload.total > 0 ? ` / ${formatModBytes(activeDownload.total)}` : ''}
+                {activeDownload.percent !== null ? ` (${activeDownload.percent}%)` : ''}
+              </span>
+              <button type="button" className="mr-dl-cancel-btn" onClick={handleCancelActiveDownload}>
+                {zh ? '取消下载' : 'Cancel'}
+              </button>
+            </div>
+          </div>
+          <div className="mr-dl-progress-track">
+            <div
+              className={`mr-dl-progress-fill ${activeDownload.percent === null ? 'is-indeterminate' : ''}`}
+              style={activeDownload.percent !== null ? { width: `${activeDownload.percent}%` } : undefined}
+            />
+          </div>
+        </section>
+      )}
 
       {(item.status && item.status !== 'approved') || (item.pendingVersionCount ?? 0) > 0 ? (
         <section className={`mr-review-banner is-${item.status || 'pending'}`}>
@@ -2027,15 +2173,24 @@ export const ModrinthProjectDetailPage: React.FC = () => {
                                               <Download size={16} />
                                             </button>
                                           ) : (
-                                            <a
-                                              href={resolvedUrl}
-                                              download={ver.fileName}
+                                            <button
+                                              type="button"
                                               className="mr-ver-icon-btn is-dl"
+                                              disabled={Boolean(activeDownload)}
                                               title={zh ? `下载 ${ver.fileName}` : `Download ${ver.fileName}`}
                                               aria-label={zh ? `下载 ${ver.fileName}` : `Download ${ver.fileName}`}
+                                              onClick={() =>
+                                                void handleVerifiedDownload({
+                                                  urlOrPath: ver.downloadUrl!,
+                                                  fileName: ver.fileName,
+                                                  versionId: ver.id || ver.version,
+                                                  expectedBytes: ver.sizeBytes || 0,
+                                                  key: `ver-${verKey}`,
+                                                })
+                                              }
                                             >
                                               <Download size={16} />
-                                            </a>
+                                            </button>
                                           )
                                         ) : (
                                           <a
@@ -2067,16 +2222,25 @@ export const ModrinthProjectDetailPage: React.FC = () => {
                                           <div className="mr-ver-menu" role="menu">
                                             {ver.downloadUrl && (
                                               ver.downloadUrl.startsWith('/api/') ? (
-                                                <a
-                                                  href={resolvedUrl}
-                                                  download={ver.fileName}
+                                                <button
+                                                  type="button"
                                                   className="mr-ver-menu-item is-primary"
                                                   role="menuitem"
-                                                  onClick={() => setOpenVerMenuKey(null)}
+                                                  disabled={Boolean(activeDownload)}
+                                                  onClick={() => {
+                                                    setOpenVerMenuKey(null);
+                                                    void handleVerifiedDownload({
+                                                      urlOrPath: ver.downloadUrl!,
+                                                      fileName: ver.fileName,
+                                                      versionId: ver.id || ver.version,
+                                                      expectedBytes: ver.sizeBytes || 0,
+                                                      key: `menu-${verKey}`,
+                                                    });
+                                                  }}
                                                 >
                                                   <Download size={14} />
                                                   <span>{zh ? '下载此版本' : 'Download'}</span>
-                                                </a>
+                                                </button>
                                               ) : (
                                                 <a
                                                   href={resolvedUrl}
@@ -2705,6 +2869,32 @@ export const ModrinthProjectDetailPage: React.FC = () => {
             </div>
 
             <div className="mr-dl-modal-list">
+              {activeDownload && (
+                <div className="mr-dl-progress-banner" role="status" aria-live="polite">
+                  <div className="mr-dl-progress-head">
+                    <div className="mr-dl-progress-meta">
+                      <Download size={15} color="var(--mr-accent)" />
+                      <strong>{zh ? `正在下载：${activeDownload.fileName}` : `Downloading: ${activeDownload.fileName}`}</strong>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span className="mr-dl-progress-stats">
+                        {formatModBytes(activeDownload.loaded)}
+                        {activeDownload.total > 0 ? ` / ${formatModBytes(activeDownload.total)}` : ''}
+                        {activeDownload.percent !== null ? ` (${activeDownload.percent}%)` : ''}
+                      </span>
+                      <button type="button" className="mr-dl-cancel-btn" onClick={handleCancelActiveDownload}>
+                        {zh ? '取消下载' : 'Cancel'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mr-dl-progress-track">
+                    <div
+                      className={`mr-dl-progress-fill ${activeDownload.percent === null ? 'is-indeterminate' : ''}`}
+                      style={activeDownload.percent !== null ? { width: `${activeDownload.percent}%` } : undefined}
+                    />
+                  </div>
+                </div>
+              )}
               {versions.map((ver, idx) => {
                 const chKey = normalizeVersionChannel(ver.channel);
                 const chMeta = versionChannelMeta(chKey, zh);
@@ -2734,14 +2924,29 @@ export const ModrinthProjectDetailPage: React.FC = () => {
                     <div className="mr-dl-picker-action">
                       {ver.downloadUrl ? (
                         ver.downloadUrl.startsWith('/api/') ? (
-                          <a
-                            href={workshopAssetUrl(ver.downloadUrl)}
-                            download={ver.fileName}
+                          <button
+                            type="button"
                             className="mr-btn-emerald"
+                            disabled={Boolean(activeDownload)}
+                            onClick={() =>
+                              void handleVerifiedDownload({
+                                urlOrPath: ver.downloadUrl!,
+                                fileName: ver.fileName,
+                                versionId: ver.id || ver.version,
+                                expectedBytes: ver.sizeBytes || 0,
+                                key: `picker-${verKey}`,
+                              })
+                            }
                           >
                             <Download size={14} />
-                            <span>{zh ? '下载' : 'Download'}</span>
-                          </a>
+                            <span>
+                              {activeDownload?.key === `picker-${verKey}`
+                                ? `${activeDownload.percent ?? ''}%`
+                                : zh
+                                  ? '下载'
+                                  : 'Download'}
+                            </span>
+                          </button>
                         ) : (
                           <a href={ver.downloadUrl} target="_blank" rel="noreferrer" className="mr-btn-outline">
                             <ExternalLink size={14} />
