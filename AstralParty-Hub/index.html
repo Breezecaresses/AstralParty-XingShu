@@ -2,37 +2,61 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="48x48" href="%BASE_URL%favicon-48x48.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="%BASE_URL%favicon-192x192.png" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%brand/xingshu.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="%BASE_URL%apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>星枢 Hub · AstralParty-XingShu | 吉星派对回放分析与模组工坊</title>
+    <title>星枢工坊 · AstralParty-XingShu | 吉星派对 Mod 模组工坊与纯启动器</title>
     <meta
       name="description"
-      content="AstralParty-XingShu（星枢 Hub）——《吉星派对》(Astral Party) 对局回放深度复盘、实时棋盘拓扑、角色卡牌筹码图鉴、玩家战绩查询与社区模组/卡牌/皮肤工坊。"
+      content="星枢工坊（AstralParty-XingShu）——《吉星派对》(Astral Party) 玩家社区模组工坊与双端纯启动器：下载与发布卡牌替换、角色皮肤、语音特效与 19 项星枢官方优化 Mod，支持 Windows 与 Android。"
     />
     <meta
       name="keywords"
-      content="AstralParty-XingShu,星枢 Hub,XingShu,吉星派对,Astral Party,回放分析,模组工坊,Mod,卡牌皮肤,战绩查询"
+      content="星枢工坊,AstralParty-XingShu,星枢 Hub,吉星派对,Astral Party,吉星派对Mod,模组工坊,卡牌替换,角色皮肤,星枢启动器"
     />
     <meta name="theme-color" content="#1370f3" />
     <link rel="canonical" href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/" />
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="AstralParty-XingShu · 星枢 Hub" />
-    <meta property="og:title" content="星枢 Hub · AstralParty-XingShu | 吉星派对回放分析与模组工坊" />
+    <meta property="og:site_name" content="星枢工坊" />
+    <meta property="og:title" content="星枢工坊 · 吉星派对 Mod 模组工坊与纯启动器" />
     <meta
       property="og:description"
-      content="《吉星派对》开源助手、对局回放复盘分析、实时棋盘行动还原与游戏内 Mod/卡牌/皮肤工坊。"
+      content="《吉星派对》开源社区模组工坊与纯启动器：一键浏览、下载并发布卡牌替换、角色皮肤、语音特效与 19 项官方模块。"
     />
     <meta property="og:url" content="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/" />
+    <meta property="og:image" content="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/favicon-192x192.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="星枢工坊 · 吉星派对 Mod 模组工坊与纯启动器" />
+    <meta
+      name="twitter:description"
+      content="《吉星派对》开源社区模组工坊与双端纯启动器：Mod/卡牌/皮肤下载与投稿、19 项独立官方模块、回放分析与图鉴。"
+    />
+    <meta name="twitter:image" content="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/favicon-192x192.png" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "AstralParty-XingShu (星枢 Hub)",
-        "applicationCategory": "GameUtility",
-        "operatingSystem": "Web, Windows, Android",
-        "url": "https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/",
-        "codeRepository": "https://github.com/Breezecaresses/AstralParty-XingShu",
-        "description": "吉星派对 (Astral Party) 开源游戏助手、对局回放深度分析、图鉴与玩家模组/卡牌/皮肤工坊。"
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "星枢工坊",
+            "alternateName": ["星枢模组工坊", "星枢 Hub", "AstralParty-XingShu"],
+            "url": "https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "星枢工坊 (AstralParty-XingShu)",
+            "applicationCategory": "GameUtility",
+            "operatingSystem": "Web, Windows, Android",
+            "image": "https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/favicon-192x192.png",
+            "url": "https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/",
+            "codeRepository": "https://github.com/Breezecaresses/AstralParty-XingShu",
+            "description": "《吉星派对》(Astral Party) 玩家社区模组工坊与双端纯启动器：下载与发布卡牌替换、角色皮肤、语音特效与 19 项星枢官方优化 Mod。"
+          }
+        ]
       }
     </script>
   </head>
@@ -41,8 +65,8 @@
     <div id="root"></div>
     <noscript>
       <main style="max-width:720px;margin:40px auto;padding:20px;font-family:system-ui,sans-serif;line-height:1.7;">
-        <h1>AstralParty-XingShu（星枢 Hub）</h1>
-        <p>《吉星派对》(Astral Party) 对局回放深度分析、实时棋盘行动还原、全角色/卡牌/筹码/地图图鉴与社区模组/卡牌/皮肤工坊。</p>
+        <h1>星枢工坊 · AstralParty-XingShu</h1>
+        <p>《吉星派对》(Astral Party) 玩家社区模组工坊与双端纯启动器：下载与发布卡牌替换、角色皮肤、语音特效与 19 项星枢官方优化 Mod，支持对局回放复盘与图鉴浏览。</p>
         <p>
           开源仓库：<a href="https://github.com/Breezecaresses/AstralParty-XingShu">github.com/Breezecaresses/AstralParty-XingShu</a>
           · QQ 群：1080908767

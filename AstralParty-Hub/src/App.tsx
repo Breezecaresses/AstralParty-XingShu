@@ -11,7 +11,7 @@ import './styles/desktop-shell.css';
 export function App() {
   useEffect(() => {
     if (!isTauriRuntime()) {
-      document.title = '星枢 Hub Web';
+      document.title = '星枢工坊 · 吉星派对 Mod 模组工坊';
       return;
     }
     api.getStartupRoute().then((targetRoute) => {
