@@ -1,7 +1,7 @@
 package app.xingshu.installer
 
 /**
- * Canonical catalog of the 19 modular official XingShu features that map 1:1 to
+ * Canonical catalog of the 21 modular official XingShu features that map 1:1 to
  * `xingshu/plugins/xingshu.launcher.<id>.module` markers inside the Android game data folder.
  */
 object OfficialModulesCatalog {
@@ -32,6 +32,8 @@ object OfficialModulesCatalog {
         OfficialModule("select-map-name", "选人地图提示", "在选人界面右侧显示当前地图名称", "战术推演"),
         OfficialModule("battle-card-points", "战斗卡牌点数", "战斗卡牌打出后显示点数与加成明细", "战术推演"),
         OfficialModule("custom-lobby-bg", "自定义大厅背景", "免改原包替换大厅视频/静态图/USM 背景，兼容隐藏 UI 与缩放", "快捷与娱乐"),
+        OfficialModule("megath-damage", "梅加斯伤害计算", "游玩梅加斯时显示主动技能理论最大伤害面板（可拖动调节位置）", "战术推演"),
+        OfficialModule("player-combat-hud", "角色状态头顶显示", "在棋盘玩家角色上方显示技能冷却、血量与基础攻防（可调节位置）", "对局信息"),
     )
 
     val GROUPS: List<String> = listOf("全部", "对局信息", "战术推演", "操作与画面", "快捷与娱乐")

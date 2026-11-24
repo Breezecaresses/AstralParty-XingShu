@@ -1561,9 +1561,9 @@ mod tests {
     }
 
     #[test]
-    fn built_official_module_xspkg_passes_package_parser_for_all_19_modules() {
+    fn built_official_module_xspkg_passes_package_parser_for_all_21_modules() {
         let all = modules().unwrap();
-        assert_eq!(all.len(), 19, "Expected 19 official launcher modules");
+        assert_eq!(all.len(), 21, "Expected 21 official launcher modules");
         for module in all {
             let bytes = build_official_module_xspkg(&module).unwrap();
             let tmp = tempfile::NamedTempFile::new().unwrap();

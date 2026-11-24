@@ -57,7 +57,7 @@ export function launchPhaseProgress(phase: LaunchPhase): number {
 
 export const LAUNCH_TIPS_ZH: readonly string[] = [
   '使用「星枢账号」可同步云端回放、对局战绩与角色图鉴配置。',
-  '星枢默认作为纯净官方启动器运行；在「模组」页可按需安装「星枢官方插件 Mod」并自由开关 19 项功能。',
+  '星枢默认作为纯净官方启动器运行；在「模组」页可按需安装「星枢官方插件 Mod」并自由开关 21 项功能。',
   '将 .zip、.xspkg、.apmm 模组包或模组文件夹拖入窗口任意位置，即可自动识别并安装。',
   '若检测到旧版 APX 残留或代理 DLL 冲突，可在「检查冲突」中一键备份并安全处理。',
   '所有插件与模组写入均自动创建事务快照，支持在「安装事务」中随时无损还原。',

@@ -921,7 +921,9 @@ fn decompress_block_by_flags(data: &[u8], u_size: usize, comp: u32) -> Result<Ve
     }
 }
 
-fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed, String> {
+fn parse_unityfs_header_and_nodes(
+    data: &[u8],
+) -> Result<(u32, String, String, usize, Vec<FsBlock>, Vec<FsNode>, usize), String> {
     if !data.starts_with(b"UnityFS\0") {
         return Err("不是有效的 UnityFS Bundle 文件".to_string());
     }
@@ -988,6 +990,13 @@ fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed
         nodes.push(FsNode { offset, size, nflags, path });
     }
 
+    Ok((format_ver, player_ver, engine_ver, blocks_start, blocks, nodes, max_cab_end))
+}
+
+fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed, String> {
+    let (format_ver, player_ver, engine_ver, blocks_start, blocks, nodes, max_cab_end) =
+        parse_unityfs_header_and_nodes(data)?;
+
     let mut stream = Vec::new();
     let mut cursor = blocks_start;
     for blk in &blocks {
@@ -1008,6 +1017,94 @@ fn parse_unityfs(data: &[u8], stop_after_cab_only: bool) -> Result<UnityFsParsed
     }
 
     Ok(UnityFsParsed { format_ver, player_ver, engine_ver, stream, nodes })
+}
+
+pub(crate) fn extract_bundle_cab_names(raw: &[u8]) -> Result<Vec<String>, String> {
+    let (_, _, _, _, _, nodes, _) = parse_unityfs_header_and_nodes(raw)?;
+    Ok(nodes
+        .into_iter()
+        .filter(|n| !n.path.ends_with(".resS") && !n.path.is_empty())
+        .map(|n| n.path)
+        .collect())
+}
+
+pub(crate) fn extract_bundle_cab_names_from_file(path: &std::path::Path) -> Result<(Vec<String>, bool), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| format!("打开 Bundle 失败: {e}"))?;
+    let file_len = f.metadata().map_err(|e| format!("读取元数据失败: {e}"))?.len() as usize;
+    let head_len = file_len.min(512);
+    let mut head = vec![0u8; head_len];
+    f.read_exact(&mut head).map_err(|e| format!("读取 Bundle 头部失败: {e}"))?;
+    if !head.starts_with(b"UnityFS\0") {
+        return Err("不是有效的 UnityFS Bundle 文件".to_string());
+    }
+    let mut r = BinReader::new(&head, true);
+    r.pos = 8;
+    let format_ver = r.read_u32()?;
+    let _player_ver = r.read_cstring()?;
+    let _engine_ver = r.read_cstring()?;
+    if format_ver < 6 {
+        return Err("仅支持 UnityFS v6+ 格式".to_string());
+    }
+    let _bundle_size = r.read_i64()?;
+    let c_blocks_info_size = r.read_u32()? as usize;
+    let u_blocks_info_size = r.read_u32()? as usize;
+    let flags = r.read_u32()?;
+    if format_ver >= 7 {
+        r.align(16);
+    }
+    if c_blocks_info_size > 4 * 1024 * 1024 || u_blocks_info_size > 16 * 1024 * 1024 {
+        return Err("Bundle blocks_info 大小异常".to_string());
+    }
+    let blocks_info_at_end = (flags & 0x80) != 0;
+    let comp = flags & 0x3f;
+    let mut info_buf = vec![0u8; c_blocks_info_size];
+    if blocks_info_at_end {
+        if c_blocks_info_size > file_len {
+            return Err("Bundle blocks_info 长度越界".to_string());
+        }
+        f.seek(SeekFrom::End(-(c_blocks_info_size as i64)))
+            .map_err(|e| format!("定位 Bundle 索引失败: {e}"))?;
+        f.read_exact(&mut info_buf).map_err(|e| format!("读取 Bundle 索引失败: {e}"))?;
+    } else {
+        if r.pos.saturating_add(c_blocks_info_size) > file_len {
+            return Err("Bundle blocks_info 长度越界".to_string());
+        }
+        f.seek(SeekFrom::Start(r.pos as u64))
+            .map_err(|e| format!("定位 Bundle 索引失败: {e}"))?;
+        f.read_exact(&mut info_buf).map_err(|e| format!("读取 Bundle 索引失败: {e}"))?;
+    }
+
+    let blocks_info = decompress_block_by_flags(&info_buf, u_blocks_info_size, comp)?;
+    let mut br = BinReader::new(&blocks_info, true);
+    let _hash = br.read_bytes(16)?;
+    let block_count = br.read_i32()?;
+    if block_count < 0 || block_count > 65536 {
+        return Err("Bundle 分块数量异常".to_string());
+    }
+    for _ in 0..block_count {
+        let _ = br.read_u32()?;
+        let _ = br.read_u32()?;
+        let _ = br.read_u16()?;
+    }
+    let node_count = br.read_i32()?;
+    if node_count < 0 || node_count > 8192 {
+        return Err("Bundle 目录节点数量异常".to_string());
+    }
+    let mut cabs = Vec::new();
+    let mut has_ress = false;
+    for _ in 0..node_count {
+        let _ = br.read_i64()?;
+        let _ = br.read_i64()?;
+        let _ = br.read_u32()?;
+        let path = br.read_cstring()?;
+        if path.ends_with(".resS") {
+            has_ress = true;
+        } else if !path.is_empty() && !cabs.contains(&path) {
+            cabs.push(path);
+        }
+    }
+    Ok((cabs, has_ress))
 }
 
 #[derive(Clone)]
@@ -1531,6 +1628,8 @@ pub(crate) fn extract_texture_full_png_from_bundle(raw: &[u8], target_asset_name
 pub(crate) struct BundleContentSummary {
     pub texture_names: Vec<String>,
     pub monobehaviour_names: Vec<String>,
+    pub cab_names: Vec<String>,
+    pub asset_bundle_names: Vec<String>,
     pub other_object_count: usize,
     pub has_text_asset: bool,
     pub has_astral_runtime_dll: bool,
@@ -1556,6 +1655,9 @@ pub(crate) fn inspect_bundle_contents(raw: &[u8]) -> Result<BundleContentSummary
     let mut parsed_cab_count = 0usize;
 
     for node in &fs_parsed.nodes {
+        if !node.path.ends_with(".resS") && !node.path.is_empty() && !summary.cab_names.contains(&node.path) {
+            summary.cab_names.push(node.path.clone());
+        }
         if node.path.ends_with(".resS") || node.offset.saturating_add(node.size) > fs_parsed.stream.len() {
             continue;
         }
@@ -1599,7 +1701,14 @@ pub(crate) fn inspect_bundle_contents(raw: &[u8]) -> Result<BundleContentSummary
                         }
                     }
                 }
-                142 => {}
+                142 => {
+                    let mut nr = BinReader::new(obj_raw, !sf.little_endian);
+                    if let Ok(ab_name) = nr.read_len_string_aligned() {
+                        if !ab_name.is_empty() && !summary.asset_bundle_names.contains(&ab_name) {
+                            summary.asset_bundle_names.push(ab_name);
+                        }
+                    }
+                }
                 _ => {
                     summary.other_object_count += 1;
                 }
@@ -1652,23 +1761,14 @@ fn find_single_monobehaviour<'a>(
     found.ok_or_else(|| format!("{label} 未找到 MonoBehaviour"))
 }
 
-pub(crate) fn migrate_single_monobehaviour_bundle(vanilla_raw: &[u8], mod_raw: &[u8]) -> Result<Vec<u8>, String> {
-    let v_fs = parse_unityfs(vanilla_raw, false)?;
-    let m_fs = parse_unityfs(mod_raw, false)?;
-
-    let (v_node_idx, v_cab, v_sf, v_mb_idx, v_mb_raw, v_name) =
-        find_single_monobehaviour(&v_fs, "原版容器")?;
-    let (_, _, _, _, m_mb_raw, m_name) = find_single_monobehaviour(&m_fs, "模组容器")?;
-
-    if contains_apenc_magic(m_mb_raw) {
-        return Err("检测到 APENC01 加密视频载体（不支持绕过官方加密）".to_string());
-    }
-    if v_name.is_empty() || !v_name.eq_ignore_ascii_case(&m_name) {
-        return Err(format!(
-            "MonoBehaviour 资产名不匹配：原版 '{v_name}' != 模组 '{m_name}'"
-        ));
-    }
-
+fn replace_object_in_unityfs(
+    v_fs: &UnityFsParsed,
+    v_node_idx: usize,
+    v_cab: &[u8],
+    v_sf: &ParsedSerializedFile,
+    target_obj_idx: usize,
+    new_obj_raw: &[u8],
+) -> Result<Vec<u8>, String> {
     let stride = if v_sf.version >= 22 { 24usize } else { 20usize };
     let table_end = v_sf
         .object_table_offset
@@ -1693,10 +1793,9 @@ pub(crate) fn migrate_single_monobehaviour_bundle(vanilla_raw: &[u8], mod_raw: &
             new_cab.push(0);
         }
         let new_rel_start = new_cab.len() - v_sf.data_offset;
-        let new_size = if idx == v_mb_idx {
-            new_cab.extend_from_slice(&v_mb_raw[..28]);
-            new_cab.extend_from_slice(&m_mb_raw[28..]);
-            28 + (m_mb_raw.len() - 28)
+        let new_size = if idx == target_obj_idx {
+            new_cab.extend_from_slice(new_obj_raw);
+            new_obj_raw.len()
         } else {
             new_cab.extend_from_slice(&v_cab[old_abs_start..old_abs_end]);
             obj.byte_size
@@ -1786,6 +1885,448 @@ pub(crate) fn migrate_single_monobehaviour_bundle(vanilla_raw: &[u8], mod_raw: &
     let total_len = out.len() as i64;
     out[sz_pos..sz_pos + 8].copy_from_slice(&total_len.to_be_bytes());
     Ok(out)
+}
+
+pub(crate) fn migrate_single_monobehaviour_bundle(vanilla_raw: &[u8], mod_raw: &[u8]) -> Result<Vec<u8>, String> {
+    let v_fs = parse_unityfs(vanilla_raw, false)?;
+    let m_fs = parse_unityfs(mod_raw, false)?;
+
+    let (v_node_idx, v_cab, v_sf, v_mb_idx, v_mb_raw, v_name) =
+        find_single_monobehaviour(&v_fs, "原版容器")?;
+    let (_, _, _, _, m_mb_raw, m_name) = find_single_monobehaviour(&m_fs, "模组容器")?;
+
+    if contains_apenc_magic(m_mb_raw) {
+        return Err("检测到 APENC01 加密视频载体（不支持绕过官方加密）".to_string());
+    }
+    if v_name.is_empty() || !v_name.eq_ignore_ascii_case(&m_name) {
+        return Err(format!(
+            "MonoBehaviour 资产名不匹配：原版 '{v_name}' != 模组 '{m_name}'"
+        ));
+    }
+
+    let mut replaced = Vec::with_capacity(28 + m_mb_raw.len().saturating_sub(28));
+    replaced.extend_from_slice(&v_mb_raw[..28]);
+    replaced.extend_from_slice(&m_mb_raw[28..]);
+    replace_object_in_unityfs(&v_fs, v_node_idx, v_cab, &v_sf, v_mb_idx, &replaced)
+}
+
+pub(crate) fn extract_ascii_hex32_tokens(data: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut run_start: Option<usize> = None;
+    for (i, &b) in data.iter().enumerate() {
+        if b.is_ascii_hexdigit() {
+            if run_start.is_none() {
+                run_start = Some(i);
+            }
+        } else if let Some(s) = run_start.take() {
+            if i - s == 32 {
+                let tok = String::from_utf8_lossy(&data[s..i]).to_ascii_lowercase();
+                if !out.contains(&tok) {
+                    out.push(tok);
+                }
+            }
+        }
+    }
+    if let Some(s) = run_start {
+        if data.len() - s == 32 {
+            let tok = String::from_utf8_lossy(&data[s..]).to_ascii_lowercase();
+            if !out.contains(&tok) {
+                out.push(tok);
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn extract_hex32_tokens_from_bundle(raw: &[u8]) -> Vec<String> {
+    parse_unityfs(raw, true)
+        .map(|fs| extract_ascii_hex32_tokens(&fs.stream))
+        .unwrap_or_default()
+}
+
+pub(crate) fn patch_text_asset_in_bundle(
+    vanilla_raw: &[u8],
+    target_name: &str,
+    new_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let v_fs = parse_unityfs(vanilla_raw, false)?;
+    for (node_idx, node) in v_fs.nodes.iter().enumerate() {
+        if node.path.ends_with(".resS") || node.offset.saturating_add(node.size) > v_fs.stream.len() {
+            continue;
+        }
+        let cab_raw = &v_fs.stream[node.offset..node.offset + node.size];
+        let Ok(sf) = parse_serialized_file(cab_raw) else { continue };
+        for (obj_idx, obj) in sf.objects.iter().enumerate() {
+            if sf.types.get(obj.type_id).is_none_or(|ty| ty.class_id != 49) {
+                continue;
+            }
+            let start = sf.data_offset.saturating_add(obj.byte_start);
+            let Some(obj_raw) = cab_raw.get(start..start.saturating_add(obj.byte_size)) else { continue };
+            let mut r = BinReader::new(obj_raw, !sf.little_endian);
+            let Ok(obj_name) = r.read_len_string_aligned() else { continue };
+            if !obj_name.eq_ignore_ascii_case(target_name) {
+                continue;
+            }
+            let nb = obj_name.as_bytes();
+            let nb_len = u32::try_from(nb.len()).map_err(|_| "TextAsset 名称过长".to_string())?;
+            let script_len = u32::try_from(new_bytes.len()).map_err(|_| "TextAsset 数据过大".to_string())?;
+            let mut packed = Vec::with_capacity(16 + nb.len() + new_bytes.len());
+            packed.extend_from_slice(&if sf.little_endian { nb_len.to_le_bytes() } else { nb_len.to_be_bytes() });
+            packed.extend_from_slice(nb);
+            while packed.len() % 4 != 0 {
+                packed.push(0);
+            }
+            packed.extend_from_slice(&if sf.little_endian { script_len.to_le_bytes() } else { script_len.to_be_bytes() });
+            packed.extend_from_slice(new_bytes);
+            while packed.len() % 4 != 0 {
+                packed.push(0);
+            }
+            return replace_object_in_unityfs(&v_fs, node_idx, cab_raw, &sf, obj_idx, &packed);
+        }
+    }
+    Err(format!("Bundle 中未找到 TextAsset '{target_name}'"))
+}
+
+pub(crate) fn patch_wwise_bnk_in_monobehaviour_bundle(
+    vanilla_raw: &[u8],
+    mb_name: &str,
+    new_wem: &[u8],
+) -> Result<Vec<u8>, String> {
+    if new_wem.len() < 12 || &new_wem[..4] != b"RIFF" {
+        return Err("补丁音频不是有效的 Wwise RIFF WEM 文件".to_string());
+    }
+    let v_fs = parse_unityfs(vanilla_raw, false)?;
+    for (node_idx, node) in v_fs.nodes.iter().enumerate() {
+        if node.path.ends_with(".resS") || node.offset.saturating_add(node.size) > v_fs.stream.len() {
+            continue;
+        }
+        let cab_raw = &v_fs.stream[node.offset..node.offset + node.size];
+        let Ok(sf) = parse_serialized_file(cab_raw) else { continue };
+        for (obj_idx, obj) in sf.objects.iter().enumerate() {
+            if sf.types.get(obj.type_id).is_none_or(|ty| ty.class_id != 114) {
+                continue;
+            }
+            let start = sf.data_offset.saturating_add(obj.byte_start);
+            let Some(obj_raw) = cab_raw.get(start..start.saturating_add(obj.byte_size)) else { continue };
+            if obj_raw.len() < 36 {
+                continue;
+            }
+            let Ok(name) = extract_monobehaviour_name(obj_raw, sf.little_endian) else { continue };
+            if !name.eq_ignore_ascii_case(mb_name) {
+                continue;
+            }
+            let mut nr = BinReader::new(&obj_raw[28..], !sf.little_endian);
+            let _ = nr.read_len_string_aligned()?;
+            let bnk_len_off = 28 + nr.pos;
+            if bnk_len_off + 4 > obj_raw.len() {
+                continue;
+            }
+            let old_bnk_len = if sf.little_endian {
+                u32::from_le_bytes(obj_raw[bnk_len_off..bnk_len_off + 4].try_into().unwrap())
+            } else {
+                u32::from_be_bytes(obj_raw[bnk_len_off..bnk_len_off + 4].try_into().unwrap())
+            } as usize;
+            let bnk_start = bnk_len_off + 4;
+            let bnk_end = bnk_start.saturating_add(old_bnk_len);
+            if bnk_end > obj_raw.len() {
+                continue;
+            }
+            let old_bnk = &obj_raw[bnk_start..bnk_end];
+            if old_bnk.len() < 8 || &old_bnk[..4] != b"BKHD" {
+                continue;
+            }
+            let tail_start = (bnk_end + 3) & !3;
+            let tail = if tail_start <= obj_raw.len() { &obj_raw[tail_start..] } else { &[] };
+
+            // Parse BNK chunks
+            let mut pos = 0usize;
+            let mut chunks: Vec<([u8; 4], &[u8])> = Vec::new();
+            while pos + 8 <= old_bnk.len() {
+                let tag: [u8; 4] = old_bnk[pos..pos + 4].try_into().unwrap();
+                let sz = u32::from_le_bytes(old_bnk[pos + 4..pos + 8].try_into().unwrap()) as usize;
+                let end = pos + 8 + sz;
+                if end > old_bnk.len() {
+                    return Err("原版 Wwise SoundBank 区块越界".to_string());
+                }
+                chunks.push((tag, &old_bnk[pos + 8..end]));
+                pos = end;
+            }
+            if pos != old_bnk.len() {
+                return Err("原版 Wwise SoundBank 区块未对齐".to_string());
+            }
+
+            let didx_body = chunks
+                .iter()
+                .find(|(t, _)| t == b"DIDX")
+                .map(|(_, b)| *b)
+                .ok_or_else(|| "Wwise SoundBank 缺少 DIDX 区块".to_string())?;
+            if didx_body.len() != 12 {
+                return Err(format!("仅支持单音轨 DIDX BNK 替换，当前 entry 字节数={}", didx_body.len()));
+            }
+            let wem_id = u32::from_le_bytes(didx_body[0..4].try_into().unwrap());
+            let wem_off = u32::from_le_bytes(didx_body[4..8].try_into().unwrap());
+            let old_wem_sz = u32::from_le_bytes(didx_body[8..12].try_into().unwrap());
+            if wem_off != 0 {
+                return Err("Wwise DIDX WEM 起始偏移不为 0".to_string());
+            }
+
+            let new_wem_sz = u32::try_from(new_wem.len()).map_err(|_| "WEM 音频过大".to_string())?;
+            let mut new_bnk = Vec::with_capacity(old_bnk.len() + new_wem.len());
+            for (tag, body) in chunks {
+                match &tag {
+                    b"DIDX" => {
+                        new_bnk.extend_from_slice(&tag);
+                        new_bnk.extend_from_slice(&12u32.to_le_bytes());
+                        new_bnk.extend_from_slice(&wem_id.to_le_bytes());
+                        new_bnk.extend_from_slice(&0u32.to_le_bytes());
+                        new_bnk.extend_from_slice(&new_wem_sz.to_le_bytes());
+                    }
+                    b"DATA" => {
+                        new_bnk.extend_from_slice(&tag);
+                        new_bnk.extend_from_slice(&new_wem_sz.to_le_bytes());
+                        new_bnk.extend_from_slice(new_wem);
+                    }
+                    b"HIRC" => {
+                        let mut h_buf = body.to_vec();
+                        if h_buf.len() >= 4 {
+                            let cnt = u32::from_le_bytes(h_buf[0..4].try_into().unwrap()) as usize;
+                            let mut hp = 4usize;
+                            let mut needle = [0u8; 8];
+                            needle[..4].copy_from_slice(&wem_id.to_le_bytes());
+                            needle[4..8].copy_from_slice(&old_wem_sz.to_le_bytes());
+                            for _ in 0..cnt {
+                                if hp + 5 > h_buf.len() {
+                                    break;
+                                }
+                                let osz = u32::from_le_bytes(h_buf[hp + 1..hp + 5].try_into().unwrap()) as usize;
+                                let oend = hp + 5 + osz;
+                                if oend > h_buf.len() {
+                                    break;
+                                }
+                                let mut s = hp + 5;
+                                while s + 8 <= oend {
+                                    if &h_buf[s..s + 8] == &needle {
+                                        h_buf[s + 4..s + 8].copy_from_slice(&new_wem_sz.to_le_bytes());
+                                        s += 8;
+                                    } else {
+                                        s += 1;
+                                    }
+                                }
+                                hp = oend;
+                            }
+                        }
+                        new_bnk.extend_from_slice(&tag);
+                        new_bnk.extend_from_slice(&(h_buf.len() as u32).to_le_bytes());
+                        new_bnk.extend_from_slice(&h_buf);
+                    }
+                    _ => {
+                        new_bnk.extend_from_slice(&tag);
+                        new_bnk.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                        new_bnk.extend_from_slice(body);
+                    }
+                }
+            }
+
+            let new_bnk_u32 = u32::try_from(new_bnk.len()).map_err(|_| "SoundBank 过大".to_string())?;
+            let mut new_obj = Vec::with_capacity(bnk_start + new_bnk.len() + 4 + tail.len());
+            new_obj.extend_from_slice(&obj_raw[..bnk_len_off]);
+            new_obj.extend_from_slice(&if sf.little_endian { new_bnk_u32.to_le_bytes() } else { new_bnk_u32.to_be_bytes() });
+            new_obj.extend_from_slice(&new_bnk);
+            while (new_obj.len() - bnk_start) % 4 != 0 {
+                new_obj.push(0);
+            }
+            new_obj.extend_from_slice(tail);
+
+            return replace_object_in_unityfs(&v_fs, node_idx, cab_raw, &sf, obj_idx, &new_obj);
+        }
+    }
+    Err(format!("Bundle 中未找到 Wwise SoundBank '{mb_name}'"))
+}
+
+// ---- Minimal Protobuf Wire Patcher (RML .patch.proto) ----
+
+enum ProtoVal {
+    Varint(u64),
+    Fixed64([u8; 8]),
+    Bytes(Vec<u8>),
+    Fixed32([u8; 4]),
+}
+
+fn read_proto_varint(buf: &[u8], pos: &mut usize) -> Result<u64, String> {
+    let mut val: u64 = 0;
+    let mut shift = 0u32;
+    loop {
+        if *pos >= buf.len() || shift >= 64 {
+            return Err("Protobuf varint 截断或溢出".to_string());
+        }
+        let b = buf[*pos];
+        *pos += 1;
+        val |= u64::from(b & 0x7f) << shift;
+        if (b & 0x80) == 0 {
+            return Ok(val);
+        }
+        shift += 7;
+    }
+}
+
+fn push_proto_varint(out: &mut Vec<u8>, mut val: u64) {
+    loop {
+        let byte = (val & 0x7f) as u8;
+        val >>= 7;
+        if val == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
+}
+
+fn decode_proto_fields(buf: &[u8]) -> Result<Vec<(u32, ProtoVal)>, String> {
+    let mut pos = 0usize;
+    let mut fields = Vec::new();
+    while pos < buf.len() {
+        let tag = read_proto_varint(buf, &mut pos)?;
+        let fn_num = u32::try_from(tag >> 3).map_err(|_| "Protobuf 字段号无效".to_string())?;
+        let wt = (tag & 7) as u8;
+        let val = match wt {
+            0 => ProtoVal::Varint(read_proto_varint(buf, &mut pos)?),
+            1 => {
+                let end = pos.checked_add(8).filter(|&e| e <= buf.len()).ok_or_else(|| "Protobuf fixed64 越界".to_string())?;
+                let mut arr = [0u8; 8];
+                arr.copy_from_slice(&buf[pos..end]);
+                pos = end;
+                ProtoVal::Fixed64(arr)
+            }
+            2 => {
+                let len = usize::try_from(read_proto_varint(buf, &mut pos)?).map_err(|_| "Protobuf len 溢出".to_string())?;
+                let end = pos.checked_add(len).filter(|&e| e <= buf.len()).ok_or_else(|| "Protobuf bytes 越界".to_string())?;
+                let v = buf[pos..end].to_vec();
+                pos = end;
+                ProtoVal::Bytes(v)
+            }
+            5 => {
+                let end = pos.checked_add(4).filter(|&e| e <= buf.len()).ok_or_else(|| "Protobuf fixed32 越界".to_string())?;
+                let mut arr = [0u8; 4];
+                arr.copy_from_slice(&buf[pos..end]);
+                pos = end;
+                ProtoVal::Fixed32(arr)
+            }
+            _ => return Err(format!("不支持的 Protobuf wire type: {wt}")),
+        };
+        fields.push((fn_num, val));
+    }
+    Ok(fields)
+}
+
+fn encode_proto_fields(fields: &[(u32, ProtoVal)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (fn_num, val) in fields {
+        let wt: u64 = match val {
+            ProtoVal::Varint(_) => 0,
+            ProtoVal::Fixed64(_) => 1,
+            ProtoVal::Bytes(_) => 2,
+            ProtoVal::Fixed32(_) => 5,
+        };
+        push_proto_varint(&mut out, (u64::from(*fn_num) << 3) | wt);
+        match val {
+            ProtoVal::Varint(v) => push_proto_varint(&mut out, *v),
+            ProtoVal::Fixed64(b) => out.extend_from_slice(b),
+            ProtoVal::Bytes(b) => {
+                push_proto_varint(&mut out, b.len() as u64);
+                out.extend_from_slice(b);
+            }
+            ProtoVal::Fixed32(b) => out.extend_from_slice(b),
+        }
+    }
+    out
+}
+
+fn set_proto_varint_path(
+    msg_bytes: &[u8],
+    tokens: &[(u32, Option<usize>)],
+    new_val: u64,
+) -> Result<Vec<u8>, String> {
+    if tokens.is_empty() {
+        return Err("Protobuf 补丁路径为空".to_string());
+    }
+    let mut fields = decode_proto_fields(msg_bytes)?;
+    let (target_fn, target_idx) = tokens[0];
+    let mut seen_idx = 0usize;
+    let mut found = false;
+    for (fn_num, val) in &mut fields {
+        if *fn_num != target_fn {
+            continue;
+        }
+        if let Some(want_idx) = target_idx {
+            if seen_idx != want_idx {
+                seen_idx += 1;
+                continue;
+            }
+        }
+        found = true;
+        if tokens.len() == 1 {
+            match val {
+                ProtoVal::Varint(_) => *val = ProtoVal::Varint(new_val),
+                _ => return Err(format!("Protobuf 字段 {target_fn} 不是 varint 类型")),
+            }
+        } else {
+            match val {
+                ProtoVal::Bytes(inner) => {
+                    *inner = set_proto_varint_path(inner, &tokens[1..], new_val)?;
+                }
+                _ => return Err(format!("Protobuf 嵌套字段 {target_fn} 不是 length-delimited 类型")),
+            }
+        }
+        break;
+    }
+    if !found {
+        if tokens.len() == 1 {
+            fields.push((target_fn, ProtoVal::Varint(new_val)));
+        } else {
+            return Err(format!("未找到 Protobuf 补丁路径字段 {target_fn}"));
+        }
+    }
+    Ok(encode_proto_fields(&fields))
+}
+
+pub(crate) fn apply_rml_proto_patch(proto_bytes: &[u8], patch_text: &str) -> Result<Vec<u8>, String> {
+    let mut cur = proto_bytes.to_vec();
+    let mut applied = 0usize;
+    for raw_line in patch_text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (lhs, rhs) = line
+            .split_once('=')
+            .ok_or_else(|| format!("无效的 .patch.proto 规则行: {line}"))?;
+        let mut tokens = Vec::new();
+        for part in lhs.trim().split('.') {
+            if let Some((fstr, rest)) = part.split_once('[') {
+                let istr = rest
+                    .strip_suffix(']')
+                    .ok_or_else(|| format!("无效的索引表达式: {part}"))?;
+                let fn_num = fstr.parse::<u32>().map_err(|_| format!("无效字段号: {fstr}"))?;
+                let idx = istr.parse::<usize>().map_err(|_| format!("无效下标: {istr}"))?;
+                tokens.push((fn_num, Some(idx)));
+            } else {
+                let fn_num = part.parse::<u32>().map_err(|_| format!("无效字段号: {part}"))?;
+                tokens.push((fn_num, None));
+            }
+        }
+        let rhs_trim = rhs.trim();
+        let new_val = if let Some(hex_s) = rhs_trim.strip_prefix("0x").or_else(|| rhs_trim.strip_prefix("0X")) {
+            u64::from_str_radix(hex_s, 16).map_err(|_| format!("无效十六进制值: {rhs_trim}"))?
+        } else {
+            rhs_trim.parse::<u64>().map_err(|_| format!("无效数值: {rhs_trim}"))?
+        };
+        cur = set_proto_varint_path(&cur, &tokens, new_val)?;
+        applied += 1;
+    }
+    if applied == 0 {
+        return Err(".patch.proto 中不包含任何有效补丁规则".to_string());
+    }
+    Ok(cur)
 }
 
 pub(crate) fn extract_atlas_png(raw: &[u8], name: &str) -> Result<Vec<u8>, String> {
@@ -2730,6 +3271,114 @@ mod tests {
         let rt_bundle = build_test_unityfs_bundle("CAB-rt", vec![(49, 0)], vec![(1, 0, rt_payload)]);
         let rt_sum = inspect_bundle_contents(&rt_bundle).unwrap();
         assert!(rt_sum.has_text_asset && rt_sum.has_astral_runtime_dll);
+    }
+
+    fn make_text_asset_obj(name: &str, script: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&(script.len() as u32).to_le_bytes());
+        out.extend_from_slice(script);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out
+    }
+
+    #[test]
+    fn extracts_cab_names_patches_text_asset_wwise_bnk_and_rml_proto() {
+        // 1. CAB name extraction & TextAsset patching
+        let orig_ta = make_text_asset_obj("Login_fui", b"OLD_FUI");
+        let van_ta = build_test_unityfs_bundle(
+            "CAB-5ff6202eb64c9d92f9bd46f7a0c0b22a",
+            vec![(49, 0)],
+            vec![(10, 0, orig_ta)],
+        );
+        let cabs = extract_bundle_cab_names(&van_ta).unwrap();
+        assert_eq!(cabs, vec!["CAB-5ff6202eb64c9d92f9bd46f7a0c0b22a"]);
+        let sum = inspect_bundle_contents(&van_ta).unwrap();
+        assert_eq!(sum.cab_names, cabs);
+
+        let patched_ta = patch_text_asset_in_bundle(&van_ta, "Login_fui", b"FGUI_NEW_LONGER_BYTES").unwrap();
+        assert_eq!(extract_text_asset(&patched_ta, "Login_fui").unwrap(), b"FGUI_NEW_LONGER_BYTES");
+
+        // 2. Wwise BNK patching inside MonoBehaviour with DIDX, DATA, HIRC & 4-byte aligned tail
+        let wem_id: u32 = 970399165;
+        let old_wem = b"RIFF_OLD_WEM";
+        let mut bnk = Vec::new();
+        bnk.extend_from_slice(b"BKHD");
+        bnk.extend_from_slice(&4u32.to_le_bytes());
+        bnk.extend_from_slice(&[1, 0, 0, 0]);
+        bnk.extend_from_slice(b"DIDX");
+        bnk.extend_from_slice(&12u32.to_le_bytes());
+        bnk.extend_from_slice(&wem_id.to_le_bytes());
+        bnk.extend_from_slice(&0u32.to_le_bytes());
+        bnk.extend_from_slice(&(old_wem.len() as u32).to_le_bytes());
+        bnk.extend_from_slice(b"DATA");
+        bnk.extend_from_slice(&(old_wem.len() as u32).to_le_bytes());
+        bnk.extend_from_slice(old_wem);
+        let mut hirc_obj = Vec::new();
+        hirc_obj.extend_from_slice(&wem_id.to_le_bytes());
+        hirc_obj.extend_from_slice(&(old_wem.len() as u32).to_le_bytes());
+        bnk.extend_from_slice(b"HIRC");
+        bnk.extend_from_slice(&((9 + hirc_obj.len()) as u32).to_le_bytes());
+        bnk.extend_from_slice(&1u32.to_le_bytes());
+        bnk.push(11u8);
+        bnk.extend_from_slice(&(hirc_obj.len() as u32).to_le_bytes());
+        bnk.extend_from_slice(&hirc_obj);
+
+        let mut mb_body = Vec::new();
+        mb_body.extend_from_slice(&(bnk.len() as u32).to_le_bytes());
+        mb_body.extend_from_slice(&bnk);
+        let pad_len = (4 - (bnk.len() % 4)) % 4;
+        mb_body.extend(std::iter::repeat_n(0u8, pad_len));
+        mb_body.extend_from_slice(b"TAIL_KEEP");
+
+        let van_bnk = build_test_unityfs_bundle(
+            "CAB-bnk",
+            vec![(114, 0)],
+            vec![(42, 0, make_mb_obj([0x77u8; 28], "BGM_Login", &mb_body))],
+        );
+        let new_wem = b"RIFF_NEW_WEM_AUDIO_12345";
+        let patched_bnk_bundle = patch_wwise_bnk_in_monobehaviour_bundle(&van_bnk, "BGM_Login", new_wem).unwrap();
+        let fs = parse_unityfs(&patched_bnk_bundle, false).unwrap();
+        let cab = &fs.stream[fs.nodes[0].offset..fs.nodes[0].offset + fs.nodes[0].size];
+        let sf = parse_serialized_file(cab).unwrap();
+        let obj_raw = &cab[sf.data_offset + sf.objects[0].byte_start..sf.data_offset + sf.objects[0].byte_start + sf.objects[0].byte_size];
+        assert!(obj_raw.windows(new_wem.len()).any(|w| w == new_wem));
+        assert!(obj_raw.ends_with(b"TAIL_KEEP"));
+        let didx_pos = obj_raw.windows(4).position(|w| w == b"DIDX").unwrap();
+        let updated_sz = u32::from_le_bytes(obj_raw[didx_pos + 16..didx_pos + 20].try_into().unwrap());
+        assert_eq!(updated_sz as usize, new_wem.len());
+        let hirc_pos = obj_raw.windows(4).position(|w| w == b"HIRC").unwrap();
+        assert_eq!(
+            u32::from_le_bytes(obj_raw[hirc_pos + 21..hirc_pos + 25].try_into().unwrap()) as usize,
+            new_wem.len()
+        );
+
+        // 3. Protobuf RML patch (`1[0].10=0x904e`, `2[0].2.10=0x904e`)
+        let inner = encode_proto_fields(&[
+            (3, ProtoVal::Bytes(b"Login".to_vec())),
+            (10, ProtoVal::Varint(2)),
+        ]);
+        let f2_entry = encode_proto_fields(&[
+            (1, ProtoVal::Fixed32(11u32.to_le_bytes())),
+            (2, ProtoVal::Bytes(inner.clone())),
+        ]);
+        let proto = encode_proto_fields(&[
+            (1, ProtoVal::Bytes(inner)),
+            (2, ProtoVal::Bytes(f2_entry)),
+        ]);
+        let patched_proto = apply_rml_proto_patch(&proto, "1[0].10=0x904e\r\n2[0].2.10=0x904e\n").unwrap();
+        let dec = decode_proto_fields(&patched_proto).unwrap();
+        let f1_dec = match &dec[0].1 { ProtoVal::Bytes(b) => decode_proto_fields(b).unwrap(), _ => panic!() };
+        assert!(matches!(f1_dec[1], (10, ProtoVal::Varint(0x904e))));
+        let f2_outer = match &dec[1].1 { ProtoVal::Bytes(b) => decode_proto_fields(b).unwrap(), _ => panic!() };
+        let f2_inner = match &f2_outer[1].1 { ProtoVal::Bytes(b) => decode_proto_fields(b).unwrap(), _ => panic!() };
+        assert!(matches!(f2_inner[1], (10, ProtoVal::Varint(0x904e))));
     }
 
     #[test]

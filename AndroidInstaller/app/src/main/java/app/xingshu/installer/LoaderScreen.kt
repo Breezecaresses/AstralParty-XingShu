@@ -270,7 +270,7 @@ internal fun LoaderScreen(
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
-                            text = "默认纯净启动原版；需开启悬浮球、19 项星枢功能或局内开房时，前往「模组」页按需安装核心插件。",
+                            text = "默认纯净启动原版；需开启悬浮球、21 项星枢功能或局内开房时，前往「模组」页按需安装核心插件。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),

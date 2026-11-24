@@ -467,4 +467,42 @@ internal static class XingShuConfigKeys
 	internal const float CustomLobbyBgVolumeMin = 0.00f;
 	internal const float CustomLobbyBgVolumeMax = 1.00f;
 	internal const float CustomLobbyBgVolumeDefault = 0.35f;
+
+	// 梅加斯机械超人开技能理论最大伤害面板 (MegathSkillDamageHint)
+	internal const string MegathDamageHintEnabled = "XINGSHU_MEGATH_DMG_HINT";
+	internal const bool MegathDamageHintEnabledDefault = true;
+	internal const string MegathDamageHintPosX = "XINGSHU_MEGATH_DMG_X";
+	internal const float MegathDamageHintPosXDefault = 0.78f;
+	internal const string MegathDamageHintPosY = "XINGSHU_MEGATH_DMG_Y";
+	internal const float MegathDamageHintPosYDefault = 0.78f;
+	internal const string MegathDamageHintScale = "XINGSHU_MEGATH_DMG_SCALE";
+	internal const float MegathDamageHintScaleMin = 0.60f;
+	internal const float MegathDamageHintScaleMax = 1.80f;
+	internal const float MegathDamageHintScaleDefault = 1.0f;
+	internal const string MegathDamageHintLocked = "XINGSHU_MEGATH_DMG_LOCKED";
+	internal const bool MegathDamageHintLockedDefault = false;
+
+	// 棋盘玩家角色状态显示 (PlayerCombatStatusHud)
+	internal const string PlayerCombatHudEnabled = "XINGSHU_PLAYER_COMBAT_HUD";
+	internal const bool PlayerCombatHudEnabledDefault = true;
+	internal const string PlayerCombatHudOffsetX = "XINGSHU_PLAYER_HUD_OFF_X";
+	internal const float PlayerCombatHudOffsetXMin = -160f;
+	internal const float PlayerCombatHudOffsetXMax = 160f;
+	internal const float PlayerCombatHudOffsetXDefault = 0f;
+	internal const string PlayerCombatHudOffsetY = "XINGSHU_PLAYER_HUD_OFF_Y";
+	internal const float PlayerCombatHudOffsetYMin = -180f;
+	internal const float PlayerCombatHudOffsetYMax = 180f;
+	internal const float PlayerCombatHudOffsetYDefault = -64f;
+	internal const string PlayerCombatHudScale = "XINGSHU_PLAYER_HUD_SCALE";
+	internal const float PlayerCombatHudScaleMin = 0.60f;
+	internal const float PlayerCombatHudScaleMax = 1.80f;
+	internal const float PlayerCombatHudScaleDefault = 1.0f;
+	internal const string PlayerCombatHudLocked = "XINGSHU_PLAYER_HUD_LOCKED";
+	internal const bool PlayerCombatHudLockedDefault = false;
+	internal const string PlayerCombatHudShowCd = "XINGSHU_PLAYER_HUD_CD";
+	internal const bool PlayerCombatHudShowCdDefault = true;
+	internal const string PlayerCombatHudShowHp = "XINGSHU_PLAYER_HUD_HP";
+	internal const bool PlayerCombatHudShowHpDefault = true;
+	internal const string PlayerCombatHudShowAtkDef = "XINGSHU_PLAYER_HUD_ATKDEF";
+	internal const bool PlayerCombatHudShowAtkDefDefault = true;
 }

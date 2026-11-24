@@ -643,6 +643,37 @@ fn is_noise_entry(lower_clean: &str) -> bool {
         || fname == "__info"
 }
 
+fn is_rml_manifest_json(bytes: &[u8]) -> bool {
+    let stripped = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    let Ok(val) = serde_json::from_slice::<serde_json::Value>(stripped) else {
+        return false;
+    };
+    val.is_object()
+        && (val["Patch"].is_array()
+            || val["Redirect"].is_array()
+            || val["Add"].is_array()
+            || val["Bundle"].is_array())
+}
+
+fn is_allowed_rml_launcher_exe(has_rml_manifest: bool, lower_clean: &str) -> bool {
+    if !has_rml_manifest {
+        return false;
+    }
+    Path::new(lower_clean)
+        .file_name()
+        .and_then(|s| s.to_str())
+        == Some("resourcemodloader.exe")
+}
+
+fn should_collect_rml_payload(lower_clean: &str) -> bool {
+    let fname = Path::new(lower_clean).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    fname == "mod.json"
+        || lower_clean.ends_with(".bytes")
+        || lower_clean.ends_with(".patch.bnk")
+        || lower_clean.ends_with(".patch.proto")
+        || MODIMG_EXTS.iter().any(|ext| lower_clean.ends_with(ext))
+}
+
 fn should_collect_payload_path(clean: &str, lower: &str) -> bool {
     if is_noise_entry(lower) {
         return false;
@@ -807,6 +838,30 @@ fn read_from_directory(
         }
     }
 
+    let mut has_rml_manifest = false;
+    for entry in WalkDir::new(&canonical_src).follow_links(false).max_depth(3).into_iter().flatten() {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry
+            .path()
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("mod.json"))
+        {
+            if let Ok(meta) = entry.metadata() {
+                if meta.len() > 0 && meta.len() <= 1024 * 1024 {
+                    if let Ok(bytes) = fs::read(entry.path()) {
+                        if is_rml_manifest_json(&bytes) {
+                            has_rml_manifest = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let mut payloads = Vec::new();
     let mut preview_files = Vec::new();
     let mut doc_files = Vec::new();
@@ -835,6 +890,9 @@ fn read_from_directory(
             .to_string_lossy()
             .replace('\\', "/");
         let lower = clean.to_ascii_lowercase();
+        if is_allowed_rml_launcher_exe(has_rml_manifest, &lower) {
+            continue;
+        }
         check_forbidden_extension(&lower)?;
 
         let meta = entry.metadata().map_err(|e| HubError::storage_error(e.to_string()))?;
@@ -843,7 +901,9 @@ fn read_from_directory(
             return Err(HubError::security_violation("模组解压总体积超过 2GB 安全上限。"));
         }
 
-        if should_collect_payload_path(&clean, &lower) {
+        let collect = should_collect_payload_path(&clean, &lower)
+            || (has_rml_manifest && !is_noise_entry(&lower) && should_collect_rml_payload(&lower));
+        if collect {
             if meta.len() == 0 || meta.len() > MAX_DROP_PAYLOAD_BYTES as u64 {
                 return Err(HubError::security_violation(format!(
                     "模组资源文件体积异常（{clean}）。"
@@ -974,6 +1034,29 @@ fn read_source_entries_with_password(
 
     let mut total_uncompressed: u64 = 0;
     let zf_len = zf.len();
+    let mut has_rml_manifest = false;
+    for idx in 0..zf_len {
+        if let Ok(mut entry) = zf.by_index(idx) {
+            if entry.is_dir() || entry.size() == 0 || entry.size() > 1024 * 1024 {
+                continue;
+            }
+            let raw_name = decode_zip_entry_name(entry.name_raw()).replace('\\', "/");
+            if Path::new(&raw_name)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case("mod.json"))
+            {
+                let mut mbytes = Vec::new();
+                if entry.by_ref().take(1024 * 1024 + 1).read_to_end(&mut mbytes).is_ok()
+                    && is_rml_manifest_json(&mbytes)
+                {
+                    has_rml_manifest = true;
+                    break;
+                }
+            }
+        }
+    }
+
     let mut retry_encrypted_via_7z = false;
     for idx in 0..zf_len {
         let loop_err = match zf.by_index(idx) {
@@ -997,31 +1080,37 @@ fn read_source_entries_with_password(
                                 .to_string_lossy()
                                 .replace('\\', "/");
                             let lower = clean.to_ascii_lowercase();
-                            check_forbidden_extension(&lower)?;
-
-                            if should_collect_payload_path(&clean, &lower) {
-                                let mut data = Vec::new();
-                                entry
-                                    .by_ref()
-                                    .take((MAX_DROP_PAYLOAD_BYTES + 1) as u64)
-                                    .read_to_end(&mut data)
-                                    .map_err(|e| HubError::storage_error(e.to_string()))?;
-                                if data.is_empty() || data.len() > MAX_DROP_PAYLOAD_BYTES {
-                                    Some(HubError::security_violation(format!(
-                                        "压缩包内资源文件体积异常（{clean}）。"
-                                    )))
-                                } else {
-                                    payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
-                                    None
-                                }
-                            } else if !is_noise_entry(&lower) && PREVIEW_EXTS.iter().any(|ext| lower.ends_with(ext)) {
-                                preview_files.push(clean);
-                                None
-                            } else if DOC_EXTS.iter().any(|ext| lower.ends_with(ext)) {
-                                doc_files.push(clean);
+                            if is_allowed_rml_launcher_exe(has_rml_manifest, &lower) {
                                 None
                             } else {
-                                None
+                                check_forbidden_extension(&lower)?;
+
+                                let collect = should_collect_payload_path(&clean, &lower)
+                                    || (has_rml_manifest && !is_noise_entry(&lower) && should_collect_rml_payload(&lower));
+                                if collect {
+                                    let mut data = Vec::new();
+                                    entry
+                                        .by_ref()
+                                        .take((MAX_DROP_PAYLOAD_BYTES + 1) as u64)
+                                        .read_to_end(&mut data)
+                                        .map_err(|e| HubError::storage_error(e.to_string()))?;
+                                    if data.is_empty() || data.len() > MAX_DROP_PAYLOAD_BYTES {
+                                        Some(HubError::security_violation(format!(
+                                            "压缩包内资源文件体积异常（{clean}）。"
+                                        )))
+                                    } else {
+                                        payloads.push(RawPayloadEntry { source_entry: clean, bytes: data });
+                                        None
+                                    }
+                                } else if !is_noise_entry(&lower) && PREVIEW_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+                                    preview_files.push(clean);
+                                    None
+                                } else if DOC_EXTS.iter().any(|ext| lower.ends_with(ext)) {
+                                    doc_files.push(clean);
+                                    None
+                                } else {
+                                    None
+                                }
                             }
                         }
                     }
@@ -1219,6 +1308,79 @@ fn read_vanilla_bundle_baseline(root: &Path, target_rel: &str) -> HubResult<Vec<
     fs::read(&target_abs).map_err(|e| HubError::storage_error(format!("读取原版容器失败（{target_rel}）：{e}")))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn push_resolved_target_entry(
+    root: &Path,
+    discovered: &DiscoveredTargets,
+    active_owners: &HashMap<String, String>,
+    seen_targets: &mut HashSet<String>,
+    warnings: &mut Vec<String>,
+    conflicts: &mut Vec<String>,
+    matched_files: &mut Vec<DroppedModTargetMatch>,
+    staged_candidates: &mut Vec<StagedCandidate>,
+    source_entry: &str,
+    raw_bytes: &[u8],
+    bundle_id: String,
+    target_rel: String,
+    target_kind: String,
+    is_catalog: bool,
+    custom_bytes: Option<Vec<u8>>,
+) -> HubResult<()> {
+    if !seen_targets.insert(target_rel.clone()) {
+        warnings.push(format!(
+            "检测到多差分或重复指向 {target_rel} 的文件，已优先保留首个并跳过：{source_entry}"
+        ));
+        return Ok(());
+    }
+    let (norm_target, target_abs) = validate_dropped_target_rel(root, &target_rel)?;
+    let final_bytes = custom_bytes.unwrap_or_else(|| raw_bytes.to_vec());
+    let payload_sha256 = sha256_hex(&final_bytes);
+    let payload_size = final_bytes.len() as u64;
+    let current_sha256 = if target_abs.is_file() {
+        compute_file_sha256(&target_abs)?
+    } else {
+        String::new()
+    };
+    let already_same =
+        !current_sha256.is_empty() && current_sha256.eq_ignore_ascii_case(&payload_sha256);
+
+    let mut conflict_with = None;
+    if discovered
+        .protected_runtime_bundle_id
+        .as_deref()
+        .is_some_and(|rt_id| rt_id.eq_ignore_ascii_case(&bundle_id))
+    {
+        let msg = "星枢运行时核心容器（受保护，禁止第三方模组覆盖）".to_string();
+        conflicts.push(format!("{norm_target}：{msg}"));
+        conflict_with = Some(msg);
+    } else if let Some(owner) = active_owners.get(&target_key(&norm_target)) {
+        conflicts.push(format!("{norm_target} 已被 {owner} 占用，请先还原冲突模组"));
+        conflict_with = Some(owner.clone());
+    }
+
+    let risk_level = if is_catalog { "high" } else { "safe" };
+    matched_files.push(DroppedModTargetMatch {
+        source_entry: source_entry.to_string(),
+        target_rel: norm_target.clone(),
+        bundle_id,
+        target_kind,
+        size: payload_size,
+        sha256: payload_sha256.clone(),
+        current_sha256,
+        already_same,
+        is_catalog,
+        risk_level: risk_level.into(),
+        conflict_with,
+    });
+    staged_candidates.push(StagedCandidate {
+        target_rel: norm_target,
+        is_catalog,
+        bytes: final_bytes,
+        sha256: payload_sha256,
+    });
+    Ok(())
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 fn inspect_against_game(
     game: &GameInstallation,
@@ -1325,12 +1487,387 @@ fn inspect_against_game_with_password(
     let mut addr_group_fallback_count = 0usize;
     let mut adapted_modimg_count = 0usize;
     let mut migrated_bundle_count = 0usize;
+    let mut cab_matched_count = 0usize;
+    let mut rml_patched_count = 0usize;
     let mut dynamic_card_count = 0usize;
     let mut apenc_skipped_count = 0usize;
     let mut backup_skipped_count = 0usize;
     let mut lazy_catalogs: Option<Vec<std::sync::Arc<crate::game_art::Catalog>>> = None;
+    let mut lazy_cab_index: Option<HashMap<String, Vec<(String, String)>>> = None;
 
-    for raw in raw_payloads {
+    // Process RML (`mod.json`) manifests first if present, keeping any non-RML payloads for normal inspection.
+    let mut rml_consumed_indices = HashSet::new();
+    if let Some((manifest_idx, manifest_entry)) = raw_payloads.iter().enumerate().find(|(_, p)| {
+        Path::new(&p.source_entry)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("mod.json"))
+            && is_rml_manifest_json(&p.bytes)
+    }) {
+        rml_consumed_indices.insert(manifest_idx);
+        let stripped = manifest_entry
+            .bytes
+            .strip_prefix(b"\xef\xbb\xbf")
+            .unwrap_or(&manifest_entry.bytes);
+        if let Ok(manifest_json) = serde_json::from_slice::<serde_json::Value>(stripped) {
+            warnings.push(
+                "检测到 ResourceModLoader (mod.json) 模组，已安全跳过 ResourceModLoader.exe 并使用星枢原生补丁引擎解析。".into(),
+            );
+            let manifest_dir = manifest_entry
+                .source_entry
+                .rsplit_once('/')
+                .map(|(d, _)| d.trim_matches('/').to_string())
+                .unwrap_or_default();
+            let base_dir = manifest_json["BaseDir"]
+                .as_str()
+                .unwrap_or("")
+                .trim_matches('/')
+                .to_string();
+
+            let mut by_rel_lower: HashMap<String, usize> = HashMap::new();
+            for (i, p) in raw_payloads.iter().enumerate() {
+                by_rel_lower.insert(p.source_entry.replace('\\', "/").to_ascii_lowercase(), i);
+            }
+            let find_rml_entry = |rel: &str| -> Option<usize> {
+                let clean_rel = rel.trim().replace('\\', "/").trim_start_matches('/').to_string();
+                let mut candidates = Vec::new();
+                if !manifest_dir.is_empty() && !base_dir.is_empty() {
+                    candidates.push(format!("{manifest_dir}/{base_dir}/{clean_rel}"));
+                }
+                if !manifest_dir.is_empty() {
+                    candidates.push(format!("{manifest_dir}/{clean_rel}"));
+                }
+                if !base_dir.is_empty() {
+                    candidates.push(format!("{base_dir}/{clean_rel}"));
+                }
+                candidates.push(clean_rel.clone());
+                for cand in candidates {
+                    if let Some(&idx) = by_rel_lower.get(&cand.to_ascii_lowercase()) {
+                        return Some(idx);
+                    }
+                }
+                raw_payloads.iter().position(|p| {
+                    p.source_entry.eq_ignore_ascii_case(&clean_rel)
+                        || p.source_entry
+                            .to_ascii_lowercase()
+                            .ends_with(&format!("/{}", clean_rel.to_ascii_lowercase()))
+                })
+            };
+
+            let resolve_hex_targets_for_name =
+                |catalogs: &[std::sync::Arc<crate::game_art::Catalog>], asset_name: &str| -> Vec<(String, String)> {
+                    let mut resolved = Vec::new();
+                    let mut seen_rel = HashSet::new();
+                    for b_name in crate::game_art::resolve_asset_bundles(catalogs, asset_name) {
+                        let Some(stem) = Path::new(&b_name).file_stem().and_then(|s| s.to_str()) else {
+                            continue;
+                        };
+                        let hex_id = stem.to_ascii_lowercase();
+                        if let Some(targets) = lookup_hex_targets(&discovered, &hex_id) {
+                            for (t_rel, _) in targets {
+                                if seen_rel.insert(t_rel.clone()) {
+                                    resolved.push((hex_id.clone(), t_rel.clone()));
+                                }
+                            }
+                        }
+                    }
+                    resolved
+                };
+
+            // 1. Handle RML `Redirect` items (`image` -> modimg, `text` -> patched TextAsset bundle)
+            if let Some(redirects) = manifest_json["Redirect"].as_array() {
+                for item in redirects {
+                    let asset_name = item["Name"].as_str().unwrap_or("").trim();
+                    let file_rel = item["File"].as_str().unwrap_or("").trim();
+                    let wrap_type = item["WrapType"].as_str().unwrap_or("").trim().to_ascii_lowercase();
+                    if asset_name.is_empty() || file_rel.is_empty() {
+                        continue;
+                    }
+                    let Some(p_idx) = find_rml_entry(file_rel) else {
+                        unmatched_files.push(DroppedModUnmatchedFile {
+                            source_entry: file_rel.to_string(),
+                            reason: format!("mod.json 引用的重定向文件不存在：{file_rel}"),
+                            size: 0,
+                        });
+                        continue;
+                    };
+                    rml_consumed_indices.insert(p_idx);
+                    let p_entry = &raw_payloads[p_idx];
+                    let file_low = file_rel.to_ascii_lowercase();
+                    if wrap_type == "image" || MODIMG_EXTS.iter().any(|ext| file_low.ends_with(ext)) {
+                        let ext = Path::new(&file_low)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .filter(|s| matches!(*s, "png" | "jpg" | "jpeg" | "webp"))
+                            .unwrap_or("png");
+                        if !is_valid_asset_basename(asset_name) {
+                            unmatched_files.push(DroppedModUnmatchedFile {
+                                source_entry: p_entry.source_entry.clone(),
+                                reason: format!("非法的 Redirect 图片资源名：{asset_name}"),
+                                size: p_entry.bytes.len() as u64,
+                            });
+                            continue;
+                        }
+                        let bid = format!("rml.img.{}", &sha256_hex(asset_name.as_bytes())[..12]);
+                        rml_patched_count += 1;
+                        push_resolved_target_entry(
+                            root, &discovered, &active_owners, &mut seen_targets,
+                            &mut warnings, &mut conflicts, &mut matched_files, &mut staged_candidates,
+                            &p_entry.source_entry,
+                            &p_entry.bytes,
+                            bid,
+                            format!("modimg/{asset_name}.{ext}"),
+                            "rml_modimg".into(),
+                            false,
+                            Some(p_entry.bytes.clone()),
+                        )?;
+                    } else if wrap_type == "text" || file_low.ends_with(".bytes") {
+                        let catalogs = lazy_catalogs
+                            .get_or_insert_with(|| crate::game_art::load_game_catalogs(game, root));
+                        let targets = resolve_hex_targets_for_name(catalogs, asset_name);
+                        let mut matched_any = false;
+                        let mut last_err: Option<String> = None;
+                        for (hex_id, t_rel) in targets {
+                            match read_vanilla_bundle_baseline(root, &t_rel)
+                                .map_err(|e| e.message)
+                                .and_then(|van| {
+                                    crate::mod_inspector::patch_text_asset_in_bundle(
+                                        &van,
+                                        asset_name,
+                                        &p_entry.bytes,
+                                    )
+                                }) {
+                                Ok(patched) => {
+                                    matched_any = true;
+                                    rml_patched_count += 1;
+                                    push_resolved_target_entry(
+                                        root, &discovered, &active_owners, &mut seen_targets,
+                                        &mut warnings, &mut conflicts, &mut matched_files, &mut staged_candidates,
+                                        &p_entry.source_entry,
+                                        &p_entry.bytes,
+                                        hex_id,
+                                        t_rel,
+                                        "rml_patched_bundle".into(),
+                                        false,
+                                        Some(patched),
+                                    )?;
+                                    break;
+                                }
+                                Err(e) => last_err = Some(e),
+                            }
+                        }
+                        if !matched_any {
+                            unmatched_files.push(DroppedModUnmatchedFile {
+                                source_entry: p_entry.source_entry.clone(),
+                                reason: last_err.unwrap_or_else(|| {
+                                    format!("未能在当前游戏目录找到 Redirect TextAsset '{asset_name}'")
+                                }),
+                                size: p_entry.bytes.len() as u64,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // 2. Handle RML `Patch` items (`.patch.bnk` & `.patch.proto`)
+            if let Some(patches) = manifest_json["Patch"].as_array() {
+                for item in patches {
+                    let Some(patch_rel) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+                        continue;
+                    };
+                    let Some(p_idx) = find_rml_entry(patch_rel) else {
+                        unmatched_files.push(DroppedModUnmatchedFile {
+                            source_entry: patch_rel.to_string(),
+                            reason: format!("mod.json 引用的补丁文件不存在：{patch_rel}"),
+                            size: 0,
+                        });
+                        continue;
+                    };
+                    rml_consumed_indices.insert(p_idx);
+                    let p_entry = &raw_payloads[p_idx];
+                    let patch_leaf = Path::new(patch_rel)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(patch_rel);
+                    let leaf_lower = patch_leaf.to_ascii_lowercase();
+
+                    if leaf_lower.ends_with(".patch.bnk") {
+                        let stem = &patch_leaf[..patch_leaf.len() - ".patch.bnk".len()];
+                        let bank_name = stem.rsplit('@').next().unwrap_or(stem).trim();
+                        let catalogs = lazy_catalogs
+                            .get_or_insert_with(|| crate::game_art::load_game_catalogs(game, root));
+                        let mut cand_targets = Vec::new();
+                        let mut seen_rel = HashSet::new();
+
+                        // Resolve Wwise bank descriptor (`Assets/WwiseData/Banks/{bank}.asset`) -> bank GUIDs -> bundles
+                        let bank_asset_key = format!("Assets/WwiseData/Banks/{bank_name}.asset");
+                        for (_, desc_rel) in resolve_hex_targets_for_name(catalogs, &bank_asset_key) {
+                            if let Ok(desc_bytes) = read_vanilla_bundle_baseline(root, &desc_rel) {
+                                for tok in crate::mod_inspector::extract_hex32_tokens_from_bundle(&desc_bytes) {
+                                    for (hx, rel) in resolve_hex_targets_for_name(catalogs, &tok) {
+                                        if seen_rel.insert(rel.clone()) {
+                                            cand_targets.push((hx, rel));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback for descriptor-less / test fixtures: skip .resS asset bundles cleanly, scan compact MonoBehaviour candidates
+                        if cand_targets.is_empty() {
+                            for (hx, vec) in &discovered.by_hex {
+                                if discovered
+                                    .protected_runtime_bundle_id
+                                    .as_deref()
+                                    .is_some_and(|rt| rt.eq_ignore_ascii_case(hx))
+                                {
+                                    continue;
+                                }
+                                for (rel, _) in vec {
+                                    let Ok(abs) = confined(root, rel) else { continue };
+                                    if !abs.metadata().is_ok_and(|m| m.len() <= 24 * 1024 * 1024) {
+                                        continue;
+                                    }
+                                    if crate::mod_inspector::extract_bundle_cab_names_from_file(&abs)
+                                        .is_ok_and(|(_, has_ress)| has_ress)
+                                    {
+                                        continue;
+                                    }
+                                    let Ok(raw_b) = fs::read(&abs) else { continue };
+                                    if crate::mod_inspector::inspect_bundle_contents(&raw_b)
+                                        .is_ok_and(|s| s.monobehaviour_names.iter().any(|n| n.eq_ignore_ascii_case(bank_name)))
+                                        && seen_rel.insert(rel.clone())
+                                    {
+                                        cand_targets.push((hx.clone(), rel.clone()));
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut patched_any = false;
+                        let mut last_err: Option<String> = None;
+                        for (hx, t_rel) in cand_targets {
+                            match read_vanilla_bundle_baseline(root, &t_rel)
+                                .map_err(|e| e.message)
+                                .and_then(|van| {
+                                    crate::mod_inspector::patch_wwise_bnk_in_monobehaviour_bundle(
+                                        &van,
+                                        bank_name,
+                                        &p_entry.bytes,
+                                    )
+                                }) {
+                                Ok(patched) => {
+                                    patched_any = true;
+                                    rml_patched_count += 1;
+                                    push_resolved_target_entry(
+                                        root, &discovered, &active_owners, &mut seen_targets,
+                                        &mut warnings, &mut conflicts, &mut matched_files, &mut staged_candidates,
+                                        &p_entry.source_entry,
+                                        &p_entry.bytes,
+                                        hx,
+                                        t_rel,
+                                        "rml_patched_bundle".into(),
+                                        false,
+                                        Some(patched),
+                                    )?;
+                                }
+                                Err(e) => last_err = Some(e),
+                            }
+                        }
+                        if !patched_any {
+                            unmatched_files.push(DroppedModUnmatchedFile {
+                                source_entry: p_entry.source_entry.clone(),
+                                reason: last_err.unwrap_or_else(|| {
+                                    format!("未找到 Wwise SoundBank '{bank_name}' 对应的 3.3.0 原版容器")
+                                }),
+                                size: p_entry.bytes.len() as u64,
+                            });
+                        }
+                    } else if leaf_lower.ends_with(".patch.proto") {
+                        let stem = &patch_leaf[..patch_leaf.len() - ".patch.proto".len()];
+                        let asset_name = stem.split('@').next().unwrap_or(stem).trim();
+                        let Ok(patch_text) = std::str::from_utf8(&p_entry.bytes) else {
+                            unmatched_files.push(DroppedModUnmatchedFile {
+                                source_entry: p_entry.source_entry.clone(),
+                                reason: ".patch.proto 文件不是有效的 UTF-8 文本".into(),
+                                size: p_entry.bytes.len() as u64,
+                            });
+                            continue;
+                        };
+
+                        let catalogs = lazy_catalogs
+                            .get_or_insert_with(|| crate::game_art::load_game_catalogs(game, root));
+                        let mut cand_targets = resolve_hex_targets_for_name(catalogs, asset_name);
+                        let mut seen_rel: HashSet<String> =
+                            cand_targets.iter().map(|(_, r)| r.clone()).collect();
+                        for (grp, vec) in &discovered.by_addr_group {
+                            if discovered
+                                .protected_runtime_bundle_id
+                                .as_deref()
+                                .is_some_and(|rt| rt.eq_ignore_ascii_case(grp))
+                            {
+                                continue;
+                            }
+                            for (t_rel, _) in vec {
+                                if seen_rel.insert(t_rel.clone()) {
+                                    cand_targets.push((grp.clone(), t_rel.clone()));
+                                }
+                            }
+                        }
+
+                        let mut patched_any = false;
+                        let mut last_err: Option<String> = None;
+                        for (hx, t_rel) in cand_targets {
+                            let res = read_vanilla_bundle_baseline(root, &t_rel)
+                                .map_err(|e| e.message)
+                                .and_then(|van| {
+                                    let orig = crate::mod_inspector::extract_text_asset(&van, asset_name)?;
+                                    let next = crate::mod_inspector::apply_rml_proto_patch(&orig, patch_text)?;
+                                    crate::mod_inspector::patch_text_asset_in_bundle(&van, asset_name, &next)
+                                });
+                            match res {
+                                Ok(patched) => {
+                                    patched_any = true;
+                                    rml_patched_count += 1;
+                                    push_resolved_target_entry(
+                                        root, &discovered, &active_owners, &mut seen_targets,
+                                        &mut warnings, &mut conflicts, &mut matched_files, &mut staged_candidates,
+                                        &p_entry.source_entry,
+                                        &p_entry.bytes,
+                                        hx,
+                                        t_rel,
+                                        "rml_patched_bundle".into(),
+                                        false,
+                                        Some(patched),
+                                    )?;
+                                    break;
+                                }
+                                Err(e) => {
+                                    if !e.contains("未找到") {
+                                        last_err = Some(e);
+                                    }
+                                }
+                            }
+                        }
+                        if !patched_any {
+                            unmatched_files.push(DroppedModUnmatchedFile {
+                                source_entry: p_entry.source_entry.clone(),
+                                reason: last_err.unwrap_or_else(|| {
+                                    format!("未找到 Protobuf 配置 TextAsset '{asset_name}'")
+                                }),
+                                size: p_entry.bytes.len() as u64,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (raw_idx, raw) in raw_payloads.into_iter().enumerate() {
+        if rml_consumed_indices.contains(&raw_idx) {
+            continue;
+        }
         let entry_lower = raw.source_entry.to_ascii_lowercase();
         let path_obj = Path::new(&raw.source_entry);
         let file_name = path_obj.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -1616,6 +2153,48 @@ fn inspect_against_game_with_password(
                             });
                         }
                     }
+                } else if file_lower.ends_with(".bundle") && !summary.cab_names.is_empty() {
+                    let cab_index = lazy_cab_index.get_or_insert_with(|| {
+                        let mut idx: HashMap<String, Vec<(String, String)>> = HashMap::new();
+                        for (hx, vec) in &discovered.by_hex {
+                            if discovered
+                                .protected_runtime_bundle_id
+                                .as_deref()
+                                .is_some_and(|rt| rt.eq_ignore_ascii_case(hx))
+                            {
+                                continue;
+                            }
+                            for (t_rel, _) in vec {
+                                if let Ok(abs) = confined(root, t_rel) {
+                                    if let Ok((cabs, _)) = crate::mod_inspector::extract_bundle_cab_names_from_file(&abs) {
+                                        for cab in cabs {
+                                            idx.entry(cab.to_ascii_lowercase())
+                                                .or_default()
+                                                .push((hx.clone(), t_rel.clone()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        idx
+                    });
+                    for cab in &summary.cab_names {
+                        if let Some(matches) = cab_index.get(&cab.to_ascii_lowercase()) {
+                            for (hx, t_rel) in matches {
+                                cab_matched_count += 1;
+                                candidate_targets.push((
+                                    hx.clone(),
+                                    t_rel.clone(),
+                                    "cab_matched_bundle".into(),
+                                    false,
+                                    None,
+                                ));
+                            }
+                            if !candidate_targets.is_empty() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1632,59 +2211,29 @@ fn inspect_against_game_with_password(
         }
 
         for (bundle_id, target_rel, target_kind, is_catalog, custom_bytes) in candidate_targets {
-            if !seen_targets.insert(target_rel.clone()) {
-                warnings.push(format!(
-                    "检测到多差分或重复指向 {target_rel} 的文件，已优先保留首个并跳过：{}",
-                    raw.source_entry
-                ));
-                continue;
-            }
-            let (norm_target, target_abs) = validate_dropped_target_rel(root, &target_rel)?;
-            let final_bytes = custom_bytes.unwrap_or_else(|| raw.bytes.clone());
-            let payload_sha256 = sha256_hex(&final_bytes);
-            let payload_size = final_bytes.len() as u64;
-            let current_sha256 = if target_abs.is_file() {
-                compute_file_sha256(&target_abs)?
-            } else {
-                String::new()
-            };
-            let already_same = !current_sha256.is_empty() && current_sha256.eq_ignore_ascii_case(&payload_sha256);
-
-            let mut conflict_with = None;
-            if discovered
-                .protected_runtime_bundle_id
-                .as_deref()
-                .is_some_and(|rt_id| rt_id.eq_ignore_ascii_case(&bundle_id))
-            {
-                let msg = "星枢运行时核心容器（受保护，禁止第三方模组覆盖）".to_string();
-                conflicts.push(format!("{norm_target}：{msg}"));
-                conflict_with = Some(msg);
-            } else if let Some(owner) = active_owners.get(&target_key(&norm_target)) {
-                conflicts.push(format!("{norm_target} 已被 {owner} 占用，请先还原冲突模组"));
-                conflict_with = Some(owner.clone());
-            }
-
-            let risk_level = if is_catalog { "high" } else { "safe" };
-            matched_files.push(DroppedModTargetMatch {
-                source_entry: raw.source_entry.clone(),
-                target_rel: norm_target.clone(),
-                bundle_id: bundle_id.clone(),
-                target_kind: target_kind.clone(),
-                size: payload_size,
-                sha256: payload_sha256.clone(),
-                current_sha256,
-                already_same,
+            push_resolved_target_entry(
+                root, &discovered, &active_owners, &mut seen_targets,
+                &mut warnings, &mut conflicts, &mut matched_files, &mut staged_candidates,
+                &raw.source_entry,
+                &raw.bytes,
+                bundle_id,
+                target_rel,
+                target_kind,
                 is_catalog,
-                risk_level: risk_level.into(),
-                conflict_with,
-            });
-            staged_candidates.push(StagedCandidate {
-                target_rel: norm_target,
-                is_catalog,
-                bytes: final_bytes,
-                sha256: payload_sha256,
-            });
+                custom_bytes,
+            )?;
         }
+    }
+
+    if cab_matched_count > 0 {
+        warnings.push(format!(
+            "已通过 UnityFS CAB 指纹为 {cab_matched_count} 个重命名模型/动作 Bundle 自动匹配目标容器。"
+        ));
+    }
+    if rml_patched_count > 0 {
+        warnings.push(format!(
+            "已成功解析并应用 {rml_patched_count} 项 RML (mod.json) 原生容器补丁。"
+        ));
     }
 
     if adapted_modimg_count > 0 {
@@ -1742,7 +2291,7 @@ fn inspect_against_game_with_password(
         .filter(|f| {
             !f.is_catalog
                 && f.conflict_with.is_none()
-                && matches!(f.target_kind.as_str(), "modimg" | "modimg_adapted")
+                && matches!(f.target_kind.as_str(), "modimg" | "modimg_adapted" | "rml_modimg")
                 && f.target_rel.starts_with("modimg/")
                 && f.target_rel.to_ascii_lowercase().ends_with(".png")
         })
@@ -3293,6 +3842,169 @@ mod tests {
         assert_eq!(ok_inspect.matched_files[0].target_rel, "modimg/UT_Test.png");
     }
 
+    fn make_test_text_asset(name: &str, script: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&(script.len() as u32).to_le_bytes());
+        out.extend_from_slice(script);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out
+    }
+
+    #[test]
+    fn supports_cab_matched_renamed_bundles_and_rml_mod_json_security_and_patching() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir = tmp.path().join("Game");
+        let game = fixture_game(&game_dir);
+        let aa_dir = game_dir.join("AstralParty_CN_Data/StreamingAssets/aa/StandaloneWindows64");
+        let ab_ui_dir = game_dir.join(
+            "AstralParty_CN_Data/com.unity.addressables/AssetBundles/be8a6f7fa87357b26096b5a0ada25e0b/20015cbffae16dbc93e8c960492cf4a6",
+        );
+        fs::create_dir_all(&ab_ui_dir).unwrap();
+
+        // 1. Renamed multi-object bundle matched by CAB fingerprint
+        let van_model = build_min_unityfs_bundle(
+            "CAB-63e4dfc3bbacfa80283687580645fa43",
+            vec![142, 213],
+            vec![(1, 0, vec![0xAAu8; 16]), (2, 1, vec![0xBBu8; 20])],
+        );
+        fs::write(aa_dir.join(format!("{TEST_HEX_A}.bundle")), &van_model).unwrap();
+
+        let renamed_zip = tmp.path().join("renamed_cab_mod.zip");
+        let mod_model = build_min_unityfs_bundle(
+            "CAB-63e4dfc3bbacfa80283687580645fa43",
+            vec![142, 213],
+            vec![(1, 0, vec![0xCCu8; 16]), (2, 1, vec![0xDDu8; 24])],
+        );
+        write_zip(&renamed_zip, &[("Mod/奔跑吧绝地潜兵.bundle", &mod_model)]);
+        let (cab_res, _) = inspect_against_game(&game, &game.id, &game_dir, &renamed_zip).unwrap();
+        assert!(cab_res.compatible, "conflicts={:?} unmatched={:?}", cab_res.conflicts, cab_res.unmatched_files);
+        assert_eq!(cab_res.matched_files.len(), 1);
+        assert_eq!(cab_res.matched_files[0].target_kind, "cab_matched_bundle");
+        assert!(cab_res.matched_files[0].target_rel.ends_with(&format!("{TEST_HEX_A}.bundle")));
+
+        // 2. RML mod.json security boundary: allows ResourceModLoader.exe skip, rejects unknown evil.exe
+        let bad_rml_zip = tmp.path().join("bad_rml.zip");
+        let rml_manifest = br#"{"BaseDir":"data","Patch":[],"Redirect":[{"Name":"Login_atlas0","File":"Login_atlas0.png","WrapType":"image"}]}"#;
+        write_zip(&bad_rml_zip, &[
+            ("mod.json", rml_manifest),
+            ("ResourceModLoader.exe", b"MZ_RML"),
+            ("evil.exe", b"MZ_EVIL"),
+            ("data/Login_atlas0.png", b"\x89PNG\r\n\x1a\nimg"),
+        ]);
+        assert!(inspect_against_game(&game, &game.id, &game_dir, &bad_rml_zip).is_err());
+
+        // 3. Valid RML mod.json with ResourceModLoader.exe + Redirect image + Redirect TextAsset + .patch.bnk + .patch.proto
+        let cat_json_bytes = build_min_catalog_json(&[("Login_fui", &format!("{TEST_HEX_A}.bundle"))]);
+        let local_cat_dir = game_dir.join("AstralParty_CN_Data/com.unity.addressables");
+        fs::create_dir_all(&local_cat_dir).unwrap();
+        fs::write(local_cat_dir.join("catalog_3.3.0.json"), &cat_json_bytes).unwrap();
+        let cat_bundle = build_min_unityfs_bundle(
+            "CAB-cat",
+            vec![49],
+            vec![(1, 0, make_test_text_asset("catalog", &cat_json_bytes))],
+        );
+        fs::write(aa_dir.parent().unwrap().join("catalog.bundle"), &cat_bundle).unwrap();
+
+        let van_fui = build_min_unityfs_bundle(
+            "CAB-fui",
+            vec![49],
+            vec![(1, 0, make_test_text_asset("Login_fui", b"OLD_FUI"))],
+        );
+        fs::write(aa_dir.join(format!("{TEST_HEX_A}.bundle")), &van_fui).unwrap();
+
+        // Vanilla Wwise bank in TEST_HEX_B
+        let wem_id: u32 = 970399165;
+        let old_wem = b"RIFF_OLD";
+        let mut bnk = Vec::new();
+        bnk.extend_from_slice(b"BKHD");
+        bnk.extend_from_slice(&4u32.to_le_bytes());
+        bnk.extend_from_slice(&[1, 0, 0, 0]);
+        bnk.extend_from_slice(b"DIDX");
+        bnk.extend_from_slice(&12u32.to_le_bytes());
+        bnk.extend_from_slice(&wem_id.to_le_bytes());
+        bnk.extend_from_slice(&0u32.to_le_bytes());
+        bnk.extend_from_slice(&(old_wem.len() as u32).to_le_bytes());
+        bnk.extend_from_slice(b"DATA");
+        bnk.extend_from_slice(&(old_wem.len() as u32).to_le_bytes());
+        bnk.extend_from_slice(old_wem);
+        let mut mb_body = Vec::new();
+        mb_body.extend_from_slice(&(bnk.len() as u32).to_le_bytes());
+        mb_body.extend_from_slice(&bnk);
+        while mb_body.len() % 4 != 0 {
+            mb_body.push(0);
+        }
+        mb_body.extend_from_slice(b"END");
+        let van_bgm = build_min_unityfs_bundle(
+            "CAB-bgm",
+            vec![114],
+            vec![(1, 0, make_monobehaviour_obj([0x44u8; 28], "BGM_Login", &mb_body))],
+        );
+        fs::write(aa_dir.join(format!("{TEST_HEX_B}.bundle")), &van_bgm).unwrap();
+
+        // Minimal protobuf UI config in addressables __data: tag (1<<3)|2 = 0x0a, len=2, tag (10<<3)|0 = 0x50, val=2
+        let ui_proto_orig = [0x0a, 0x02, 0x50, 0x02];
+        let van_ui = build_min_unityfs_bundle(
+            "CAB-ui",
+            vec![49],
+            vec![(1, 0, make_test_text_asset("UI", &ui_proto_orig))],
+        );
+        fs::write(ab_ui_dir.join("__data"), &van_ui).unwrap();
+
+        let ok_rml_zip = tmp.path().join("qianxing_rml.zip");
+        let rml_full = br#"{
+            "BaseDir": "data",
+            "Patch": ["LOGIN@463eb12cd6182d7fcf280af86f86675a.bundle@d@BGM_Login.patch.bnk", "UI@f1ba114203375614da2f270862b49985.bundle@43.patch.proto"],
+            "Redirect": [
+                {"Name": "Login_fui", "File": "Login_fui.bytes", "WrapType": "text"},
+                {"Name": "Login_atlas0", "File": "Login_atlas0.png", "WrapType": "image"}
+            ]
+        }"#;
+        write_zip(&ok_rml_zip, &[
+            ("mod.json", rml_full),
+            ("ResourceModLoader.exe", b"MZ_SAFE_SKIP"),
+            ("data/Login_fui.bytes", b"FGUI_PATCHED"),
+            ("data/Login_atlas0.png", b"\x89PNG\r\n\x1a\npatched"),
+            ("data/LOGIN@463eb12cd6182d7fcf280af86f86675a.bundle@d@BGM_Login.patch.bnk", b"RIFF_NEW_WEM_999"),
+            ("data/UI@f1ba114203375614da2f270862b49985.bundle@43.patch.proto", b"1[0].10=0x904e\n"),
+        ]);
+
+        let (rml_inspect, _) = inspect_against_game(&game, &game.id, &game_dir, &ok_rml_zip).unwrap();
+        assert!(rml_inspect.compatible, "conflicts={:?} unmatched={:?}", rml_inspect.conflicts, rml_inspect.unmatched_files);
+        assert_eq!(rml_inspect.matched_files.len(), 4, "matched={:?} unmatched={:?} warnings={:?}", rml_inspect.matched_files, rml_inspect.unmatched_files, rml_inspect.warnings);
+        assert_eq!(rml_inspect.android_exportable_count, 1);
+
+        let inst = install_dropped_from_path(&game, &game_dir, &ok_rml_zip, false, None, None).unwrap();
+        assert_eq!(
+            crate::mod_inspector::extract_text_asset(
+                &fs::read(aa_dir.join(format!("{TEST_HEX_A}.bundle"))).unwrap(),
+                "Login_fui",
+            )
+            .unwrap(),
+            b"FGUI_PATCHED"
+        );
+        let ui_after = crate::mod_inspector::extract_text_asset(
+            &fs::read(ab_ui_dir.join("__data")).unwrap(),
+            "UI",
+        )
+        .unwrap();
+        assert_ne!(ui_after, ui_proto_orig);
+        assert!(ui_after.ends_with(&[0x50, 0xce, 0xa0, 0x02])); // 0x904e varint!
+        assert!(game_dir.join("modimg/Login_atlas0.png").is_file());
+
+        restore_dropped_by_id(&game, &game_dir, &inst.mod_id, None).unwrap();
+        assert_eq!(
+            fs::read(ab_ui_dir.join("__data")).unwrap(),
+            van_ui
+        );
+    }
+
     #[test]
     #[ignore = "requires local real archives and Steam 8vJXn6CN read-only verification"]
     fn inspects_real_mod_packs_read_only_against_330() {
@@ -3313,6 +4025,7 @@ mod tests {
             updated_at: Utc::now(),
         };
         let mod_root = PathBuf::from(r"E:\工作流\星引擎插件\星引擎MOD包制作\星引擎mod");
+        let out_pc_root = PathBuf::from(r"E:\工作流\星引擎插件\星引擎MOD包制作\星引擎mod_3.3.0适配版\PC_3.3.0");
 
         let p1 = mod_root.join("透明睡衣赛克斯（静态）.zip");
         let (r1, _) = inspect_against_game(&game, &game.id, &game_dir, &p1).unwrap();
@@ -3331,5 +4044,26 @@ mod tests {
         assert!(!r3.compatible);
         assert!(r3.conflicts.iter().any(|c| c.contains("AstralParty.Runtime.dll")));
         assert!(r3.unmatched_files.iter().any(|u| u.reason.contains("APENC01")));
+
+        // Raw Helldivers zip: all 12 assets matched (9 adapted modimg + 1 video + 2 CAB-matched models)
+        let p4 = mod_root.join("绝地潜兵 替换 摩西原皮.zip");
+        let (r4, _) = inspect_against_game(&game, &game.id, &game_dir, &p4).unwrap();
+        assert!(r4.compatible, "r4 conflicts={:?} unmatched={:?}", r4.conflicts, r4.unmatched_files);
+        assert_eq!(r4.matched_files.len(), 12, "raw Helldivers should match 12/12: {:?}", r4.matched_files);
+
+        // Raw Qianxing Login RML zip: safely skips ResourceModLoader.exe & matches 5/5 RML targets (Login_fui, Login_atlas0, both BGM_Login banks, UI proto)
+        let p5 = mod_root.join("千星万趴（登录页替换）.zip");
+        let (r5, _) = inspect_against_game(&game, &game.id, &game_dir, &p5).unwrap();
+        assert!(r5.compatible, "r5 conflicts={:?} unmatched={:?}", r5.conflicts, r5.unmatched_files);
+        assert_eq!(r5.matched_files.len(), 5, "raw Qianxing RML should match 5/5: {:?}", r5.matched_files);
+
+        // Converted 3.3.0 native PC ZIPs: 12/12 & 5/5 cleanly matched
+        let c1 = out_pc_root.join("绝地潜兵_替换_摩西原皮_3.3.0.zip");
+        let (rc1, _) = inspect_against_game(&game, &game.id, &game_dir, &c1).unwrap();
+        assert!(rc1.compatible && rc1.matched_files.len() == 12);
+
+        let c2 = out_pc_root.join("千星万趴_登录页替换_3.3.0.zip");
+        let (rc2, _) = inspect_against_game(&game, &game.id, &game_dir, &c2).unwrap();
+        assert!(rc2.compatible && rc2.matched_files.len() == 5);
     }
 }

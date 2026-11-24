@@ -997,7 +997,7 @@ export function LauncherMods() {
       setNotice({
         kind: 'success',
         text: zh
-          ? '「星枢官方插件 Mod」已安装完成。现在可自由启用下方 19 项星枢功能或使用游戏内开房。'
+          ? '「星枢官方插件 Mod」已安装完成。现在可自由启用下方 21 项星枢功能或使用游戏内开房。'
           : 'XingShu Official Plugin Mod installed cleanly.',
       });
       setRevision((v) => v + 1);
@@ -1085,7 +1085,7 @@ export function LauncherMods() {
       downloadedBytes: 0,
       totalBytes: officialModules.length,
       percent: 4,
-      detail: zh ? '准备安装核心插件与全部 19 项官方模组…' : 'Preparing core plugin and all 19 official modules…',
+      detail: zh ? '准备安装核心插件与全部 21 项官方模组…' : 'Preparing core plugin and all 21 official modules…',
     });
     setError('');
     setNotice({ kind: 'info', text: zh ? '正在一键安装全部官方模组…' : 'Installing all official modules…' });
@@ -1580,7 +1580,7 @@ export function LauncherMods() {
                           ? `当前游戏目录仍安装着旧版星枢插件（${disk.version?.replace(/^1\\.0\\.0-game-ui-/, '') || '旧版'}），尚未还原为官方原版。可点击右侧「更新插件至新版」升级修复，或点击「卸载并还原原版」恢复纯净客户端。`
                           : `An older XingShu plugin (${disk.version || 'older'}) is still installed in this game folder. Update to the latest version or uninstall & restore to vanilla.`
                         : zh
-                          ? '星枢默认纯净启动官方游戏。仅当你需要启用下方 19 项局内功能或使用游戏内开房时，才需要在此安装此核心插件；随时可一键卸载还原回官方原版。'
+                          ? '星枢默认纯净启动官方游戏。仅当你需要启用下方 21 项局内功能或使用游戏内开房时，才需要在此安装此核心插件；随时可一键卸载还原回官方原版。'
                           : 'Hub launches the vanilla game cleanly by default. Install this optional core plugin to enable in-game modules and live room control, or restore to vanilla anytime.'}
                     </p>
                   </div>
@@ -1723,7 +1723,7 @@ export function LauncherMods() {
               <div className="pcl-official-batch-info">
                 <div className="pcl-official-batch-title">
                   <Blocks size={16} />
-                  <strong>{zh ? '星枢官方功能模组（19 项独立模块）' : 'XingShu Official Feature Modules (19)'}</strong>
+                  <strong>{zh ? '星枢官方功能模组（21 项独立模块）' : 'XingShu Official Feature Modules (21)'}</strong>
                   <span className="pcl-count-chip pcl-tabular">
                     {zh
                       ? `已开启 ${enabledOfficialCount} / ${officialModules.length} 项`
@@ -1879,7 +1879,7 @@ export function LauncherMods() {
                   <strong>{zh ? '当前筛选下暂无已安装 Mod' : 'No installed mods match'}</strong>
                   <p>
                     {zh
-                      ? '可点击上方「下载新 Mod」启用 19 项官方功能模块，或从社区工坊一键安装皮肤与卡图包。'
+                      ? '可点击上方「下载新 Mod」启用 21 项官方功能模块，或从社区工坊一键安装皮肤与卡图包。'
                       : 'Explore official feature modules and community workshop packs to install your first mod.'}
                   </p>
                   <button

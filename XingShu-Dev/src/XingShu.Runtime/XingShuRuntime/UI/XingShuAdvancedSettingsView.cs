@@ -8,33 +8,12 @@ namespace XingShuRuntime.UI
 {
     /// <summary>
     /// 功能中心 - 高级设置 (Advanced Settings) Modern UI 页面 (Phase 2D-7A-R1)
-    /// 纯 UGUI View 表现层组件：整合悬浮交互、数据挂件外观及全局显示适配。
-    /// 严格遵循 12 项迁移范围契约，无多余未审计动作（无“恢复默认外观”、无“重置悬浮球位置”、无“一键重置所有配置”等）。
+    /// 纯 UGUI View 表现层组件：整合悬浮交互与全局显示适配。
     /// 所有配置读写严格通过 XingShuConfigService 完成，零直接 PlayerPrefs 操作。
     /// </summary>
     internal sealed class XingShuAdvancedSettingsView
     {
         private readonly GameObject _root;
-
-        // 平台适配键名选择器 (与 StatsWidgetView 逻辑完全对齐，Windows 桌面环境下以 PC 为权威真相源)
-        private static string StatsBgKey => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidBackground : XingShuConfigKeys.StatsWidgetPcBackground;
-        private static string StatsTextKey => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidText : XingShuConfigKeys.StatsWidgetPcText;
-        private static string StatsScaleKey => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidScale : XingShuConfigKeys.StatsWidgetPcScale;
-        private static float StatsScaleDefault => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidScaleDefault : XingShuConfigKeys.StatsWidgetScaleDefault;
-        private static string StatsLockKey => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidLock : XingShuConfigKeys.StatsWidgetPcLock;
-        private static string StatsXKey => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidX : XingShuConfigKeys.StatsWidgetPcX;
-        private static string StatsYKey => XingShuMobileUIHelper.IsMobile ? XingShuConfigKeys.StatsWidgetAndroidY : XingShuConfigKeys.StatsWidgetPcY;
-
-        // Card A: 对局数据挂件设置 (Battle Stats Overlay)
-        private Toggle _observeToggle;
-        private Toggle _widgetLockToggle;
-        private Slider _widgetBgSlider;
-        private Text _widgetBgValueText;
-        private Slider _widgetTextSlider;
-        private Text _widgetTextValueText;
-        private Slider _widgetScaleSlider;
-        private Text _widgetScaleValueText;
-        private XingShuStatsMetricsPanel _metricsPanel;
 
         // Card B: 悬浮交互与辅助球 (Assist Ball & Menu)
         private Toggle _autoHideToggle;
@@ -61,11 +40,6 @@ namespace XingShuRuntime.UI
         // 内部更新防重入与有界轮询缓存
         private bool _suppressCallbacks;
         private float _nextSyncTime;
-        private bool? _lastObservedObserve = null;
-        private bool? _lastObservedLock = null;
-        private float _lastObservedBg = -1f;
-        private float _lastObservedTextAlpha = -1f;
-        private float _lastObservedScale = -1f;
         private bool? _lastObservedAutoHide = null;
         private string _lastObservedHotkey;
         private float _lastObservedSize = -1f;
@@ -104,16 +78,13 @@ namespace XingShuRuntime.UI
                 // 0. 特色功能卡片 (Feature Header Card: 76px)
                 BuildHeaderCard(contentArea);
 
-                // 1. 卡片 A: 对局数据挂件设置 (Card A: 356px)
-                BuildStatsWidgetCard(contentArea);
-
-                // 2. 卡片 B: 悬浮交互与辅助球设置 (Card B: 320px)
+                // 1. 卡片 B: 悬浮交互与辅助球设置 (Card B: 320px)
                 BuildAssistBallCard(contentArea);
 
-                // 3. 卡片 C: 全局显示适配 (Card C: 155px)
+                // 2. 卡片 C: 全局显示适配
                 BuildDisplayScaleCard(contentArea);
 
-                // 4. 卡片 D: 恢复默认操作 (Card D: 76px)
+                // 3. 卡片 D: 恢复默认操作 (Card D: 76px)
                 BuildResetDefaultsCard(contentArea);
 
                 // 初始化控件数值
@@ -164,150 +135,13 @@ namespace XingShuRuntime.UI
             titleRt.anchoredPosition = new Vector2(24f, 12f);
             titleRt.sizeDelta = new Vector2(300f, 26f);
 
-            Text descText = XingShuUIFactory.CreateText(headerGo, "Description", "对局统计挂件参数 · 悬浮交互与辅助球样式 · 全局渲染显示适配", 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            Text descText = XingShuUIFactory.CreateText(headerGo, "Description", "悬浮交互与辅助球样式 · 全局渲染显示适配", 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
             RectTransform descRt = descText.rectTransform;
             descRt.anchorMin = new Vector2(0f, 0.5f);
             descRt.anchorMax = new Vector2(0f, 0.5f);
             descRt.pivot = new Vector2(0f, 0.5f);
             descRt.anchoredPosition = new Vector2(24f, -14f);
             descRt.sizeDelta = new Vector2(500f, 22f);
-        }
-
-        private void BuildStatsWidgetCard(GameObject parent)
-        {
-            GameObject cardGo = CreateCardContainer(parent, "Card_StatsWidgetSettings", 528f);
-
-            Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "对局数据挂件设置", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform ctRt = cardTitle.rectTransform;
-            ctRt.anchorMin = new Vector2(0f, 1f);
-            ctRt.anchorMax = new Vector2(0f, 1f);
-            ctRt.pivot = new Vector2(0f, 1f);
-            ctRt.anchoredPosition = new Vector2(24f, -14f);
-            ctRt.sizeDelta = new Vector2(240f, 22f);
-
-            Text subtitle = XingShuUIFactory.CreateText(cardGo, "Subtitle", "轻量对局统计悬浮挂件独立采集、透明度、缩放与停靠锁定", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            RectTransform stRt = subtitle.rectTransform;
-            stRt.anchorMin = new Vector2(0f, 1f);
-            stRt.anchorMax = new Vector2(0f, 1f);
-            stRt.pivot = new Vector2(0f, 1f);
-            stRt.anchoredPosition = new Vector2(24f, -38f);
-            stRt.sizeDelta = new Vector2(460f, 18f);
-
-            // Row 1: 开启数据采集 ToggleRow (左侧标签，右侧开关)
-            bool initObserve = XingShuConfigService.GetBool(XingShuConfigKeys.MatchObserveEnabled, XingShuConfigKeys.MatchObserveEnabledDefault);
-            _observeToggle = XingShuUIFactory.CreateToggleRow(cardGo, "ObserveToggle", "开启数据采集", initObserve, OnObserveToggleChanged);
-            RectTransform otRt = _observeToggle.GetComponent<RectTransform>();
-            otRt.anchoredPosition = new Vector2(0f, -64f);
-            otRt.sizeDelta = new Vector2(0f, 32f);
-
-            // Row 2: 锁定挂件位置 ToggleRow (左侧标签，右侧开关)
-            bool initLock = XingShuConfigService.GetBool(StatsLockKey, XingShuConfigKeys.StatsWidgetLockDefault);
-            _widgetLockToggle = XingShuUIFactory.CreateToggleRow(cardGo, "LockToggle", "锁定挂件位置", initLock, OnWidgetLockToggleChanged);
-            RectTransform ltRt = _widgetLockToggle.GetComponent<RectTransform>();
-            ltRt.anchoredPosition = new Vector2(0f, -100f);
-            ltRt.sizeDelta = new Vector2(0f, 32f);
-
-            // Row 3: 背景不透明度 Slider (标签居左，数值居右，全宽滑动条居下)
-            Text bgLabel = XingShuUIFactory.CreateText(cardGo, "BgLabel", "背景不透明度", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform bglRt = bgLabel.rectTransform;
-            bglRt.anchorMin = new Vector2(0f, 1f);
-            bglRt.anchorMax = new Vector2(0f, 1f);
-            bglRt.pivot = new Vector2(0f, 1f);
-            bglRt.anchoredPosition = new Vector2(24f, -138f);
-            bglRt.sizeDelta = new Vector2(160f, 20f);
-
-            float initBg = XingShuConfigService.GetFloat(StatsBgKey, XingShuConfigKeys.StatsWidgetBackgroundDefault);
-            _widgetBgValueText = XingShuUIFactory.CreateText(cardGo, "BgValue", $"{Mathf.RoundToInt(initBg * 100f)}%", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            RectTransform bgvRt = _widgetBgValueText.rectTransform;
-            bgvRt.anchorMin = new Vector2(1f, 1f);
-            bgvRt.anchorMax = new Vector2(1f, 1f);
-            bgvRt.pivot = new Vector2(1f, 1f);
-            bgvRt.anchoredPosition = new Vector2(-24f, -138f);
-            bgvRt.sizeDelta = new Vector2(80f, 20f);
-
-            _widgetBgSlider = XingShuUIFactory.CreateSlider(cardGo, "BgSlider", 0.15f, 1.0f, initBg, OnWidgetBgSliderChanged);
-            RectTransform bgsRt = _widgetBgSlider.GetComponent<RectTransform>();
-            bgsRt.anchorMin = new Vector2(0f, 1f);
-            bgsRt.anchorMax = new Vector2(1f, 1f);
-            bgsRt.pivot = new Vector2(0.5f, 1f);
-            bgsRt.anchoredPosition = new Vector2(0f, -160f);
-            bgsRt.sizeDelta = new Vector2(-48f, 24f);
-
-            // Row 4: 文字不透明度 Slider
-            Text textLabel = XingShuUIFactory.CreateText(cardGo, "TextLabel", "文字不透明度", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform tlRt = textLabel.rectTransform;
-            tlRt.anchorMin = new Vector2(0f, 1f);
-            tlRt.anchorMax = new Vector2(0f, 1f);
-            tlRt.pivot = new Vector2(0f, 1f);
-            tlRt.anchoredPosition = new Vector2(24f, -190f);
-            tlRt.sizeDelta = new Vector2(160f, 20f);
-
-            float initText = XingShuConfigService.GetFloat(StatsTextKey, XingShuConfigKeys.StatsWidgetTextAlphaDefault);
-            _widgetTextValueText = XingShuUIFactory.CreateText(cardGo, "TextValue", $"{Mathf.RoundToInt(initText * 100f)}%", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            RectTransform tvRt = _widgetTextValueText.rectTransform;
-            tvRt.anchorMin = new Vector2(1f, 1f);
-            tvRt.anchorMax = new Vector2(1f, 1f);
-            tvRt.pivot = new Vector2(1f, 1f);
-            tvRt.anchoredPosition = new Vector2(-24f, -190f);
-            tvRt.sizeDelta = new Vector2(80f, 20f);
-
-            _widgetTextSlider = XingShuUIFactory.CreateSlider(cardGo, "TextSlider", 0.55f, 1.0f, initText, OnWidgetTextSliderChanged);
-            RectTransform tsRt = _widgetTextSlider.GetComponent<RectTransform>();
-            tsRt.anchorMin = new Vector2(0f, 1f);
-            tsRt.anchorMax = new Vector2(1f, 1f);
-            tsRt.pivot = new Vector2(0.5f, 1f);
-            tsRt.anchoredPosition = new Vector2(0f, -212f);
-            tsRt.sizeDelta = new Vector2(-48f, 24f);
-
-            // Row 5: 挂件缩放比例 Slider
-            Text scaleLabel = XingShuUIFactory.CreateText(cardGo, "ScaleLabel", "挂件缩放比例", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform sclRt = scaleLabel.rectTransform;
-            sclRt.anchorMin = new Vector2(0f, 1f);
-            sclRt.anchorMax = new Vector2(0f, 1f);
-            sclRt.pivot = new Vector2(0f, 1f);
-            sclRt.anchoredPosition = new Vector2(24f, -242f);
-            sclRt.sizeDelta = new Vector2(160f, 20f);
-
-            float initScale = XingShuConfigService.GetFloat(StatsScaleKey, StatsScaleDefault);
-            _widgetScaleValueText = XingShuUIFactory.CreateText(cardGo, "ScaleValue", $"{Mathf.RoundToInt(initScale * 100f)}%", 13, XingShuUITheme.CyanAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            RectTransform scvRt = _widgetScaleValueText.rectTransform;
-            scvRt.anchorMin = new Vector2(1f, 1f);
-            scvRt.anchorMax = new Vector2(1f, 1f);
-            scvRt.pivot = new Vector2(1f, 1f);
-            scvRt.anchoredPosition = new Vector2(-24f, -242f);
-            scvRt.sizeDelta = new Vector2(80f, 20f);
-
-            _widgetScaleSlider = XingShuUIFactory.CreateSlider(cardGo, "ScaleSlider", 0.60f, 2.00f, initScale, OnWidgetScaleSliderChanged);
-            RectTransform scsRt = _widgetScaleSlider.GetComponent<RectTransform>();
-            scsRt.anchorMin = new Vector2(0f, 1f);
-            scsRt.anchorMax = new Vector2(1f, 1f);
-            scsRt.pivot = new Vector2(0.5f, 1f);
-            scsRt.anchoredPosition = new Vector2(0f, -264f);
-            scsRt.sizeDelta = new Vector2(-48f, 24f);
-
-            // Row 6: 重置挂件位置 Button (右对齐)
-            Sprite btnSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
-            Button resetPosBtn = XingShuUIFactory.CreateButton(cardGo, "ResetPosBtn", "重置挂件位置",
-                btnSprite,
-                XingShuUIAssetService.IsFallbackSprite(btnSprite) ? XingShuUITheme.ButtonSecondaryBase : Color.white,
-                XingShuUITheme.PrimaryText,
-                OnResetWidgetPositionClicked, 13);
-            RectTransform rpbRt = resetPosBtn.GetComponent<RectTransform>();
-            rpbRt.anchorMin = new Vector2(1f, 1f);
-            rpbRt.anchorMax = new Vector2(1f, 1f);
-            rpbRt.pivot = new Vector2(1f, 1f);
-            rpbRt.anchoredPosition = new Vector2(-24f, -298f);
-            rpbRt.sizeDelta = new Vector2(130f, 30f);
-
-            _metricsPanel = new XingShuStatsMetricsPanel(cardGo, -340f);
-
-            Text noteText = XingShuUIFactory.CreateText(cardGo, "Note", "位置重置为屏幕右上默认停靠点 (X: 1.0, Y: 0.12)；缩放范围为 0.60x ~ 2.00x", 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            RectTransform ntRt = noteText.rectTransform;
-            ntRt.anchorMin = new Vector2(0f, 0f);
-            ntRt.anchorMax = new Vector2(1f, 0f);
-            ntRt.pivot = new Vector2(0f, 0f);
-            ntRt.anchoredPosition = new Vector2(24f, 8f);
-            ntRt.sizeDelta = new Vector2(-48f, 18f);
         }
 
         private void BuildAssistBallCard(GameObject parent)
@@ -580,47 +414,6 @@ namespace XingShuRuntime.UI
             _suppressCallbacks = true;
             try
             {
-                // Card A
-                bool obs = XingShuConfigService.GetBool(XingShuConfigKeys.MatchObserveEnabled, XingShuConfigKeys.MatchObserveEnabledDefault);
-                if (!_lastObservedObserve.HasValue || _lastObservedObserve.Value != obs)
-                {
-                    _lastObservedObserve = obs;
-                    if (_observeToggle != null) XingShuUIFactory.SetToggleRowStateWithoutNotify(_observeToggle, obs);
-                }
-
-                bool lockPos = XingShuConfigService.GetBool(StatsLockKey, XingShuConfigKeys.StatsWidgetLockDefault);
-                if (!_lastObservedLock.HasValue || _lastObservedLock.Value != lockPos)
-                {
-                    _lastObservedLock = lockPos;
-                    if (_widgetLockToggle != null) XingShuUIFactory.SetToggleRowStateWithoutNotify(_widgetLockToggle, lockPos);
-                }
-
-                float bg = XingShuConfigService.GetFloat(StatsBgKey, XingShuConfigKeys.StatsWidgetBackgroundDefault);
-                if (!Mathf.Approximately(_lastObservedBg, bg))
-                {
-                    _lastObservedBg = bg;
-                    if (_widgetBgSlider != null) _widgetBgSlider.SetValueWithoutNotify(bg);
-                    if (_widgetBgValueText != null) _widgetBgValueText.text = $"{Mathf.RoundToInt(bg * 100f)}%";
-                }
-
-                float textAlpha = XingShuConfigService.GetFloat(StatsTextKey, XingShuConfigKeys.StatsWidgetTextAlphaDefault);
-                if (!Mathf.Approximately(_lastObservedTextAlpha, textAlpha))
-                {
-                    _lastObservedTextAlpha = textAlpha;
-                    if (_widgetTextSlider != null) _widgetTextSlider.SetValueWithoutNotify(textAlpha);
-                    if (_widgetTextValueText != null) _widgetTextValueText.text = $"{Mathf.RoundToInt(textAlpha * 100f)}%";
-                }
-
-                float scale = XingShuConfigService.GetFloat(StatsScaleKey, StatsScaleDefault);
-                if (!Mathf.Approximately(_lastObservedScale, scale))
-                {
-                    _lastObservedScale = scale;
-                    if (_widgetScaleSlider != null) _widgetScaleSlider.SetValueWithoutNotify(scale);
-                    if (_widgetScaleValueText != null) _widgetScaleValueText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-                }
-
-                _metricsPanel?.SyncFromConfig();
-
                 // Card B
                 bool autoHide = XingShuConfigService.GetBool(XingShuConfigKeys.AssistAutoHide, XingShuConfigKeys.AssistAutoHideDefault);
                 if (!_lastObservedAutoHide.HasValue || _lastObservedAutoHide.Value != autoHide)
@@ -684,68 +477,6 @@ namespace XingShuRuntime.UI
             {
                 _suppressCallbacks = false;
             }
-        }
-
-        // ==========================================
-        // Card A 回调
-        // ==========================================
-        private void OnObserveToggleChanged(bool val)
-        {
-            if (_suppressCallbacks) return;
-            // 单一真相源归属：BattleStatsOverlay 存在时由其自身 SetObserving 处理重置与持久化；不存在时走 ConfigService 回退
-            if (BattleStatsOverlay.Instance != null)
-            {
-                BattleStatsOverlay.IsObserving = val;
-            }
-            else
-            {
-                XingShuConfigService.SetBool(XingShuConfigKeys.MatchObserveEnabled, val);
-                XingShuConfigService.Save();
-            }
-        }
-
-        private void OnWidgetLockToggleChanged(bool val)
-        {
-            if (_suppressCallbacks) return;
-            XingShuConfigService.SetBool(StatsLockKey, val);
-            XingShuConfigService.Save();
-            BattleStatsOverlay.RefreshWidgetPreferences();
-        }
-
-        private void OnWidgetBgSliderChanged(float val)
-        {
-            if (_widgetBgValueText != null) _widgetBgValueText.text = $"{Mathf.RoundToInt(val * 100f)}%";
-            if (_suppressCallbacks) return;
-            XingShuConfigService.SetFloat(StatsBgKey, val);
-            XingShuConfigService.Save();
-            BattleStatsOverlay.RefreshWidgetPreferences();
-        }
-
-        private void OnWidgetTextSliderChanged(float val)
-        {
-            if (_widgetTextValueText != null) _widgetTextValueText.text = $"{Mathf.RoundToInt(val * 100f)}%";
-            if (_suppressCallbacks) return;
-            XingShuConfigService.SetFloat(StatsTextKey, val);
-            XingShuConfigService.Save();
-            BattleStatsOverlay.RefreshWidgetPreferences();
-        }
-
-        private void OnWidgetScaleSliderChanged(float val)
-        {
-            if (_widgetScaleValueText != null) _widgetScaleValueText.text = $"{Mathf.RoundToInt(val * 100f)}%";
-            if (_suppressCallbacks) return;
-            XingShuConfigService.SetFloat(StatsScaleKey, val);
-            XingShuConfigService.Save();
-            BattleStatsOverlay.RefreshWidgetPreferences();
-        }
-
-        private void OnResetWidgetPositionClicked()
-        {
-            // 使用单一真相源预设常量 (StatsWidgetXDefault: 1.0f, StatsWidgetYDefault: 0.12f)
-            XingShuConfigService.SetFloat(StatsXKey, XingShuConfigKeys.StatsWidgetXDefault);
-            XingShuConfigService.SetFloat(StatsYKey, XingShuConfigKeys.StatsWidgetYDefault);
-            XingShuConfigService.Save();
-            BattleStatsOverlay.RefreshWidgetPreferences();
         }
 
         // ==========================================
@@ -860,28 +591,6 @@ namespace XingShuRuntime.UI
 
         private void PerformResetDefaults()
         {
-            // A. 开启数据采集
-            XingShuConfigService.SetBool(XingShuConfigKeys.MatchObserveEnabled, XingShuConfigKeys.MatchObserveEnabledDefault);
-
-            // B. 统计挂件背景不透明度
-            XingShuConfigService.SetFloat(StatsBgKey, XingShuConfigKeys.StatsWidgetBackgroundDefault);
-
-            // C. 统计挂件文字不透明度
-            XingShuConfigService.SetFloat(StatsTextKey, XingShuConfigKeys.StatsWidgetTextAlphaDefault);
-
-            // D. 统计挂件缩放
-            XingShuConfigService.SetFloat(StatsScaleKey, StatsScaleDefault);
-
-            // E. 统计挂件锁定
-            XingShuConfigService.SetBool(StatsLockKey, XingShuConfigKeys.StatsWidgetLockDefault);
-
-            // F. 统计挂件位置 X/Y
-            XingShuConfigService.SetFloat(StatsXKey, XingShuConfigKeys.StatsWidgetXDefault);
-            XingShuConfigService.SetFloat(StatsYKey, XingShuConfigKeys.StatsWidgetYDefault);
-
-            // F2. 统计挂件自定义显示指标
-            XingShuConfigService.SetInt(XingShuConfigKeys.StatsWidgetMetrics, XingShuConfigKeys.StatsWidgetMetricsDefault);
-
             // G. Assist AutoHide
             XingShuConfigService.SetBool(XingShuConfigKeys.AssistAutoHide, XingShuConfigKeys.AssistAutoHideDefault);
 
@@ -915,8 +624,6 @@ namespace XingShuRuntime.UI
             XingShuConfigService.Save();
 
             // Immediately apply to active runtimes
-            BattleStatsOverlay.IsObserving = XingShuConfigKeys.MatchObserveEnabledDefault;
-            BattleStatsOverlay.RefreshWidgetPreferences();
             AssistBallGUI.RefreshFromConfig();
             XingShuUICenter.ApplyUserScale(defUserScale);
 

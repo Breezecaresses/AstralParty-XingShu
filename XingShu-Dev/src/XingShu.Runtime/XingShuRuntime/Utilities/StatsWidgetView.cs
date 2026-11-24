@@ -134,7 +134,7 @@ namespace XingShuRuntime.Utilities
             _drag.BindEvents();
 
             _btnCollapse = CreateHeaderPillButton(_heading, "−", 26f, ToggleCollapse);
-            _btnSettings = CreateHeaderPillButton(_heading, "设置", 44f, () => XingShuUICenter.OpenAdvancedSettings("BattleStats"));
+            _btnSettings = CreateHeaderPillButton(_heading, "设置", 44f, XingShuUICenter.OpenBattleStatsPage);
             _btnClose = CreateHeaderPillButton(_heading, "×", 26f, () => { Show(false); _hide(); });
 
             _body = XingShuUIFactory.CreateUIObject("Body", _widget.gameObject);

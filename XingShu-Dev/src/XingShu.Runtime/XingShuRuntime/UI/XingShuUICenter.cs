@@ -1121,7 +1121,9 @@ namespace XingShuRuntime.UI
                     || LauncherModules.CanLoad("DefensePointHint")
                     || LauncherModules.CanLoad("MonsterTargetRuntime")
                     || LauncherModules.CanLoad("MonsterCooldownRuntime")
-                    || LauncherModules.CanLoad("BattleCardPointHint");
+                    || LauncherModules.CanLoad("BattleCardPointHint")
+                    || LauncherModules.CanLoad("MegathSkillDamageHint")
+                    || LauncherModules.CanLoad("PlayerCombatStatusHud");
                 case 3: return XingShuMobileUIHelper.IsMobile && LauncherModules.CanLoad("StaticPortraitGUI");
                 case 4: return LauncherModules.CanLoad("ReplayPlayerGUI");
                 case 5: return LauncherModules.CanLoad("MapCameraGUI");

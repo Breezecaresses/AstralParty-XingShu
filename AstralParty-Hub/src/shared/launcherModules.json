@@ -17,5 +17,7 @@
   {"id":"settlement-capture","name":"结算截图","description":"专用的结算截图入口","types":["SettlementScreenshot"]},
   {"id":"select-map-name","name":"选人地图提示","description":"在选人界面右侧显示当前地图名称","types":["SelectRoleMapNameHint"]},
   {"id":"battle-card-points","name":"战斗卡牌点数","description":"战斗卡牌打出后显示点数与加成明细","types":["BattleCardPointHint"]},
-  {"id":"custom-lobby-bg","name":"自定义大厅背景","description":"在游戏内免改原包替换大厅视频/静态图/USM 背景并兼容隐藏 UI 与拖动缩放","types":["CustomLobbyBackground"]}
+  {"id":"custom-lobby-bg","name":"自定义大厅背景","description":"在游戏内免改原包替换大厅视频/静态图/USM 背景并兼容隐藏 UI 与拖动缩放","types":["CustomLobbyBackground"]},
+  {"id":"megath-damage","name":"梅加斯伤害计算","description":"游玩梅加斯时显示主动技能理论最大伤害面板（可拖动调节位置）","types":["MegathSkillDamageHint"]},
+  {"id":"player-combat-hud","name":"角色状态头顶显示","description":"在棋盘玩家角色上方显示技能冷却、血量与基础攻防（可调节位置）","types":["PlayerCombatStatusHud"]}
 ]

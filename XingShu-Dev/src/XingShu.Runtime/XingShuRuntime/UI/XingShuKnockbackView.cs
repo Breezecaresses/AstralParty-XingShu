@@ -31,6 +31,25 @@ namespace XingShuRuntime.UI
         private Text _battleCardScaleText;
         private Text _battleCardMarginXText;
         private Text _battleCardYText;
+        private Toggle _megathEnabledToggle;
+        private Toggle _megathLockToggle;
+        private Slider _megathScaleSlider;
+        private Slider _megathXSlider;
+        private Slider _megathYSlider;
+        private Text _megathScaleText;
+        private Text _megathXText;
+        private Text _megathYText;
+        private Toggle _playerHudEnabledToggle;
+        private Toggle _playerHudLockToggle;
+        private Toggle _playerHudCdToggle;
+        private Toggle _playerHudHpToggle;
+        private Toggle _playerHudAtkDefToggle;
+        private Slider _playerHudScaleSlider;
+        private Slider _playerHudOffXSlider;
+        private Slider _playerHudOffYSlider;
+        private Text _playerHudScaleText;
+        private Text _playerHudOffXText;
+        private Text _playerHudOffYText;
 
         // Card 2: Target & Preview
         private Button _previewBtn;
@@ -109,6 +128,8 @@ namespace XingShuRuntime.UI
             BuildSwitchCard(contentArea);
             BuildDefenseHintCard(contentArea);
             BuildBattleCardHintCard(contentArea);
+            BuildMegathDamageHintCard(contentArea);
+            BuildPlayerCombatHudCard(contentArea);
 
             // 2. 目标与拖动卡预览 (Target & Preview Card: 180px)
             BuildTargetCard(contentArea);
@@ -206,7 +227,155 @@ namespace XingShuRuntime.UI
             card.SetActive(LauncherModules.CanLoad("BattleCardPointHint"));
         }
 
+        private void BuildMegathDamageHintCard(GameObject parent)
+        {
+            GameObject card = CreateCardContainer(parent, "MegathDamageHintCard", 278f);
+            var title = XingShuUIFactory.CreateText(card, "Title", "梅加斯伤害计算面板", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
+            title.rectTransform.pivot = new Vector2(0f, 1f);
+            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
+            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
+
+            var desc = XingShuUIFactory.CreateText(card, "Description", "仅游玩梅加斯时显示主动技能「轨道轰炸」理论最大伤害；未锁定时可在局内直接拖动", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            desc.rectTransform.anchorMin = new Vector2(0f, 1f);
+            desc.rectTransform.anchorMax = new Vector2(1f, 1f);
+            desc.rectTransform.pivot = new Vector2(0.5f, 1f);
+            desc.rectTransform.anchoredPosition = new Vector2(0f, -38f);
+            desc.rectTransform.sizeDelta = new Vector2(-40f, 20f);
+
+            _megathEnabledToggle = XingShuUIFactory.CreateToggle(card, "EnableMegathHint", "显示面板", MegathSkillDamageHint.IsEnabled,
+                value => { if (!_suppressCallbacks) MegathSkillDamageHint.SetEnabled(value); });
+            var rt = _megathEnabledToggle.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 1f);
+            rt.anchoredPosition = new Vector2(-20f, -10f);
+            rt.sizeDelta = new Vector2(165f, 34f);
+
+            _megathLockToggle = XingShuUIFactory.CreateToggle(card, "MegathLockToggle", "锁定位置（禁止拖动）", MegathSkillDamageHint.Locked,
+                value => { if (!_suppressCallbacks) MegathSkillDamageHint.SetLocked(value); });
+            var lockRt = _megathLockToggle.GetComponent<RectTransform>();
+            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
+            lockRt.pivot = new Vector2(0f, 1f);
+            lockRt.anchoredPosition = new Vector2(20f, -64f);
+            lockRt.sizeDelta = new Vector2(240f, 32f);
+
+            Button resetBtn = CreateActionButton(card, "ResetMegathLayout", "恢复默认",
+                () => { MegathSkillDamageHint.ResetLayout(); SyncMegathControls(); }, 104f, 30f, 12);
+            var resetRt = resetBtn.GetComponent<RectTransform>();
+            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
+            resetRt.pivot = new Vector2(1f, 1f);
+            resetRt.anchoredPosition = new Vector2(-20f, -64f);
+
+            AddPercentSliderRow(card, "MegathScale", "显示大小（60%–180%）", 104f,
+                XingShuConfigKeys.MegathDamageHintScaleMin, XingShuConfigKeys.MegathDamageHintScaleMax,
+                MegathSkillDamageHint.Scale,
+                v => { MegathSkillDamageHint.SetScale(Mathf.Round(v * 20f) / 20f); SyncMegathControls(); },
+                out _megathScaleSlider, out _megathScaleText);
+
+            AddPercentSliderRow(card, "MegathX", "水平位置 X（左 → 右）", 158f,
+                0f, 1f, MegathSkillDamageHint.PosX,
+                v => { MegathSkillDamageHint.SetPosition(v, MegathSkillDamageHint.PosY); SyncMegathControls(); },
+                out _megathXSlider, out _megathXText);
+
+            AddPercentSliderRow(card, "MegathY", "垂直位置 Y（上 → 下）", 212f,
+                0f, 1f, MegathSkillDamageHint.PosY,
+                v => { MegathSkillDamageHint.SetPosition(MegathSkillDamageHint.PosX, v); SyncMegathControls(); },
+                out _megathYSlider, out _megathYText);
+
+            card.SetActive(LauncherModules.CanLoad("MegathSkillDamageHint"));
+        }
+
+        private void BuildPlayerCombatHudCard(GameObject parent)
+        {
+            GameObject card = CreateCardContainer(parent, "PlayerCombatStatusHudCard", 316f);
+            var title = XingShuUIFactory.CreateText(card, "Title", "角色状态头顶显示", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
+            title.rectTransform.pivot = new Vector2(0f, 1f);
+            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
+            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
+
+            var desc = XingShuUIFactory.CreateText(card, "Description", "在棋盘角色上方显示技能 CD、血量与基础攻防；未锁定时拖动任一标签即可全局调位", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            desc.rectTransform.anchorMin = new Vector2(0f, 1f);
+            desc.rectTransform.anchorMax = new Vector2(1f, 1f);
+            desc.rectTransform.pivot = new Vector2(0.5f, 1f);
+            desc.rectTransform.anchoredPosition = new Vector2(0f, -38f);
+            desc.rectTransform.sizeDelta = new Vector2(-40f, 20f);
+
+            _playerHudEnabledToggle = XingShuUIFactory.CreateToggle(card, "EnablePlayerCombatHud", "显示状态", PlayerCombatStatusHud.IsEnabled,
+                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetEnabled(value); });
+            var rt = _playerHudEnabledToggle.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 1f);
+            rt.anchoredPosition = new Vector2(-20f, -10f);
+            rt.sizeDelta = new Vector2(165f, 34f);
+
+            _playerHudLockToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudLockToggle", "锁定位置（禁止拖动）", PlayerCombatStatusHud.Locked,
+                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetLocked(value); });
+            var lockRt = _playerHudLockToggle.GetComponent<RectTransform>();
+            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
+            lockRt.pivot = new Vector2(0f, 1f);
+            lockRt.anchoredPosition = new Vector2(20f, -64f);
+            lockRt.sizeDelta = new Vector2(240f, 32f);
+
+            Button resetBtn = CreateActionButton(card, "ResetPlayerHudLayout", "恢复默认",
+                () => { PlayerCombatStatusHud.ResetLayout(); SyncPlayerCombatHudControls(); }, 104f, 30f, 12);
+            var resetRt = resetBtn.GetComponent<RectTransform>();
+            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
+            resetRt.pivot = new Vector2(1f, 1f);
+            resetRt.anchoredPosition = new Vector2(-20f, -64f);
+
+            _playerHudCdToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudCdToggle", "冷却 CD", PlayerCombatStatusHud.ShowCd,
+                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowCd(value); });
+            var cdRt = _playerHudCdToggle.GetComponent<RectTransform>();
+            cdRt.anchorMin = cdRt.anchorMax = new Vector2(0f, 1f);
+            cdRt.pivot = new Vector2(0f, 1f);
+            cdRt.anchoredPosition = new Vector2(20f, -100f);
+            cdRt.sizeDelta = new Vector2(128f, 30f);
+
+            _playerHudHpToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudHpToggle", "血量 HP", PlayerCombatStatusHud.ShowHp,
+                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowHp(value); });
+            var hpRt = _playerHudHpToggle.GetComponent<RectTransform>();
+            hpRt.anchorMin = hpRt.anchorMax = new Vector2(0f, 1f);
+            hpRt.pivot = new Vector2(0f, 1f);
+            hpRt.anchoredPosition = new Vector2(158f, -100f);
+            hpRt.sizeDelta = new Vector2(128f, 30f);
+
+            _playerHudAtkDefToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudAtkDefToggle", "基础攻防", PlayerCombatStatusHud.ShowAtkDef,
+                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowAtkDef(value); });
+            var adRt = _playerHudAtkDefToggle.GetComponent<RectTransform>();
+            adRt.anchorMin = adRt.anchorMax = new Vector2(0f, 1f);
+            adRt.pivot = new Vector2(0f, 1f);
+            adRt.anchoredPosition = new Vector2(296f, -100f);
+            adRt.sizeDelta = new Vector2(140f, 30f);
+
+            AddPercentSliderRow(card, "PlayerHudScale", "显示大小（60%–180%）", 140f,
+                XingShuConfigKeys.PlayerCombatHudScaleMin, XingShuConfigKeys.PlayerCombatHudScaleMax,
+                PlayerCombatStatusHud.Scale,
+                v => { PlayerCombatStatusHud.SetScale(Mathf.Round(v * 20f) / 20f); SyncPlayerCombatHudControls(); },
+                out _playerHudScaleSlider, out _playerHudScaleText);
+
+            AddSliderRow(card, "PlayerHudOffX", "水平偏移 X（-160–160 px）", 194f,
+                XingShuConfigKeys.PlayerCombatHudOffsetXMin, XingShuConfigKeys.PlayerCombatHudOffsetXMax,
+                PlayerCombatStatusHud.OffsetX, $"{Mathf.RoundToInt(PlayerCombatStatusHud.OffsetX)} px",
+                v => { PlayerCombatStatusHud.SetOffset(Mathf.Round(v), PlayerCombatStatusHud.OffsetY); SyncPlayerCombatHudControls(); },
+                out _playerHudOffXSlider, out _playerHudOffXText);
+
+            AddSliderRow(card, "PlayerHudOffY", "垂直偏移 Y（-180–180 px）", 248f,
+                XingShuConfigKeys.PlayerCombatHudOffsetYMin, XingShuConfigKeys.PlayerCombatHudOffsetYMax,
+                PlayerCombatStatusHud.OffsetY, $"{Mathf.RoundToInt(PlayerCombatStatusHud.OffsetY)} px",
+                v => { PlayerCombatStatusHud.SetOffset(PlayerCombatStatusHud.OffsetX, Mathf.Round(v)); SyncPlayerCombatHudControls(); },
+                out _playerHudOffYSlider, out _playerHudOffYText);
+
+            card.SetActive(LauncherModules.CanLoad("PlayerCombatStatusHud"));
+        }
+
         private void AddPercentSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial,
+            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
+        {
+            AddSliderRow(card, id, labelText, topY, min, max, initial, $"{Mathf.RoundToInt(initial * 100f)}%", onChanged, out slider, out valueText);
+        }
+
+        private void AddSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial, string initialValueText,
             UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
         {
             GameObject pair = XingShuUIFactory.CreateUIObject("MetricPair_" + id, card);
@@ -228,7 +397,7 @@ namespace XingShuRuntime.UI
             lblLe.flexibleWidth = 1f;
             lblLe.minWidth = 140f;
 
-            valueText = XingShuUIFactory.CreateText(pair, id + "Value", $"{Mathf.RoundToInt(initial * 100f)}%", 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            valueText = XingShuUIFactory.CreateText(pair, id + "Value", initialValueText, 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
             var valLe = valueText.gameObject.AddComponent<LayoutElement>();
             valLe.minWidth = 60f;
             valLe.preferredWidth = 72f;
@@ -242,6 +411,58 @@ namespace XingShuRuntime.UI
             sRt.pivot = new Vector2(0.5f, 1f);
             sRt.anchoredPosition = new Vector2(0f, -(topY + 24f));
             sRt.sizeDelta = new Vector2(-40f, 26f);
+        }
+
+        private void SyncMegathControls()
+        {
+            float scale = MegathSkillDamageHint.Scale;
+            float px = MegathSkillDamageHint.PosX;
+            float py = MegathSkillDamageHint.PosY;
+            bool locked = MegathSkillDamageHint.Locked;
+            _suppressCallbacks = true;
+            if (_megathEnabledToggle != null && _megathEnabledToggle.isOn != MegathSkillDamageHint.IsEnabled)
+                _megathEnabledToggle.isOn = MegathSkillDamageHint.IsEnabled;
+            if (_megathScaleSlider != null && Mathf.Abs(_megathScaleSlider.value - scale) > 0.005f)
+                _megathScaleSlider.value = scale;
+            if (_megathXSlider != null && Mathf.Abs(_megathXSlider.value - px) > 0.005f)
+                _megathXSlider.value = px;
+            if (_megathYSlider != null && Mathf.Abs(_megathYSlider.value - py) > 0.005f)
+                _megathYSlider.value = py;
+            if (_megathLockToggle != null && _megathLockToggle.isOn != locked)
+                _megathLockToggle.isOn = locked;
+            _suppressCallbacks = false;
+            if (_megathScaleText != null) _megathScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
+            if (_megathXText != null) _megathXText.text = $"{Mathf.RoundToInt(px * 100f)}%";
+            if (_megathYText != null) _megathYText.text = $"{Mathf.RoundToInt(py * 100f)}%";
+        }
+
+        private void SyncPlayerCombatHudControls()
+        {
+            float scale = PlayerCombatStatusHud.Scale;
+            float offX = PlayerCombatStatusHud.OffsetX;
+            float offY = PlayerCombatStatusHud.OffsetY;
+            bool locked = PlayerCombatStatusHud.Locked;
+            _suppressCallbacks = true;
+            if (_playerHudEnabledToggle != null && _playerHudEnabledToggle.isOn != PlayerCombatStatusHud.IsEnabled)
+                _playerHudEnabledToggle.isOn = PlayerCombatStatusHud.IsEnabled;
+            if (_playerHudScaleSlider != null && Mathf.Abs(_playerHudScaleSlider.value - scale) > 0.005f)
+                _playerHudScaleSlider.value = scale;
+            if (_playerHudOffXSlider != null && Mathf.Abs(_playerHudOffXSlider.value - offX) > 0.5f)
+                _playerHudOffXSlider.value = offX;
+            if (_playerHudOffYSlider != null && Mathf.Abs(_playerHudOffYSlider.value - offY) > 0.5f)
+                _playerHudOffYSlider.value = offY;
+            if (_playerHudLockToggle != null && _playerHudLockToggle.isOn != locked)
+                _playerHudLockToggle.isOn = locked;
+            if (_playerHudCdToggle != null && _playerHudCdToggle.isOn != PlayerCombatStatusHud.ShowCd)
+                _playerHudCdToggle.isOn = PlayerCombatStatusHud.ShowCd;
+            if (_playerHudHpToggle != null && _playerHudHpToggle.isOn != PlayerCombatStatusHud.ShowHp)
+                _playerHudHpToggle.isOn = PlayerCombatStatusHud.ShowHp;
+            if (_playerHudAtkDefToggle != null && _playerHudAtkDefToggle.isOn != PlayerCombatStatusHud.ShowAtkDef)
+                _playerHudAtkDefToggle.isOn = PlayerCombatStatusHud.ShowAtkDef;
+            _suppressCallbacks = false;
+            if (_playerHudScaleText != null) _playerHudScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
+            if (_playerHudOffXText != null) _playerHudOffXText.text = $"{Mathf.RoundToInt(offX)} px";
+            if (_playerHudOffYText != null) _playerHudOffYText.text = $"{Mathf.RoundToInt(offY)} px";
         }
 
         private void SyncBattleCardControls()
@@ -809,6 +1030,8 @@ namespace XingShuRuntime.UI
             if (_battleCardHintToggle != null) _battleCardHintToggle.isOn = BattleCardPointHint.IsEnabled;
             _suppressCallbacks = false;
             SyncBattleCardControls();
+            SyncMegathControls();
+            SyncPlayerCombatHudControls();
             // This module is independent from the kill-probability switch and status.
             if (_targetingSummary != null && _targetingSummary.text != MonsterTargetRuntime.Summary)
                 _targetingSummary.text = MonsterTargetRuntime.Summary;
