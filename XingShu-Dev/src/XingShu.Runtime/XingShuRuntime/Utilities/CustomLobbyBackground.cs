@@ -86,6 +86,7 @@ namespace XingShuRuntime.Utilities
         private float _pendingCriStartedAt;
         private string _activeVideoFullPath = "";
         private float _lastAudioDriftCheckAt = -99f;
+        private bool _initialAudioAligned;
 #if !XINGSHU_ANDROID_PREVIEW
         private readonly WindowsLobbyAudioPlayer _companionAudio = new WindowsLobbyAudioPlayer();
 #else
@@ -937,6 +938,7 @@ namespace XingShuRuntime.Utilities
 
                 _videoPreparing = true;
                 _videoStarted = false;
+                _initialAudioAligned = false;
                 _pausedForAway = false;
                 _videoPrepareStartedAt = Time.unscaledTime;
                 ActiveMediaKind = LobbyBgMediaKind.Video;
@@ -1000,6 +1002,7 @@ namespace XingShuRuntime.Utilities
                     _videoPlayer.Play();
                     ApplyVideoPlaybackSettings();
                     _videoStarted = true;
+                    _initialAudioAligned = false;
                     _videoStartedAt = Time.unscaledTime;
                     _lastAudioDriftCheckAt = Time.unscaledTime;
                     _companionAudio.StartFile(_activeVideoFullPath, _muted, _volume, _speed, _pausedForAway, 0.0);
@@ -1069,15 +1072,31 @@ namespace XingShuRuntime.Utilities
                 }
                 else if (playing && _companionAudio.HasAudio)
                 {
-                    float checkInterval = (Time.unscaledTime - _videoStartedAt) < 4.0f ? 0.5f : 1.5f;
-                    if (Time.unscaledTime - _lastAudioDriftCheckAt >= checkInterval)
+                    if (!_initialAudioAligned)
+                    {
+                        _initialAudioAligned = true;
+                        _lastAudioDriftCheckAt = Time.unscaledTime;
+                        try
+                        {
+                            double vt = _videoPlayer.time;
+                            double at = _companionAudio.CurrentTimeSeconds;
+                            if (vt >= 0.0 && Math.Abs(at - vt) > 0.55)
+                            {
+                                _companionAudio.RequestSeek(vt);
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    else if (Time.unscaledTime - _lastAudioDriftCheckAt >= 3.0f)
                     {
                         _lastAudioDriftCheckAt = Time.unscaledTime;
                         try
                         {
                             double vt = _videoPlayer.time;
                             double at = _companionAudio.CurrentTimeSeconds;
-                            if (vt >= 0.0 && Math.Abs(at - vt) > 0.45)
+                            if (vt >= 0.0 && Math.Abs(at - vt) > 1.25)
                             {
                                 _companionAudio.RequestSeek(vt);
                             }
@@ -1112,6 +1131,8 @@ namespace XingShuRuntime.Utilities
                     _videoPlayer.Play();
                     ApplyVideoPlaybackSettings();
                     _videoStartedAt = Time.unscaledTime;
+                    _initialAudioAligned = true;
+                    _lastAudioDriftCheckAt = Time.unscaledTime;
                     _companionAudio.RequestSeek(vt);
                     _companionAudio.SetPaused(false);
                 }
@@ -1609,6 +1630,7 @@ namespace XingShuRuntime.Utilities
         {
             _videoPreparing = false;
             _videoStarted = false;
+            _initialAudioAligned = false;
             _pausedForAway = false;
             _criPhase = CriSwitchPhase.Idle;
             _pendingCriPath = "";

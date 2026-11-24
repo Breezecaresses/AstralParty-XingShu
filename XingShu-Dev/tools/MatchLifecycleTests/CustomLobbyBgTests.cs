@@ -317,6 +317,24 @@ namespace XingShu.Tests
             Assert(vbs.TrimEnd().EndsWith("\", 0, False"), "vbs hidden async suffix");
         }
 
+        private static void TestPlaybackPositionExtrapolation()
+        {
+            double p0 = CustomLobbyBgPolicy.EstimatePlaybackPosition(10.0, 0.0, 1.0f, 109.0);
+            Assert(Math.Abs(p0 - 10.0) < 0.001, "0 elapsed holds position");
+
+            double p1 = CustomLobbyBgPolicy.EstimatePlaybackPosition(10.0, 0.5, 1.0f, 109.0);
+            Assert(Math.Abs(p1 - 10.5) < 0.001, "1.0x advance: " + p1);
+
+            double p2 = CustomLobbyBgPolicy.EstimatePlaybackPosition(10.0, 2.0, 1.5f, 109.0);
+            Assert(Math.Abs(p2 - 13.0) < 0.001, "1.5x advance: " + p2);
+
+            double pWrap = CustomLobbyBgPolicy.EstimatePlaybackPosition(108.5, 1.0, 1.0f, 109.0);
+            Assert(Math.Abs(pWrap - 0.5) < 0.001, "loop wrap: " + pWrap);
+
+            double pGuard = CustomLobbyBgPolicy.EstimatePlaybackPosition(double.NaN, -3.0, 5.0f, -1.0);
+            Assert(Math.Abs(pGuard - 0.0) < 0.001, "NaN/negative guard");
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -328,6 +346,7 @@ namespace XingShu.Tests
             TestPcm16Processing();
             TestWindowsAudioProtocol();
             TestWindowsShortcutAndVbsBuilders();
+            TestPlaybackPositionExtrapolation();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

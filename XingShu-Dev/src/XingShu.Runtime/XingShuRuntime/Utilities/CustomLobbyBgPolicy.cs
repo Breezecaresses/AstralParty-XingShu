@@ -586,5 +586,29 @@ namespace XingShuRuntime.Utilities
             WriteUInt32LE(s, (uint)(value & 0xFFFFFFFFUL));
             WriteUInt32LE(s, (uint)(value >> 32));
         }
+
+        internal static double EstimatePlaybackPosition(
+            double lastPosSeconds,
+            double elapsedSeconds,
+            float speed,
+            double durationSeconds)
+        {
+            double pos = (double.IsNaN(lastPosSeconds) || double.IsInfinity(lastPosSeconds) || lastPosSeconds < 0.0)
+                ? 0.0
+                : lastPosSeconds;
+            double dur = (double.IsNaN(durationSeconds) || double.IsInfinity(durationSeconds) || durationSeconds < 0.0)
+                ? 0.0
+                : durationSeconds;
+            if (double.IsNaN(elapsedSeconds) || double.IsInfinity(elapsedSeconds) || elapsedSeconds <= 0.0)
+            {
+                return dur > 0.05 && pos > dur ? dur : pos;
+            }
+            double est = pos + elapsedSeconds * ClampSpeed(speed);
+            if (dur > 0.05 && est > dur)
+            {
+                est = est % dur;
+            }
+            return est;
+        }
     }
 }

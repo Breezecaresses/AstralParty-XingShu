@@ -14,11 +14,11 @@ namespace XingShuRuntime.Utilities
     /// Zero native imports, zero COM marshaling, zero Process.Start calls (which IL2CPP stubs on Windows desktop).
     /// Launches a hidden STA Windows PowerShell helper hosting WPF System.Windows.Media.MediaPlayer via
     /// main-thread UnityEngine.Application.OpenURL on a pure-byte .lnk shortcut targeting %SystemRoot%\System32\wscript.exe,
-    /// communicating through declarative .cmd/.state temp files with liveness heartbeat and full auto-cleanup.
+    /// using FileShare.ReadWrite I/O, continuous 200ms state polling + smooth position extrapolation, and clean auto-cleanup.
     /// </summary>
     internal sealed class WindowsLobbyAudioPlayer : IDisposable
     {
-        private const string ScriptFileName = "xingshu_lobby_audio_v3.ps1";
+        private const string ScriptFileName = "xingshu_lobby_audio_v4.ps1";
         private const int MaxLaunchAttempts = 4;
         private const double LaunchRetryCooldownSeconds = 8.0;
         private const double HelperHeartbeatTimeoutSeconds = 6.0;
@@ -43,6 +43,8 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:opened = $false
 $script:hasOpenedOnce = $false
 $script:hasAudio = $false
+$script:isPlaying = $false
+$script:appliedSpeed = -1.0
 $script:duration = 0.0
 $script:curPath = """"
 $script:curGen = -1
@@ -56,10 +58,35 @@ $script:lastStateWrite = [DateTime]::MinValue
 $script:pendingSeek = -1.0
 $script:lastError = """"
 
+function Read-TextShared([string]$p) {
+    $fs = New-Object System.IO.FileStream($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $sr = New-Object System.IO.StreamReader($fs, $utf8)
+        try {
+            return $sr.ReadToEnd()
+        } finally {
+            $sr.Dispose()
+        }
+    } finally {
+        $fs.Dispose()
+    }
+}
+
+function Write-TextShared([string]$p, [string]$content) {
+    $fs = New-Object System.IO.FileStream($p, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try {
+        $bytes = $utf8.GetBytes($content)
+        $fs.Write($bytes, 0, $bytes.Length)
+        $fs.Flush()
+    } finally {
+        $fs.Dispose()
+    }
+}
+
 function Write-State([bool]$force) {
     if ([string]::IsNullOrEmpty($StateFile)) { return }
     $now = [DateTime]::UtcNow
-    if (-not $force -and ($now - $script:lastStateWrite).TotalMilliseconds -lt 400) { return }
+    if (-not $force -and ($now - $script:lastStateWrite).TotalMilliseconds -lt 350) { return }
     $script:lastStateWrite = $now
     try {
         $pos = 0.0
@@ -71,7 +98,7 @@ function Write-State([bool]$force) {
         $op = if ($script:opened) { ""1"" } else { ""0"" }
         $errClean = if ($script:lastError) { ($script:lastError -replace ""[\r\n]+"", "" "").Trim() } else { """" }
         $line = ""$($script:curGen)|$op|$ha|$($pos.ToString('F3', $inv))|$($script:duration.ToString('F3', $inv))|$errClean""
-        [System.IO.File]::WriteAllText($StateFile, $line, $utf8)
+        Write-TextShared $StateFile $line
     } catch {}
 }
 
@@ -80,11 +107,21 @@ function Apply-Playback() {
     try {
         $mp.IsMuted = $script:curMuted
         $mp.Volume = if ($script:curMuted) { 0.0 } else { [Math]::Max(0.0, [Math]::Min(1.0, $script:curVol)) }
-        $mp.SpeedRatio = [Math]::Max(0.5, [Math]::Min(2.0, $script:curSpeed))
+        $targetSpeed = [Math]::Max(0.5, [Math]::Min(2.0, $script:curSpeed))
+        if ([Math]::Abs($targetSpeed - $script:appliedSpeed) -gt 0.005) {
+            $mp.SpeedRatio = $targetSpeed
+            $script:appliedSpeed = $targetSpeed
+        }
         if ($script:curPaused) {
-            $mp.Pause()
+            if ($script:isPlaying) {
+                $mp.Pause()
+                $script:isPlaying = $false
+            }
         } else {
-            $mp.Play()
+            if (-not $script:isPlaying) {
+                $mp.Play()
+                $script:isPlaying = $true
+            }
         }
     } catch {}
 }
@@ -111,7 +148,10 @@ $mp.add_MediaEnded({
         try {
             $mp.Position = [TimeSpan]::Zero
             $mp.Play()
+            $script:isPlaying = $true
         } catch {}
+    } else {
+        $script:isPlaying = $false
     }
 })
 
@@ -119,6 +159,7 @@ $mp.add_MediaFailed({
     param($s, $e)
     $script:opened = $false
     $script:hasAudio = $false
+    $script:isPlaying = $false
     try {
         if ($e -and $e.ErrorException) { $script:lastError = $e.ErrorException.Message }
         else { $script:lastError = ""MediaFailed"" }
@@ -144,6 +185,8 @@ function Shutdown-Helper() {
         try { $mp.Stop() } catch {}
         try { $mp.Close() } catch {}
     }
+    $script:isPlaying = $false
+    $script:appliedSpeed = -1.0
     Safe-DeleteFile $CmdFile
     Safe-DeleteFile $StateFile
     Safe-DeleteFile $VbsFile
@@ -168,7 +211,7 @@ $timer.add_Tick({
 
     if (-not [string]::IsNullOrEmpty($CmdFile) -and [System.IO.File]::Exists($CmdFile)) {
         try {
-            $text = [System.IO.File]::ReadAllText($CmdFile, $utf8)
+            $text = Read-TextShared $CmdFile
             if (-not [string]::IsNullOrEmpty($text) -and $text -ne $script:lastCmdText) {
                 $map = @{}
                 foreach ($rawLine in ($text -split ""`n"")) {
@@ -212,6 +255,8 @@ $timer.add_Tick({
                     $script:curPath = """"
                     $script:opened = $false
                     $script:hasAudio = $false
+                    $script:isPlaying = $false
+                    $script:appliedSpeed = -1.0
                     $script:duration = 0.0
                     $script:lastError = """"
                     $script:pendingSeek = -1.0
@@ -235,6 +280,7 @@ $timer.add_Tick({
                     $script:curPath = $targetPath
                     $script:opened = $false
                     $script:hasAudio = $false
+                    $script:isPlaying = $false
                     $script:duration = 0.0
                     $script:lastError = """"
                     $script:lastSeekSeq = $seekSeq
@@ -252,9 +298,12 @@ $timer.add_Tick({
                             $mp.IsMuted = $script:curMuted
                             $mp.Volume = if ($script:curMuted) { 0.0 } else { [Math]::Max(0.0, [Math]::Min(1.0, $script:curVol)) }
                         }
-                        $mp.SpeedRatio = [Math]::Max(0.5, [Math]::Min(2.0, $script:curSpeed))
+                        $targetSpeed = [Math]::Max(0.5, [Math]::Min(2.0, $script:curSpeed))
+                        $mp.SpeedRatio = $targetSpeed
+                        $script:appliedSpeed = $targetSpeed
                         $mp.Open((New-Object System.Uri($targetPath)))
                         $mp.Play()
+                        $script:isPlaying = $true
                     } else {
                         $script:lastError = ""FileNotFound""
                     }
@@ -273,7 +322,6 @@ $timer.add_Tick({
                 }
             }
         } catch {
-            $script:lastError = $_.Exception.Message
         }
     }
 
@@ -314,7 +362,9 @@ Write-State $true
         private double _seekSeconds;
 
         private volatile bool _hasAudio;
-        private double _currentTimeSeconds;
+        private double _statePosSeconds;
+        private double _stateDurationSeconds;
+        private DateTime _stateSampleUtc = DateTime.MinValue;
         private int _loggedReadyGen = -1;
         private int _loggedErrorGen = -1;
 
@@ -346,7 +396,13 @@ Write-State $true
             {
                 lock (_lock)
                 {
-                    return _currentTimeSeconds;
+                    if (_active && !_paused && _hasAudio && _stateSampleUtc != DateTime.MinValue)
+                    {
+                        double elapsed = (DateTime.UtcNow - _stateSampleUtc).TotalSeconds;
+                        return CustomLobbyBgPolicy.EstimatePlaybackPosition(
+                            _statePosSeconds, elapsed, _speed, _stateDurationSeconds);
+                    }
+                    return _statePosSeconds;
                 }
             }
         }
@@ -402,6 +458,7 @@ Write-State $true
                 Stop();
                 return;
             }
+            double safeStart = startSeconds > 0.0 ? startSeconds : 0.0;
             lock (_lock)
             {
                 if (_disposed) return;
@@ -412,17 +469,19 @@ Write-State $true
                 _volume = CustomLobbyBgPolicy.ClampVolume(volume);
                 _speed = CustomLobbyBgPolicy.ClampSpeed(speed);
                 _paused = paused;
-                if (startSeconds > 0.05)
+                if (safeStart > 0.05)
                 {
                     _seekSeq++;
-                    _seekSeconds = startSeconds;
+                    _seekSeconds = safeStart;
                 }
                 else
                 {
                     _seekSeconds = 0.0;
                 }
                 _hasAudio = false;
-                _currentTimeSeconds = startSeconds > 0.0 ? startSeconds : 0.0;
+                _statePosSeconds = safeStart;
+                _stateDurationSeconds = 0.0;
+                _stateSampleUtc = DateTime.MinValue;
                 _loggedReadyGen = -1;
                 _loggedErrorGen = -1;
                 _dirty = true;
@@ -442,6 +501,13 @@ Write-State $true
                 {
                     return;
                 }
+                if (_active && !_paused && _hasAudio && _stateSampleUtc != DateTime.MinValue)
+                {
+                    double elapsed = (DateTime.UtcNow - _stateSampleUtc).TotalSeconds;
+                    _statePosSeconds = CustomLobbyBgPolicy.EstimatePlaybackPosition(
+                        _statePosSeconds, elapsed, _speed, _stateDurationSeconds);
+                    _stateSampleUtc = DateTime.UtcNow;
+                }
                 _muted = muted;
                 _volume = cv;
                 _speed = cs;
@@ -459,6 +525,17 @@ Write-State $true
             lock (_lock)
             {
                 if (_disposed || _paused == paused) return;
+                if (_active && _hasAudio && paused && _stateSampleUtc != DateTime.MinValue)
+                {
+                    double elapsed = (DateTime.UtcNow - _stateSampleUtc).TotalSeconds;
+                    _statePosSeconds = CustomLobbyBgPolicy.EstimatePlaybackPosition(
+                        _statePosSeconds, elapsed, _speed, _stateDurationSeconds);
+                    _stateSampleUtc = DateTime.MinValue;
+                }
+                else if (_active && _hasAudio && !paused)
+                {
+                    _stateSampleUtc = DateTime.UtcNow;
+                }
                 _paused = paused;
                 if (_active)
                 {
@@ -477,7 +554,8 @@ Write-State $true
                 if (_disposed) return;
                 _seekSeq++;
                 _seekSeconds = clamped;
-                _currentTimeSeconds = clamped;
+                _statePosSeconds = clamped;
+                _stateSampleUtc = _paused ? DateTime.MinValue : DateTime.UtcNow;
                 if (_active)
                 {
                     _dirty = true;
@@ -496,7 +574,9 @@ Write-State $true
                 _activePath = "";
                 _generation++;
                 _hasAudio = false;
-                _currentTimeSeconds = 0.0;
+                _statePosSeconds = 0.0;
+                _stateDurationSeconds = 0.0;
+                _stateSampleUtc = DateTime.MinValue;
                 if (_launchedOnce || _worker != null)
                 {
                     _dirty = true;
@@ -517,6 +597,7 @@ Write-State $true
                 _prewarmRequested = false;
                 _hasAudio = false;
                 _pendingOpenUrlPath = null;
+                _stateSampleUtc = DateTime.MinValue;
                 _generation++;
                 sendQuit = _launchedOnce || _worker != null;
                 if (sendQuit)
@@ -532,7 +613,7 @@ Write-State $true
             {
                 try
                 {
-                    File.WriteAllText(_cmdPath, quitPayload, Utf8NoBom);
+                    WriteAllTextShared(_cmdPath, quitPayload, Utf8NoBom);
                 }
                 catch
                 {
@@ -565,7 +646,7 @@ Write-State $true
 
                 lock (_lock)
                 {
-                    while (!_dirty && !_disposed)
+                    if (!_dirty && !_disposed)
                     {
                         Monitor.Wait(_lock, 200);
                     }
@@ -599,12 +680,11 @@ Write-State $true
                     {
                         try
                         {
-                            File.WriteAllText(_cmdPath, cmdPayload, Utf8NoBom);
+                            WriteAllTextShared(_cmdPath, cmdPayload, Utf8NoBom);
                             lastWrittenCmd = cmdPayload;
                         }
-                        catch (Exception ex)
+                        catch
                         {
-                            LogSafe($"[WindowsLobbyAudioPlayer] 写入指令文件失败: {ex.Message}");
                         }
                     }
 
@@ -645,7 +725,7 @@ Write-State $true
                 string psExe = ResolvePowerShellExe();
                 string vbsText = CustomLobbyBgPolicy.BuildWindowsVbsLauncher(
                     psExe, _scriptPath, _selfPid, _cmdPath, _statePath, _vbsPath, _lnkPath);
-                File.WriteAllText(_vbsPath, vbsText, Encoding.Unicode);
+                WriteAllTextShared(_vbsPath, vbsText, Encoding.Unicode);
 
                 byte[] lnkBytes = CustomLobbyBgPolicy.BuildWindowsShortcutLnk(
                     @"%SystemRoot%\System32\wscript.exe",
@@ -702,7 +782,7 @@ Write-State $true
             {
                 if (File.Exists(_scriptPath))
                 {
-                    string existing = File.ReadAllText(_scriptPath, Utf8NoBom);
+                    string existing = ReadAllTextShared(_scriptPath);
                     if (string.Equals(existing, HelperScriptContent, StringComparison.Ordinal))
                     {
                         needWrite = false;
@@ -715,7 +795,7 @@ Write-State $true
             }
             if (needWrite)
             {
-                File.WriteAllText(_scriptPath, HelperScriptContent, Utf8NoBom);
+                WriteAllTextShared(_scriptPath, HelperScriptContent, Utf8NoBom);
             }
         }
 
@@ -724,7 +804,7 @@ Write-State $true
             try
             {
                 if (!File.Exists(_statePath)) return;
-                string raw = File.ReadAllText(_statePath, Utf8NoBom);
+                string raw = ReadAllTextShared(_statePath);
                 if (!CustomLobbyBgPolicy.TryParseWindowsAudioState(
                     raw,
                     out int stateGen,
@@ -759,7 +839,9 @@ Write-State $true
                         return;
                     }
                     _hasAudio = opened && hasAudio;
-                    _currentTimeSeconds = posSec;
+                    _statePosSeconds = posSec;
+                    _stateDurationSeconds = durSec;
+                    _stateSampleUtc = _paused ? DateTime.MinValue : DateTime.UtcNow;
                     if (!string.IsNullOrEmpty(error) && _loggedErrorGen != stateGen)
                     {
                         _loggedErrorGen = stateGen;
@@ -783,6 +865,33 @@ Write-State $true
             }
             catch
             {
+            }
+        }
+
+        private static string ReadAllTextShared(string path)
+        {
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var sr = new StreamReader(fs, Utf8NoBom))
+            {
+                return sr.ReadToEnd();
+            }
+        }
+
+        private static void WriteAllTextShared(string path, string content, Encoding encoding)
+        {
+            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+            {
+                byte[] preamble = encoding.GetPreamble();
+                if (preamble != null && preamble.Length > 0)
+                {
+                    fs.Write(preamble, 0, preamble.Length);
+                }
+                byte[] payload = encoding.GetBytes(content ?? "");
+                if (payload.Length > 0)
+                {
+                    fs.Write(payload, 0, payload.Length);
+                }
+                fs.Flush();
             }
         }
 
