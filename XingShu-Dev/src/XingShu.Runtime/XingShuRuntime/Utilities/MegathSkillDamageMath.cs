@@ -18,7 +18,9 @@ namespace XingShuRuntime.Utilities
         internal int DamagePerShot { get; private set; }
         internal int TotalDamage { get; private set; }
         internal bool IsPveScaling { get; private set; }
-        internal bool GrantsOrbitalCannon { get; private set; }
+        internal bool HasPrecisionMarkedMonster { get; private set; }
+        internal int MarkedDamagePerShot { get; private set; }
+        internal int MarkedTotalDamage { get; private set; }
         internal int SkillId { get; private set; }
 
         internal MegathDamageSummary(
@@ -31,7 +33,9 @@ namespace XingShuRuntime.Utilities
             int damagePerShot,
             int totalDamage,
             bool isPveScaling,
-            bool grantsOrbitalCannon,
+            bool hasPrecisionMarkedMonster,
+            int markedDamagePerShot,
+            int markedTotalDamage,
             int skillId) : this()
         {
             CardCount = cardCount;
@@ -43,7 +47,9 @@ namespace XingShuRuntime.Utilities
             DamagePerShot = damagePerShot;
             TotalDamage = totalDamage;
             IsPveScaling = isPveScaling;
-            GrantsOrbitalCannon = grantsOrbitalCannon;
+            HasPrecisionMarkedMonster = hasPrecisionMarkedMonster;
+            MarkedDamagePerShot = markedDamagePerShot;
+            MarkedTotalDamage = markedTotalDamage;
             SkillId = skillId;
         }
     }
@@ -54,13 +60,15 @@ namespace XingShuRuntime.Utilities
         internal const int PvpSkillId = 12201;
         internal const int PveSkillId = 12202;
         internal const int PvePotentialSkillId = 12203;
-        internal const int PotentialOrbitalCardThreshold = 6;
+        internal const int PrecisionStrikeBuffId = 1221202;
+        internal const int PrecisionMarkBonusPerShot = 1;
 
         internal static MegathDamageSummary Compute(
             int skillId,
             bool isPveMode,
             IList<int> skillParams,
-            IList<int> cardCosts)
+            IList<int> cardCosts,
+            bool hasPrecisionMarkedMonster = false)
         {
             bool isPveScaling = skillId == PveSkillId
                 || skillId == PvePotentialSkillId
@@ -91,11 +99,16 @@ namespace XingShuRuntime.Utilities
                 }
             }
 
+            // Shots floor(cardCount / cardsPerShot); PVE cost bonus ceil(totalCost / costPerStep).
             int shots = cardCount / cardsPerShot;
-            int costBonus = costPerStep > 0 ? (totalCost / costPerStep) * bonusPerStep : 0;
+            int costSteps = (costPerStep > 0 && totalCost > 0)
+                ? ((totalCost + costPerStep - 1) / costPerStep)
+                : 0;
+            int costBonus = costSteps * bonusPerStep;
             int perShot = baseDmg + costBonus;
             int totalDamage = shots * perShot;
-            bool grantsOrbitalCannon = (skillId == PvePotentialSkillId) && (cardCount >= PotentialOrbitalCardThreshold);
+            int markedPerShot = perShot + PrecisionMarkBonusPerShot;
+            int markedTotal = shots * markedPerShot;
 
             return new MegathDamageSummary(
                 cardCount,
@@ -107,7 +120,9 @@ namespace XingShuRuntime.Utilities
                 perShot,
                 totalDamage,
                 isPveScaling,
-                grantsOrbitalCannon,
+                hasPrecisionMarkedMonster,
+                markedPerShot,
+                markedTotal,
                 skillId);
         }
 
@@ -123,9 +138,9 @@ namespace XingShuRuntime.Utilities
             if (summary.IsPveScaling)
             {
                 string line = string.Format("{0}张(费{1}) = {2}炮 * {3}伤", summary.CardCount, summary.TotalCost, summary.Shots, summary.DamagePerShot);
-                if (summary.GrantsOrbitalCannon)
+                if (summary.HasPrecisionMarkedMonster)
                 {
-                    line += " + 轨道炮";
+                    line += string.Format(" · 精准标+1/炮={0}", summary.MarkedTotalDamage);
                 }
                 return line;
             }

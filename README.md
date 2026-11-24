@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.9">Download v0.1.9</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.10">Download v0.1.10</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">Web Edition</a> ·
   <a href="docs/README.md">Docs &amp; Validation Records</a> ·
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
@@ -35,16 +35,16 @@
 
 ## Stable Release
 
-[Download stable v0.1.9](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.9) ([release notes](docs/records/RELEASE_0.1.9.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
+[Download stable v0.1.10](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.10) ([release notes](docs/records/RELEASE_0.1.10.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
 
 | Target | Package / Access | Highlights |
 | --- | --- | --- |
-| **Windows Desktop** | `XingShu_Hub_0.1.9_x64-setup.exe` / `XingShu_Desktop_0.1.9.zip` | One-click Windows installer or streamlined portable pure-launcher Hub with the new **Universal Local Mod Compatibility Engine**: automatic cross-version `catalog_3.3.0.json` resolution, lossless `Texture2D -> modimg` conversion & one-click Android export, `MonoBehaviour` payload migration, `.rar` + encrypted archive password retry, rogue DLL blocking, remote `core-manifest.json` hot-updates, and **19 modules** (`r8.44`). |
+| **Windows Desktop** | `XingShu_Hub_0.1.10_x64-setup.exe` / `XingShu_Desktop_0.1.10.zip` | One-click Windows installer or streamlined portable pure-launcher Hub with an upgraded **Universal Local Mod Compatibility Engine**: `CAB-*` fingerprint alignment for localized bundles, native `ResourceModLoader` (`mod.json`) parsing (`Redirect`, `.patch.bnk`, `.patch.proto`), cross-version `catalog_3.3.0.json` resolution, remote `core-manifest.json` hot-updates, and **21 modules** (`r8.47`). |
 | **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop** discovery & creator uploads, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
-| **Android Launcher** | `XingShu_Android_0.1.9.apk` / `XingShu_Android_0.1.9.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.9.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Features refined layout density, symmetric `3×2` theme swatches, horizontal channel/filter chips, and remote `android-core-manifest.json` (`android-preview8.44`) over Shizuku & Wireless/USB ADB. |
+| **Android Launcher** | `XingShu_Android_0.1.10.apk` / `XingShu_Android_0.1.10.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.10.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Features refined layout density, symmetric `3×2` theme swatches, **21 official modules**, and remote `android-core-manifest.json` (`android-preview8.47`) over Shizuku & Wireless/USB ADB. |
 
 > [!NOTE]
-> The Core Framework (`XingShu Official Plugin Mod`) is completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.9 release record](docs/records/RELEASE_0.1.9.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
+> The Core Framework (`XingShu Official Plugin Mod`) is completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.10 release record](docs/records/RELEASE_0.1.10.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
 
 ---
 
@@ -52,18 +52,20 @@
 
 **AstralParty-XingShu (星枢)** is an open-source multi-platform launcher, mod workshop, replay workstation, and modular in-game runtime suite built for *Astral Party* (吉星派对):
 
-1. **AstralParty-Hub (Desktop & Web)**: Built with Tauri 2 + Rust + React 19 + TypeScript. Launches vanilla clients out of the box and embeds a universal local mod compatibility engine alongside single-flight locking, 4-way concurrent EdgeOne-cached downloads, local SHA-256 verification, atomic backups, live room management, `.rep` replay playback, platform accounts, and an offline encyclopedia.
-2. **XingShu Official Plugin Mod (`r8.44` PC / `android-preview8.44` Android, C# / Unity)**: Independent hot-updatable in-game runtime featuring **19 independently toggleable official modules** (including **Custom Lobby Background** with native Android `BitmapFactory` universal decoding fallback, `xingshu_dynamic_cards/` video card loader, actual damage match statistics, teammate hand overlay, battle hints, discard guard, and FairyGUI-styled native UI center).
-3. **Android Pure Launcher (`AndroidInstaller`, Kotlin / Jetpack Compose)**: Polished Material 3 companion app with symmetric `3×2` color palette, compact first-screen density, remote `CoreRuntimeSpec` hot-updates, custom XingShu bottom navigation bar, dynamic wallpaper support, Shizuku / ADB management, and PE Mod Workshop.
+1. **AstralParty-Hub (Desktop & Web)**: Built with Tauri 2 + Rust + React 19 + TypeScript. Launches vanilla clients out of the box and embeds a universal local mod compatibility engine (cross-version Catalog resolution, localized `CAB-*` fingerprint bundle matching, native RML `mod.json` patching, lossless `Texture2D -> modimg` conversion, `.rar`/encrypted archive extraction, and rogue DLL blocking) alongside single-flight locking, 4-way concurrent EdgeOne-cached downloads, local SHA-256 verification, atomic backups, live room management, `.rep` replay playback, platform accounts, and an offline encyclopedia.
+2. **XingShu Official Plugin Mod (`r8.47` PC / `android-preview8.47` Android, C# / Unity)**: Independent hot-updatable in-game runtime featuring **21 independently toggleable official modules** (including **Megath Skill Damage Calculator**, **Board & Avatar-Bottom Player Combat Status HUD**, Custom Lobby Background, `xingshu_dynamic_cards/` video card loader, actual damage match statistics, teammate hand overlay, battle hints, discard guard, and FairyGUI-styled native UI center).
+3. **Android Pure Launcher (`AndroidInstaller`, Kotlin / Jetpack Compose)**: Polished Material 3 companion app with symmetric `3×2` color palette, compact first-screen density, remote `CoreRuntimeSpec` hot-updates, custom XingShu bottom navigation bar, dynamic wallpaper support, Shizuku / ADB management, 21 official modules, and PE Mod Workshop.
 
 ---
 
-## Key Capabilities in v0.1.9
+## Key Capabilities in v0.1.10
 
-- **Desktop Universal Local Mod Compatibility Engine**: Automatically resolves legacy unindexed archives against `catalog_3.3.0.json` by `Texture2D` / `MonoBehaviour` asset names, converts `Texture2D` overrides to `modimg/*.png` with one-click Android pack export, migrates `MonoBehaviour` payloads back onto current 3.3.0 vanilla bundles, supports `.rar` & password-protected archives, and blocks modified `AstralParty.Runtime.dll` containers.
-- **Mobile Custom Lobby Background Fix & `r8.44` / `android-preview8.44`**: Added `.webp` / `.bmp` support and safe Android `BitmapFactory` decoding/scaling fallback so gallery WebP/HEIC or large images apply reliably in-game, paired with single-column full-width list layout and inline status feedback.
-- **Android Launcher Compose UI Polish**: Fixed wireless-debugging modal button wrapping, flattened theme preview card, aligned `3×2` color swatches, and switched channel/filter bars to compact horizontal `LazyRow`s.
-- **EdgeOne CDN Acceleration & Workshop Coverage**: Backed by EdgeOne CDN + BBR + local SHA-256 payload caching; Workshop updated with full 106-file `BA Music Pack (3.3.0-r2)` covering all remote `AssetBundles` BGM banks plus additional PE `modimg` packages.
+- **Desktop Universal Local Mod Engine (`CAB-*` + RML Native Parsing)**: Automatically inspects UnityFS header chunks of Chinese/localized skin & motion bundles to match `CAB-*` fingerprints against local `3.3.0` containers; parses community `ResourceModLoader` (`mod.json`) archives natively (`Redirect` `TextAsset`/`Texture2D`, `.patch.bnk` Wwise `.wem` injection, `.patch.proto` patching) while safely skipping `ResourceModLoader.exe` and blocking untrusted executables.
+- **21 Official Modules & Live Core `r8.47` / `android-preview8.47`**:
+  - **#20 `megath-damage` (Megath Skill Damage Calculator)**: Displays a draggable theoretical maximum damage overlay whenever the local hero is Megath (`HeroId = 122`), computing hand-card bombardment total (`floor(cards / 2)` shots, `3 + ceil(cost / 3)` PVE damage per shot) and highlighting alive monsters carrying `Precision Strike` (`Buff 1221202`) `+1/shot` bonus.
+  - **#21 `player-combat-hud` (Player Combat Status HUD)**: Locks board head status pills inside `com_AttrInfos` (`sortingOrder = 0`, matching monster target deduction) anchored to visual character head height with Y fine-tune, and renders draggable/adjustable `CD / Atk / Def` strips directly below left-side player avatar coin/star bars.
+  - **Battle Stats Widget Settings Relocation**: Consolidated `Card_StatsWidgetSettings` into the Battle Stats tab, pointed the in-game stats widget "Settings" button directly to Battle Stats, and removed redundant panels.
+- **EdgeOne CDN Acceleration & Workshop Coverage**: Backed by EdgeOne CDN + BBR + local SHA-256 payload caching; Workshop updated with `megath-damage` and `player-combat-hud` `.xspkg` entries, full `BA Music Pack`, and PE `modimg` packages.
 - **Unified Native In-Game Control Center & Replay Analyzer**: Press `F1` (or tap the floating orb) for consistent PC/mobile native FairyGUI controls and 12 remappable hotkeys ([HOTKEYS.md](docs/guides/HOTKEYS.md)); analyze `.rep` or match-ID replays with interactive round charts and step-by-step board playback.
 
 ---
@@ -89,10 +91,10 @@ flowchart TD
         SpecHook --> SpecStore --> SpecBridge
     end
 
-    subgraph RuntimeMain["Main Game Client (Optional XingShu Official Plugin r8.41)"]
+    subgraph RuntimeMain["Main Game Client (Optional XingShu Official Plugin r8.47)"]
         MainBridge["Bridge Client (Loopback TCP)"]
         TruthSource["HandTruthSource Arbiter"]
-        Modules["19 Modular Official Plugins & Native UI Center"]
+        Modules["21 Modular Official Plugins & Native UI Center"]
         MainBridge --> TruthSource --> Modules
     end
 
@@ -126,7 +128,7 @@ AstralParty-XingShu/
 │   ├── src-tauri/                        # Rust backend (IPC bridge, inline inspector, SHA-256 installer)
 │   └── public/                           # Static brand, encyclopedia media & animated emotes
 ├── XingShu-Dev/                          # In-game C# Unity modular runtime
-│   ├── src/XingShu.Runtime/              # 19 official modules, Native UI Center, HandTruth & Room control
+│   ├── src/XingShu.Runtime/              # 21 official modules, Native UI Center, HandTruth & Room control
 │   └── tools/                            # MSBuild scripts, C# conformance & lifecycle test runners
 ├── AndroidInstaller/                     # Kotlin + Jetpack Compose Android Pure Launcher
 │   ├── app/                              # Compose UI, Shizuku integration, HTTPS SHA-256 cache & tests
@@ -185,6 +187,7 @@ python tools/build_android_installer.py --help
 ## Detailed Documentation
 
 - [docs/README.md](docs/README.md) — Documentation Index & Release / Validation Records
+- [RELEASE_0.1.10.md](docs/records/RELEASE_0.1.10.md) — v0.1.10 Release Notes (RML/CAB Universal Mod Compat & 21 Modules)
 - [RELEASE_0.1.9.md](docs/records/RELEASE_0.1.9.md) — v0.1.9 Release Notes (Universal Local Mod Compat & Mobile UI Polish)
 - [RELEASE_0.1.8.md](docs/records/RELEASE_0.1.8.md) — v0.1.8 Release Notes & Independent Core Architecture
 - [RELEASE_0.1.7.md](docs/records/RELEASE_0.1.7.md) — v0.1.7 Release Notes & Architecture Changes

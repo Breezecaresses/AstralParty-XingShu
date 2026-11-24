@@ -244,11 +244,16 @@ public sealed class MegathSkillDamageHint : MonoBehaviour
             }
         }
 
+        bool hasPrecisionMarkedMonster = HasAliveMonsterWithBuff(
+            logic.battle?.PlayerDatas,
+            MegathSkillDamageMath.PrecisionStrikeBuffId);
+
         var summary = MegathSkillDamageMath.Compute(
             skillId,
             HandCardDisplayManager.IsPVEMode(),
             skillCfg?.Params,
-            _costsBuffer);
+            _costsBuffer,
+            hasPrecisionMarkedMonster);
 
         int maxCd = skillCfg != null ? skillCfg.Round : 3;
         int curCd = self.Property?.activeSkillCD != null ? self.Property.activeSkillCD.Value : self.SkillCD;
@@ -259,6 +264,27 @@ public sealed class MegathSkillDamageHint : MonoBehaviour
 
         EnsurePanel(battleInfoUi);
         ApplyLayout(battleInfoUi, title, formula);
+    }
+
+    private static bool HasAliveMonsterWithBuff(List<BattlePlayerData> players, int buffId)
+    {
+        if (players == null) return false;
+        for (int i = 0; i < players.Count; i++)
+        {
+            var p = players[i];
+            if (p == null || p.characterType != CharacterType.Monster) continue;
+            if (p.Property?.HP == null || p.Property.HP.Value <= 0) continue;
+            var dict = p.buffContainer?._buffDict;
+            if (dict == null || dict.Count == 0) continue;
+            foreach (var buff in dict.Values)
+            {
+                if (buff != null && buff.BuffId == buffId)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void EnsurePanel(GComponent container)
@@ -278,7 +304,7 @@ public sealed class MegathSkillDamageHint : MonoBehaviour
             touchable = !_locked,
             opaque = !_locked,
             draggable = !_locked,
-            sortingOrder = 6,
+            sortingOrder = 0,
         };
         XingShuOverlayInput.Protect(_panel);
         _panel.SetPivot(0f, 0f, false);

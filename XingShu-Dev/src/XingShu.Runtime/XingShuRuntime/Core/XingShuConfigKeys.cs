@@ -482,17 +482,25 @@ internal static class XingShuConfigKeys
 	internal const string MegathDamageHintLocked = "XINGSHU_MEGATH_DMG_LOCKED";
 	internal const bool MegathDamageHintLockedDefault = false;
 
-	// 棋盘玩家角色状态显示 (PlayerCombatStatusHud)
+	// 角色状态显示 (PlayerCombatStatusHud：棋盘角色头顶与怪物推演同层锁死 + 左侧头像下方可调位置)
 	internal const string PlayerCombatHudEnabled = "XINGSHU_PLAYER_COMBAT_HUD";
 	internal const bool PlayerCombatHudEnabledDefault = true;
-	internal const string PlayerCombatHudOffsetX = "XINGSHU_PLAYER_HUD_OFF_X";
+	internal const string PlayerCombatHudShowHead = "XINGSHU_PLAYER_HUD_HEAD";
+	internal const bool PlayerCombatHudShowHeadDefault = true;
+	internal const string PlayerCombatHudShowAvatar = "XINGSHU_PLAYER_HUD_AVATAR";
+	internal const bool PlayerCombatHudShowAvatarDefault = true;
+	internal const string PlayerCombatHudOffsetX = "XINGSHU_PLAYER_AVATAR_OFF_X";
 	internal const float PlayerCombatHudOffsetXMin = -160f;
 	internal const float PlayerCombatHudOffsetXMax = 160f;
 	internal const float PlayerCombatHudOffsetXDefault = 0f;
-	internal const string PlayerCombatHudOffsetY = "XINGSHU_PLAYER_HUD_OFF_Y";
-	internal const float PlayerCombatHudOffsetYMin = -180f;
-	internal const float PlayerCombatHudOffsetYMax = 180f;
-	internal const float PlayerCombatHudOffsetYDefault = -64f;
+	internal const string PlayerCombatHudOffsetY = "XINGSHU_PLAYER_AVATAR_OFF_Y";
+	internal const float PlayerCombatHudOffsetYMin = -160f;
+	internal const float PlayerCombatHudOffsetYMax = 160f;
+	internal const float PlayerCombatHudOffsetYDefault = 2f;
+	internal const string PlayerCombatHudHeadOffsetY = "XINGSHU_PLAYER_HEAD_OFF_Y";
+	internal const float PlayerCombatHudHeadOffsetYMin = -120f;
+	internal const float PlayerCombatHudHeadOffsetYMax = 120f;
+	internal const float PlayerCombatHudHeadOffsetYDefault = 0f;
 	internal const string PlayerCombatHudScale = "XINGSHU_PLAYER_HUD_SCALE";
 	internal const float PlayerCombatHudScaleMin = 0.60f;
 	internal const float PlayerCombatHudScaleMax = 1.80f;

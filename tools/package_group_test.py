@@ -252,7 +252,7 @@ def main():
 1. 将本压缩包完整解压至普通文件夹，直接运行 Hub/xingshu-hub.exe（也可直接使用同 Release 提供的 XingShu_Hub_{args.version}_x64-setup.exe 一键安装）。
 2. 首次启动若系统提示缺少 WebView2 Runtime，请按提示完成微软运行库安装。
 3. 在「启动」页选择游戏主程序目录即可纯净启动原版游戏。
-4. 如需使用游戏内增强功能，请先正常退出游戏，再前往「模组」页一键下载安装「星枢官方插件 Mod」（{runtime_version}）并自由勾选或批量开启 19 项官方功能模块；卸载或还原原版均已在 Hub 内置完成，无需独立外部安装助手。
+4. 如需使用游戏内增强功能，请先正常退出游戏，再前往「模组」页一键下载安装「星枢官方插件 Mod」（{runtime_version}）并自由勾选或批量开启 21 项官方功能模块；卸载或还原原版均已在 Hub 内置完成，无需独立外部安装助手。
 5. 更多模组工坊下载、账号绑定、回放分析与图鉴详情可直接在星枢 Hub 或网页端使用。
 
 项目源码：https://github.com/Breezecaresses/AstralParty-XingShu
