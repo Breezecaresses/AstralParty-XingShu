@@ -163,6 +163,17 @@ namespace XingShu.Tests
             Assert(uri.StartsWith("file:///") && uri.EndsWith("my%20video.mp4"), "file uri encoded: " + uri);
         }
 
+        private static void TestAudioAndVanillaBgmPolicy()
+        {
+            Assert(CustomLobbyBgPolicy.VideoAudioOutputModeDirectValue == 2, "VideoAudioOutputMode.Direct must be 2");
+            Assert(!CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(false, true, true, false), "feature disabled -> keep vanilla BGM");
+            Assert(!CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(true, false, true, true), "toggle disabled -> keep vanilla BGM");
+            Assert(!CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(true, true, false, false), "in battle / away -> restore vanilla BGM");
+            Assert(CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(true, true, true, false), "home visible -> mute vanilla BGM");
+            Assert(CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(true, true, false, true), "sub lobby visible -> mute vanilla BGM");
+            Assert(CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(true, true, true, true), "both visible -> mute vanilla BGM");
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -170,6 +181,7 @@ namespace XingShu.Tests
             TestComputeRenderTextureSize();
             TestIndexSelection();
             TestClampersAndFillModeAndUri();
+            TestAudioAndVanillaBgmPolicy();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

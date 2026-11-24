@@ -44,6 +44,7 @@ namespace XingShuRuntime.Utilities
         private float _speed = XingShuConfigKeys.CustomLobbyBgSpeedDefault;
         private bool _muted = XingShuConfigKeys.CustomLobbyBgMutedDefault;
         private float _volume = XingShuConfigKeys.CustomLobbyBgVolumeDefault;
+        private bool _muteVanillaBgm = XingShuConfigKeys.CustomLobbyBgMuteVanillaBgmDefault;
 
         // Media catalog state
         private readonly List<string> _mediaFiles = new List<string>();
@@ -78,6 +79,7 @@ namespace XingShuRuntime.Utilities
         private bool _suppressedHomeCri;
         private bool _suppressedSubCri;
         private bool _criOverrideApplied;
+        private bool _vanillaBgmSuppressed;
         private CriSwitchPhase _criPhase = CriSwitchPhase.Idle;
         private string _pendingCriPath = "";
         private LobbyBgMediaKind _pendingCriKind = LobbyBgMediaKind.Unknown;
@@ -100,6 +102,9 @@ namespace XingShuRuntime.Utilities
         private static MethodInfo _criCtrlSetAssetMethod;
         private static PropertyInfo _vpIsLoopingProp;
         private static PropertyInfo _vpAudioModeProp;
+        private static PropertyInfo _vpControlledAudioTrackCountProp;
+        private static MethodInfo _vpSetControlledAudioTrackCountMethod;
+        private static MethodInfo _vpEnableAudioTrackMethod;
         private static MethodInfo _vpSetMuteMethod;
         private static MethodInfo _vpSetVolMethod;
         private static Type _criCtrlType;
@@ -135,6 +140,7 @@ namespace XingShuRuntime.Utilities
         {
             try
             {
+                RestoreVanillaLobbyBgm();
                 TeardownActiveMedia(restoreVanilla: true);
                 DestroyOverlayLoaders();
             }
@@ -162,6 +168,7 @@ namespace XingShuRuntime.Utilities
                 XingShuConfigService.Save();
                 if (!value)
                 {
+                    RestoreVanillaLobbyBgm();
                     TeardownActiveMedia(restoreVanilla: true);
                     StatusMsg = "已暂停自定义大厅背景，恢复原版大厅";
                 }
@@ -286,6 +293,22 @@ namespace XingShuRuntime.Utilities
 
         internal bool SupportsAudioControl =>
             _vpAudioModeProp != null && _vpSetMuteMethod != null && _vpSetVolMethod != null;
+
+        internal bool MuteVanillaBgm
+        {
+            get => _muteVanillaBgm;
+            set
+            {
+                if (_muteVanillaBgm == value) return;
+                _muteVanillaBgm = value;
+                XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, value);
+                XingShuConfigService.Save();
+                if (!value)
+                {
+                    RestoreVanillaLobbyBgm();
+                }
+            }
+        }
 
         internal int FileCount => _mediaFiles.Count;
 
@@ -450,12 +473,15 @@ namespace XingShuRuntime.Utilities
             _speed = XingShuConfigKeys.CustomLobbyBgSpeedDefault;
             _muted = XingShuConfigKeys.CustomLobbyBgMutedDefault;
             _volume = XingShuConfigKeys.CustomLobbyBgVolumeDefault;
+            _muteVanillaBgm = XingShuConfigKeys.CustomLobbyBgMuteVanillaBgmDefault;
             XingShuConfigService.SetInt(XingShuConfigKeys.CustomLobbyBgFillMode, (int)_fillMode);
             XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgBrightness, _brightness);
             XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, _speed);
             XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuted, _muted);
             XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgVolume, _volume);
+            XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, _muteVanillaBgm);
             XingShuConfigService.Save();
+            RestoreVanillaLobbyBgm();
             ApplyOverlayVisualStyle();
             ApplyVideoPlaybackSettings();
             StatusMsg = "已恢复画面与音量默认参数";
@@ -481,12 +507,17 @@ namespace XingShuRuntime.Utilities
                 }
 
                 HomePanel home = FindHomePanel();
-                BackgroundPanel bgPanel = _syncSubPanels ? FindBackgroundPanel() : null;
+                BackgroundPanel rawBgPanel = FindBackgroundPanel();
                 bool homeVisible = IsPanelVisibleOnStage(home, out UIHomePanel uiHome);
-                UIBackgroundPanel uiBg = null;
-                bool bgVisible = _syncSubPanels && IsPanelVisibleOnStage(bgPanel, out uiBg);
+                bool rawBgVisible = IsPanelVisibleOnStage(rawBgPanel, out UIBackgroundPanel rawUiBg);
+                BackgroundPanel bgPanel = _syncSubPanels ? rawBgPanel : null;
+                UIBackgroundPanel uiBg = _syncSubPanels ? rawUiBg : null;
+                bool bgVisible = _syncSubPanels && rawBgVisible;
 
-                if (homeVisible && !_wasHomeVisible && _enabled && _randomOnLobby && _mediaFiles.Count > 1)
+                bool enteredHome = homeVisible && !_wasHomeVisible;
+                SyncVanillaLobbyBgm(homeVisible, rawBgVisible, enteredHome);
+
+                if (enteredHome && _enabled && _randomOnLobby && _mediaFiles.Count > 1)
                 {
                     int next = CustomLobbyBgPolicy.PickRandomIndex(_currentIndex, _mediaFiles.Count, n => UnityEngine.Random.Range(0, n));
                     if (next >= 0 && next != _currentIndex)
@@ -583,6 +614,7 @@ namespace XingShuRuntime.Utilities
             _speed = CustomLobbyBgPolicy.ClampSpeed(XingShuConfigService.GetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, XingShuConfigKeys.CustomLobbyBgSpeedDefault));
             _muted = XingShuConfigService.GetBool(XingShuConfigKeys.CustomLobbyBgMuted, XingShuConfigKeys.CustomLobbyBgMutedDefault);
             _volume = CustomLobbyBgPolicy.ClampVolume(XingShuConfigService.GetFloat(XingShuConfigKeys.CustomLobbyBgVolume, XingShuConfigKeys.CustomLobbyBgVolumeDefault));
+            _muteVanillaBgm = XingShuConfigService.GetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, XingShuConfigKeys.CustomLobbyBgMuteVanillaBgmDefault);
         }
 
         private void EnsureDefaultFolderOnce()
@@ -887,6 +919,7 @@ namespace XingShuRuntime.Utilities
                 _videoPlayer.aspectRatio = VideoAspectRatio.NoScaling;
                 _videoPlayer.playOnAwake = false;
                 _videoPlayer.playbackSpeed = _speed;
+                ConfigureVideoAudioBeforePrepare();
                 ApplyVideoPlaybackSettings();
 
                 _videoPreparing = true;
@@ -952,6 +985,7 @@ namespace XingShuRuntime.Utilities
                     _videoPlayer.playbackSpeed = _speed;
                     ApplyVideoPlaybackSettings();
                     _videoPlayer.Play();
+                    ApplyVideoPlaybackSettings();
                     _videoStarted = true;
                     _videoStartedAt = Time.unscaledTime;
 
@@ -1037,6 +1071,7 @@ namespace XingShuRuntime.Utilities
                 try
                 {
                     _videoPlayer.Play();
+                    ApplyVideoPlaybackSettings();
                     _videoStartedAt = Time.unscaledTime;
                 }
                 catch
@@ -1045,40 +1080,150 @@ namespace XingShuRuntime.Utilities
             }
         }
 
-        private void ApplyVideoPlaybackSettings()
+        private void ConfigureVideoAudioBeforePrepare()
         {
             if (_videoPlayer == null) return;
             try
             {
-                _videoPlayer.playbackSpeed = _speed;
-            }
-            catch
-            {
-            }
-            try
-            {
-                if (_vpIsLoopingProp != null)
-                {
-                    _vpIsLoopingProp.SetValue(_videoPlayer, true, null);
-                }
-            }
-            catch
-            {
-            }
-            try
-            {
                 if (_vpAudioModeProp != null)
                 {
-                    object directMode = Enum.ToObject(_vpAudioModeProp.PropertyType, 1); // VideoAudioOutputMode.Direct
+                    object directMode;
+                    try
+                    {
+                        directMode = Enum.Parse(_vpAudioModeProp.PropertyType, "Direct", false);
+                    }
+                    catch
+                    {
+                        directMode = Enum.ToObject(_vpAudioModeProp.PropertyType, CustomLobbyBgPolicy.VideoAudioOutputModeDirectValue);
+                    }
                     _vpAudioModeProp.SetValue(_videoPlayer, directMode, null);
                 }
-                if (_vpSetMuteMethod != null)
+            }
+            catch
+            {
+            }
+            try
+            {
+                if (_vpControlledAudioTrackCountProp != null)
                 {
-                    _vpSetMuteMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted });
+                    _vpControlledAudioTrackCountProp.SetValue(_videoPlayer, (ushort)1, null);
                 }
-                if (_vpSetVolMethod != null)
+                else if (_vpSetControlledAudioTrackCountMethod != null)
                 {
-                    _vpSetVolMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted ? 0f : _volume });
+                    _vpSetControlledAudioTrackCountMethod.Invoke(_videoPlayer, new object[] { (ushort)1 });
+                }
+            }
+            catch
+            {
+            }
+            try
+            {
+                _vpEnableAudioTrackMethod?.Invoke(_videoPlayer, new object[] { (ushort)0, true });
+            }
+            catch
+            {
+            }
+        }
+
+        private void ApplyVideoPlaybackSettings()
+        {
+            if (_videoPlayer != null)
+            {
+                try
+                {
+                    _videoPlayer.playbackSpeed = _speed;
+                }
+                catch
+                {
+                }
+                try
+                {
+                    if (_vpIsLoopingProp != null)
+                    {
+                        _vpIsLoopingProp.SetValue(_videoPlayer, true, null);
+                    }
+                }
+                catch
+                {
+                }
+                try
+                {
+                    if (_vpSetMuteMethod != null)
+                    {
+                        _vpSetMuteMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted });
+                    }
+                    if (_vpSetVolMethod != null)
+                    {
+                        _vpSetVolMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted ? 0f : _volume });
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            if (_criOverrideApplied)
+            {
+                try
+                {
+                    HomePanel home = FindHomePanel();
+                    GGraph graph = home != null && home.UIObject != null && home.UIObject.Com_BGSet != null
+                        ? home.UIObject.Com_BGSet.loader_Video
+                        : null;
+                    if (graph != null && !graph.isDisposed && TryGetCriControllerAndPlayer(graph, out _, out object player) && player != null)
+                    {
+                        _criPlayerSetSpeedMethod?.Invoke(player, new object[] { _speed });
+                        _criPlayerSetVolumeMethod?.Invoke(player, new object[] { _muted ? 0f : _volume });
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private void SyncVanillaLobbyBgm(bool homeVisible, bool subBgVisible, bool enteredHome)
+        {
+            bool shouldMute = CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(_enabled, _muteVanillaBgm, homeVisible, subBgVisible);
+            if (shouldMute)
+            {
+                if (!_vanillaBgmSuppressed || enteredHome)
+                {
+                    TrySetVanillaBgmRtpc(0f);
+                    _vanillaBgmSuppressed = true;
+                }
+            }
+            else if (_vanillaBgmSuppressed)
+            {
+                RestoreVanillaLobbyBgm();
+            }
+        }
+
+        private void RestoreVanillaLobbyBgm()
+        {
+            if (!_vanillaBgmSuppressed)
+            {
+                return;
+            }
+            _vanillaBgmSuppressed = false;
+            try
+            {
+                float saved = global::Core.GameSettings.GetBGMVolume();
+                TrySetVanillaBgmRtpc(saved);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TrySetVanillaBgmRtpc(float value)
+        {
+            try
+            {
+                global::Core.AudioManager audio = global::Tools.SimpleSingletonProvider<global::Core.AudioManager>.inst;
+                if (audio != null)
+                {
+                    audio.SetRTPCValue(global::Core.LocalStore.BGMVolumeLabel, value);
                 }
             }
             catch
@@ -1489,6 +1634,10 @@ namespace XingShuRuntime.Utilities
 
             if (restoreVanilla)
             {
+                if (!_enabled)
+                {
+                    RestoreVanillaLobbyBgm();
+                }
                 ActiveMediaLabel = "原版默认大厅";
                 RestoreAllVanillaCri(FindHomePanel(), FindBackgroundPanel());
             }
@@ -1614,6 +1763,9 @@ namespace XingShuRuntime.Utilities
             Type vpType = typeof(VideoPlayer);
             _vpIsLoopingProp = vpType.GetProperty("isLooping", anyInst);
             _vpAudioModeProp = vpType.GetProperty("audioOutputMode", anyInst);
+            _vpControlledAudioTrackCountProp = vpType.GetProperty("controlledAudioTrackCount", anyInst);
+            _vpSetControlledAudioTrackCountMethod = vpType.GetMethod("SetControlledAudioTrackCount", anyInst);
+            _vpEnableAudioTrackMethod = vpType.GetMethod("EnableAudioTrack", anyInst);
             _vpSetMuteMethod = vpType.GetMethod("SetDirectAudioMute", anyInst);
             _vpSetVolMethod = vpType.GetMethod("SetDirectAudioVolume", anyInst);
 

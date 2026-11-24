@@ -300,5 +300,16 @@ namespace XingShuRuntime.Utilities
             string fmt = DescribeImageHeader(bytes);
             return fmt == "WebP" || fmt == "HEIF/AVIF" || fmt == "BMP" || fmt == "GIF";
         }
+
+        internal const int VideoAudioOutputModeDirectValue = 2;
+
+        internal static bool ShouldMuteVanillaLobbyBgm(
+            bool featureEnabled,
+            bool muteVanillaBgm,
+            bool homeVisible,
+            bool subBgVisible)
+        {
+            return featureEnabled && muteVanillaBgm && (homeVisible || subBgVisible);
+        }
     }
 }

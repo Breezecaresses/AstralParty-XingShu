@@ -64,6 +64,7 @@ def previous_hashes(manifest, additional_manifests=()):
         found.add('e597a28529990a646016baaaf45aa963143885996cc38817c38b7c529cbf0b7e')
         found.add('f677f589146137b57c0baee8bc2ad30600cfafd814ceb7bc43491783db6d82a2')
         found.add('1be43212a0b1e1b44c1b937e1112862634840bf013bbb4368aa6340c61b025a5')
+        found.add('58910d0118136648eeb5c7c6af185f2d25cfc9460e09e20e283846aa99d078d0')
     releases = publish_directory(ROOT)
     manifests = set(releases.glob('XingShu_Android_*/candidate.json'))
     manifests.update(releases.glob('XingShu_*/Android/candidate.json'))

@@ -468,6 +468,9 @@ internal static class XingShuConfigKeys
 	internal const float CustomLobbyBgVolumeMax = 1.00f;
 	internal const float CustomLobbyBgVolumeDefault = 0.35f;
 
+	internal const string CustomLobbyBgMuteVanillaBgm = "XINGSHU_CUSTOM_LOBBY_BG_MUTE_VANILLA_BGM";
+	internal const bool CustomLobbyBgMuteVanillaBgmDefault = false;
+
 	// 梅加斯机械超人开技能理论最大伤害面板 (MegathSkillDamageHint)
 	internal const string MegathDamageHintEnabled = "XINGSHU_MEGATH_DMG_HINT";
 	internal const bool MegathDamageHintEnabledDefault = true;

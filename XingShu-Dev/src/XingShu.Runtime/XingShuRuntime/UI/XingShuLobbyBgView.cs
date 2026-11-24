@@ -41,6 +41,7 @@ namespace XingShuRuntime.UI
         private Slider _speedSlider;
         private Text _speedText;
         private Toggle _mutedToggle;
+        private Toggle _muteVanillaBgmToggle;
         private Slider _volumeSlider;
         private Text _volumeText;
 
@@ -237,7 +238,7 @@ namespace XingShuRuntime.UI
         private void BuildDisplayAudioCard(GameObject parent)
         {
             bool hasAudio = CustomLobbyBackground.Instance != null && CustomLobbyBackground.Instance.SupportsAudioControl;
-            float height = hasAudio ? 290f : 226f;
+            float height = hasAudio ? 326f : 264f;
             GameObject card = CreateCardContainer(parent, "Card_DisplayAudio", height);
 
             Text title = XingShuUIFactory.CreateText(card, "Title", "3. 画面适配与播放控制", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
@@ -298,18 +299,26 @@ namespace XingShuRuntime.UI
                 },
                 out _speedSlider, out _speedText);
 
+            bool initMuteVanillaBgm = bg != null && bg.MuteVanillaBgm;
+            _muteVanillaBgmToggle = XingShuUIFactory.CreateToggle(card, "Toggle_MuteVanillaBgm", "关闭原版大厅背景音乐（仅大厅生效，进对局自动恢复）", initMuteVanillaBgm, v =>
+            {
+                if (_suppressCallbacks || CustomLobbyBackground.Instance == null) return;
+                CustomLobbyBackground.Instance.MuteVanillaBgm = v;
+            });
+            FormatToggleRow(_muteVanillaBgmToggle, -198f);
+
             if (hasAudio)
             {
                 bool initMuted = bg != null ? bg.Muted : XingShuConfigKeys.CustomLobbyBgMutedDefault;
                 float initVol = bg != null ? bg.Volume : XingShuConfigKeys.CustomLobbyBgVolumeDefault;
-                _mutedToggle = XingShuUIFactory.CreateToggle(card, "Toggle_Mute", "静音播放（推荐开启，避免与游戏大厅 BGM 混音）", initMuted, v =>
+                _mutedToggle = XingShuUIFactory.CreateToggle(card, "Toggle_Mute", "静音自定义视频声音（关闭后播放视频背景音乐）", initMuted, v =>
                 {
                     if (_suppressCallbacks || CustomLobbyBackground.Instance == null) return;
                     CustomLobbyBackground.Instance.Muted = v;
                 });
-                FormatToggleRow(_mutedToggle, -200f);
+                FormatToggleRow(_mutedToggle, -230f);
 
-                AddSliderRow(card, "Volume", "背景视频音量（关闭静音后生效）", 230f,
+                AddSliderRow(card, "Volume", "背景视频音量（关闭上方静音后生效）", 262f,
                     XingShuConfigKeys.CustomLobbyBgVolumeMin, XingShuConfigKeys.CustomLobbyBgVolumeMax, initVol,
                     v => $"{Mathf.RoundToInt(v * 100f)}%",
                     v =>
@@ -321,8 +330,8 @@ namespace XingShuRuntime.UI
             }
             else
             {
-                Text mobileAudioNote = XingShuUIFactory.CreateText(card, "AudioNote", "当前平台视频播放器采用静音轨模式（与游戏原生 BGM 保持兼容）", 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-                PlaceTopFill(mobileAudioNote.rectTransform, -198f, 20f);
+                Text mobileAudioNote = XingShuUIFactory.CreateText(card, "AudioNote", "当前平台视频播放器采用静音轨模式（仅可关闭原版大厅音乐）", 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
+                PlaceTopFill(mobileAudioNote.rectTransform, -232f, 20f);
             }
         }
 
@@ -485,6 +494,8 @@ namespace XingShuRuntime.UI
                     XingShuUIFactory.SetToggleStateWithoutNotify(_syncSubToggle, bg.SyncSubPanels);
                 if (_randomOnLobbyToggle != null && _randomOnLobbyToggle.isOn != bg.RandomOnLobby)
                     XingShuUIFactory.SetToggleStateWithoutNotify(_randomOnLobbyToggle, bg.RandomOnLobby);
+                if (_muteVanillaBgmToggle != null && _muteVanillaBgmToggle.isOn != bg.MuteVanillaBgm)
+                    XingShuUIFactory.SetToggleStateWithoutNotify(_muteVanillaBgmToggle, bg.MuteVanillaBgm);
                 if (_mutedToggle != null && _mutedToggle.isOn != bg.Muted)
                     XingShuUIFactory.SetToggleStateWithoutNotify(_mutedToggle, bg.Muted);
 
