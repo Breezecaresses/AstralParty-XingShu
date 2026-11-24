@@ -491,5 +491,100 @@ namespace XingShuRuntime.Utilities
             error = p5 >= 0 ? trimmed.Substring(p5 + 1).Trim() : "";
             return true;
         }
+
+        internal static byte[] BuildWindowsShortcutLnk(string envTargetPath, string arguments)
+        {
+            string target = envTargetPath ?? "";
+            string args = arguments ?? "";
+
+            using (var ms = new MemoryStream(1024))
+            {
+                // ShellLinkHeader (76 bytes)
+                WriteUInt32LE(ms, 0x0000004Cu); // HeaderSize
+                byte[] clsid = new Guid("00021401-0000-0000-C000-000000000046").ToByteArray();
+                ms.Write(clsid, 0, clsid.Length);
+                WriteUInt32LE(ms, 0x000002A0u); // HasArguments(0x20) | IsUnicode(0x80) | HasExpString(0x200)
+                WriteUInt32LE(ms, 0x00000020u); // FILE_ATTRIBUTE_ARCHIVE
+                WriteUInt64LE(ms, 0UL);         // CreationTime
+                WriteUInt64LE(ms, 0UL);         // AccessTime
+                WriteUInt64LE(ms, 0UL);         // WriteTime
+                WriteUInt32LE(ms, 0u);          // FileSize
+                WriteUInt32LE(ms, 0u);          // IconIndex
+                WriteUInt32LE(ms, 7u);          // ShowCommand = SW_SHOWMINNOACTIVE
+                WriteUInt16LE(ms, 0);           // HotKey
+                WriteUInt16LE(ms, 0);           // Reserved1
+                WriteUInt32LE(ms, 0u);          // Reserved2
+                WriteUInt32LE(ms, 0u);          // Reserved3
+
+                // StringData: COMMAND_LINE_ARGUMENTS (CountCharacters + UTF-16LE chars)
+                int charCount = args.Length > ushort.MaxValue ? ushort.MaxValue : args.Length;
+                string clippedArgs = charCount == args.Length ? args : args.Substring(0, charCount);
+                WriteUInt16LE(ms, (ushort)charCount);
+                byte[] argBytes = Encoding.Unicode.GetBytes(clippedArgs);
+                ms.Write(argBytes, 0, argBytes.Length);
+
+                // ExtraData: EnvironmentVariableDataBlock (788 bytes, signature 0xA0000001)
+                WriteUInt32LE(ms, 788u);
+                WriteUInt32LE(ms, 0xA0000001u);
+
+                byte[] ansiBuf = new byte[260];
+                byte[] ansiSrc = Encoding.ASCII.GetBytes(target);
+                int ansiLen = ansiSrc.Length > 259 ? 259 : ansiSrc.Length;
+                Buffer.BlockCopy(ansiSrc, 0, ansiBuf, 0, ansiLen);
+                ms.Write(ansiBuf, 0, ansiBuf.Length);
+
+                byte[] uniBuf = new byte[520];
+                byte[] uniSrc = Encoding.Unicode.GetBytes(target);
+                int uniLen = uniSrc.Length > 518 ? 518 : uniSrc.Length;
+                Buffer.BlockCopy(uniSrc, 0, uniBuf, 0, uniLen);
+                ms.Write(uniBuf, 0, uniBuf.Length);
+
+                // Terminal block
+                WriteUInt32LE(ms, 0u);
+                return ms.ToArray();
+            }
+        }
+
+        internal static string BuildWindowsVbsLauncher(
+            string psExePath,
+            string ps1Path,
+            int parentPid,
+            string cmdPath,
+            string statePath,
+            string vbsPath,
+            string lnkPath)
+        {
+            string cmdLine = string.Format(
+                CultureInfo.InvariantCulture,
+                "\"{0}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File \"{1}\" -ParentPid {2} -CmdFile \"{3}\" -StateFile \"{4}\" -VbsFile \"{5}\" -LnkFile \"{6}\"",
+                psExePath ?? "",
+                ps1Path ?? "",
+                parentPid,
+                cmdPath ?? "",
+                statePath ?? "",
+                vbsPath ?? "",
+                lnkPath ?? "");
+            return "CreateObject(\"WScript.Shell\").Run \"" + cmdLine.Replace("\"", "\"\"") + "\", 0, False\r\n";
+        }
+
+        private static void WriteUInt16LE(Stream s, ushort value)
+        {
+            s.WriteByte((byte)(value & 0xFF));
+            s.WriteByte((byte)((value >> 8) & 0xFF));
+        }
+
+        private static void WriteUInt32LE(Stream s, uint value)
+        {
+            s.WriteByte((byte)(value & 0xFF));
+            s.WriteByte((byte)((value >> 8) & 0xFF));
+            s.WriteByte((byte)((value >> 16) & 0xFF));
+            s.WriteByte((byte)((value >> 24) & 0xFF));
+        }
+
+        private static void WriteUInt64LE(Stream s, ulong value)
+        {
+            WriteUInt32LE(s, (uint)(value & 0xFFFFFFFFUL));
+            WriteUInt32LE(s, (uint)(value >> 32));
+        }
     }
 }

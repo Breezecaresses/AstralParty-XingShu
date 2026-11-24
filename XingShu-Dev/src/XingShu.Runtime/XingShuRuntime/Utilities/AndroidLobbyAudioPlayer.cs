@@ -32,6 +32,10 @@ namespace XingShuRuntime.Utilities
         {
         }
 
+        internal void TickMainThread()
+        {
+        }
+
         internal double CurrentTimeSeconds
         {
             get

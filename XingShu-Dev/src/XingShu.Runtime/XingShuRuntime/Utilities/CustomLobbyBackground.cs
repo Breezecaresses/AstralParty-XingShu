@@ -415,11 +415,7 @@ namespace XingShuRuntime.Utilities
             if (!EnsureDirectoryExists(dir)) return;
             try
             {
-                string winDir = dir.Replace('/', Path.DirectorySeparatorChar);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(winDir)
-                {
-                    UseShellExecute = true
-                });
+                Application.OpenURL(CustomLobbyBgPolicy.BuildFileUri(dir));
                 StatusMsg = $"已打开目录: {dir}";
             }
             catch (Exception ex)
@@ -509,6 +505,7 @@ namespace XingShuRuntime.Utilities
         {
             try
             {
+                _companionAudio.TickMainThread();
                 float now = Time.unscaledTime;
                 if (now - _lastScanTime >= AutoRescanInterval)
                 {

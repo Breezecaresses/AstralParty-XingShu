@@ -273,6 +273,50 @@ namespace XingShu.Tests
             Assert(!CustomLobbyBgPolicy.TryParseWindowsAudioState("1|1|1|0", out gen, out opened, out hasAudio, out pos, out dur, out err), "too few fields invalid");
         }
 
+        private static uint ReadUInt32LE(byte[] buf, int offset)
+        {
+            return (uint)(buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24));
+        }
+
+        private static void TestWindowsShortcutAndVbsBuilders()
+        {
+            string args = "//B //Nologo \"C:\\Temp\\launch 1.vbs\"";
+            byte[] lnk = CustomLobbyBgPolicy.BuildWindowsShortcutLnk("%SystemRoot%\\System32\\wscript.exe", args);
+            byte[] argsBytes = Encoding.Unicode.GetBytes(args);
+            int expectedLen = 76 + 2 + argsBytes.Length + 788 + 4;
+            Assert(lnk.Length == expectedLen, "lnk exact byte length: " + lnk.Length + " vs " + expectedLen);
+            Assert(ReadUInt32LE(lnk, 0) == 0x4Cu, "lnk HeaderSize=0x4C");
+
+            byte[] clsid = new byte[16];
+            Array.Copy(lnk, 4, clsid, 0, 16);
+            Assert(new Guid(clsid) == new Guid("00021401-0000-0000-C000-000000000046"), "lnk ShellLink CLSID");
+            Assert(ReadUInt32LE(lnk, 20) == 0x2A0u, "lnk LinkFlags HasArguments|IsUnicode|HasExpString");
+            Assert(ReadUInt32LE(lnk, 24) == 0x20u, "lnk FileAttributes ARCHIVE");
+            Assert(ReadUInt32LE(lnk, 60) == 7u, "lnk ShowCommand SW_SHOWMINNOACTIVE");
+
+            ushort argChars = (ushort)(lnk[76] | (lnk[77] << 8));
+            Assert(argChars == args.Length, "lnk arg char count");
+            Assert(Encoding.Unicode.GetString(lnk, 78, argsBytes.Length) == args, "lnk UTF-16LE args");
+
+            int expOffset = 78 + argsBytes.Length;
+            Assert(ReadUInt32LE(lnk, expOffset) == 788u, "lnk EnvDataBlock Size=788");
+            Assert(ReadUInt32LE(lnk, expOffset + 4) == 0xA0000001u, "lnk EnvDataBlock sig=0xA0000001");
+            Assert(ReadUInt32LE(lnk, lnk.Length - 4) == 0u, "lnk terminal 4 zero bytes");
+
+            string vbs = CustomLobbyBgPolicy.BuildWindowsVbsLauncher(
+                @"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe",
+                @"C:\Temp\xingshu_lobby_audio_v3.ps1",
+                12345,
+                @"C:\Temp\a.cmd",
+                @"C:\Temp\a.state",
+                @"C:\Temp\a.vbs",
+                @"C:\Temp\a.lnk");
+            Assert(vbs.StartsWith("CreateObject(\"WScript.Shell\").Run \"\"\"C:\\WINDOWS"), "vbs header");
+            Assert(vbs.Contains("-WindowStyle Hidden -STA -File \"\"C:\\Temp\\xingshu_lobby_audio_v3.ps1\"\" -ParentPid 12345"), "vbs ps1+pid");
+            Assert(vbs.Contains("-VbsFile \"\"C:\\Temp\\a.vbs\"\" -LnkFile \"\"C:\\Temp\\a.lnk\"\""), "vbs cleanup args");
+            Assert(vbs.TrimEnd().EndsWith("\", 0, False"), "vbs hidden async suffix");
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -283,6 +327,7 @@ namespace XingShu.Tests
             TestAudioAndVanillaBgmPolicy();
             TestPcm16Processing();
             TestWindowsAudioProtocol();
+            TestWindowsShortcutAndVbsBuilders();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

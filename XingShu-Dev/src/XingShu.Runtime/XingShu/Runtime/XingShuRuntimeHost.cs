@@ -25,11 +25,11 @@ namespace XingShu.Runtime
         public const string LogFileName = "xingshu_runtime_lifecycle.log";
         public const string LegacyLogFileName = "xingshu_runtime_lifecycle.log";
 #if XINGSHU_ANDROID_PREVIEW
-        public const string RuntimeVersion = "1.0.0-android-preview8.50";
+        public const string RuntimeVersion = "1.0.0-android-preview8.51";
 #elif XINGSHU_MODULAR_LAUNCHER
-        public const string RuntimeVersion = "1.0.0-game-ui-r8.50";
+        public const string RuntimeVersion = "1.0.0-game-ui-r8.51";
 #else
-        public const string RuntimeVersion = "1.0.0-game-ui-r8.50";
+        public const string RuntimeVersion = "1.0.0-game-ui-r8.51";
 #endif
 
         private static string _logPath;

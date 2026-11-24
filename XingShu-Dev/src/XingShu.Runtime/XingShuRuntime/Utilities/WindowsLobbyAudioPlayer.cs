@@ -1,29 +1,35 @@
 #if !XINGSHU_ANDROID_PREVIEW
 using System;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
+using UnityEngine;
 using XingShu.Runtime;
 
 namespace XingShuRuntime.Utilities
 {
     /// <summary>
     /// Windows-native companion audio player for CustomLobbyBackground.
-    /// Zero [DllImport] and zero [ComImport] (100% safe inside IL2CPP + HybridCLR hot-update assemblies).
-    /// Launches a hidden STA Windows PowerShell helper hosting WPF System.Windows.Media.MediaPlayer
-    /// controlled via declarative .cmd/.state temp files, auto-exiting cleanly on QUIT or parent exit.
+    /// Zero native imports, zero COM marshaling, zero Process.Start calls (which IL2CPP stubs on Windows desktop).
+    /// Launches a hidden STA Windows PowerShell helper hosting WPF System.Windows.Media.MediaPlayer via
+    /// main-thread UnityEngine.Application.OpenURL on a pure-byte .lnk shortcut targeting %SystemRoot%\System32\wscript.exe,
+    /// communicating through declarative .cmd/.state temp files with liveness heartbeat and full auto-cleanup.
     /// </summary>
     internal sealed class WindowsLobbyAudioPlayer : IDisposable
     {
-        private const string ScriptFileName = "xingshu_lobby_audio_v2.ps1";
+        private const string ScriptFileName = "xingshu_lobby_audio_v3.ps1";
+        private const int MaxLaunchAttempts = 4;
+        private const double LaunchRetryCooldownSeconds = 8.0;
+        private const double HelperHeartbeatTimeoutSeconds = 6.0;
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
         private const string HelperScriptContent = @"param(
     [int]$ParentPid = 0,
     [string]$CmdFile = """",
-    [string]$StateFile = """"
+    [string]$StateFile = """",
+    [string]$VbsFile = """",
+    [string]$LnkFile = """"
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -53,7 +59,7 @@ $script:lastError = """"
 function Write-State([bool]$force) {
     if ([string]::IsNullOrEmpty($StateFile)) { return }
     $now = [DateTime]::UtcNow
-    if (-not $force -and ($now - $script:lastStateWrite).TotalMilliseconds -lt 200) { return }
+    if (-not $force -and ($now - $script:lastStateWrite).TotalMilliseconds -lt 400) { return }
     $script:lastStateWrite = $now
     try {
         $pos = 0.0
@@ -124,22 +130,24 @@ $script:parentCheckCounter = 0
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(50)
 
+function Safe-DeleteFile([string]$p) {
+    try {
+        if (-not [string]::IsNullOrEmpty($p) -and [System.IO.File]::Exists($p)) {
+            [System.IO.File]::Delete($p)
+        }
+    } catch {}
+}
+
 function Shutdown-Helper() {
     try { $timer.Stop() } catch {}
     if ($script:hasOpenedOnce) {
         try { $mp.Stop() } catch {}
         try { $mp.Close() } catch {}
     }
-    try {
-        if (-not [string]::IsNullOrEmpty($CmdFile) -and [System.IO.File]::Exists($CmdFile)) {
-            [System.IO.File]::Delete($CmdFile)
-        }
-    } catch {}
-    try {
-        if (-not [string]::IsNullOrEmpty($StateFile) -and [System.IO.File]::Exists($StateFile)) {
-            [System.IO.File]::Delete($StateFile)
-        }
-    } catch {}
+    Safe-DeleteFile $CmdFile
+    Safe-DeleteFile $StateFile
+    Safe-DeleteFile $VbsFile
+    Safe-DeleteFile $LnkFile
     try { $dispatcher.InvokeShutdown() } catch {}
 }
 
@@ -281,11 +289,17 @@ Write-State $true
         private readonly string _scriptPath;
         private readonly string _cmdPath;
         private readonly string _statePath;
+        private readonly string _vbsPath;
+        private readonly string _lnkPath;
         private readonly int _selfPid;
 
         private Thread _worker;
-        private Process _process;
         private DateTime _nextLaunchAllowedUtc = DateTime.MinValue;
+        private int _launchAttempts;
+        private bool _launchedOnce;
+        private volatile string _pendingOpenUrlPath;
+        private int _pendingOpenAttempt;
+
         private bool _disposed;
         private bool _dirty;
         private bool _prewarmRequested;
@@ -320,6 +334,8 @@ Write-State $true
             _scriptPath = Path.Combine(tempDir, ScriptFileName);
             _cmdPath = Path.Combine(tempDir, $"xingshu_lobby_audio_{pid}_{tag}.cmd");
             _statePath = Path.Combine(tempDir, $"xingshu_lobby_audio_{pid}_{tag}.state");
+            _vbsPath = Path.Combine(tempDir, $"xingshu_lobby_audio_{pid}_{tag}.vbs");
+            _lnkPath = Path.Combine(tempDir, $"xingshu_lobby_audio_{pid}_{tag}.lnk");
         }
 
         internal bool HasAudio => _hasAudio;
@@ -344,6 +360,38 @@ Write-State $true
                 _dirty = true;
                 EnsureWorkerThreadLocked();
                 Monitor.PulseAll(_lock);
+            }
+        }
+
+        internal void TickMainThread()
+        {
+            if (_pendingOpenUrlPath == null)
+            {
+                return;
+            }
+
+            string pathToOpen;
+            int attempt;
+            lock (_lock)
+            {
+                pathToOpen = _pendingOpenUrlPath;
+                _pendingOpenUrlPath = null;
+                attempt = _pendingOpenAttempt;
+                if (_disposed || string.IsNullOrEmpty(pathToOpen))
+                {
+                    return;
+                }
+                _launchedOnce = true;
+            }
+
+            try
+            {
+                Application.OpenURL(pathToOpen);
+                LogSafe($"[WindowsLobbyAudioPlayer] 已通过 Application.OpenURL 拉起伴随音频进程: attempt={attempt}, lnk={pathToOpen}");
+            }
+            catch (Exception ex)
+            {
+                LogSafe($"[WindowsLobbyAudioPlayer] Application.OpenURL 拉起异常: {ex.GetType().Name}: {ex.Message}");
             }
         }
 
@@ -449,7 +497,7 @@ Write-State $true
                 _generation++;
                 _hasAudio = false;
                 _currentTimeSeconds = 0.0;
-                if (_process != null || _worker != null)
+                if (_launchedOnce || _worker != null)
                 {
                     _dirty = true;
                     Monitor.PulseAll(_lock);
@@ -461,7 +509,6 @@ Write-State $true
         {
             bool sendQuit;
             string quitPayload = "";
-            Process procToClose = null;
             lock (_lock)
             {
                 if (_disposed) return;
@@ -469,15 +516,14 @@ Write-State $true
                 _active = false;
                 _prewarmRequested = false;
                 _hasAudio = false;
+                _pendingOpenUrlPath = null;
                 _generation++;
-                sendQuit = _process != null || _worker != null;
+                sendQuit = _launchedOnce || _worker != null;
                 if (sendQuit)
                 {
                     quitPayload = CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(
                         _generation, true, true, "", true, 0f, 1f, true, _seekSeq, 0.0);
                 }
-                procToClose = _process;
-                _process = null;
                 _dirty = true;
                 Monitor.PulseAll(_lock);
             }
@@ -487,17 +533,6 @@ Write-State $true
                 try
                 {
                     File.WriteAllText(_cmdPath, quitPayload, Utf8NoBom);
-                }
-                catch
-                {
-                }
-            }
-
-            if (procToClose != null)
-            {
-                try
-                {
-                    procToClose.Dispose();
                 }
                 catch
                 {
@@ -527,20 +562,18 @@ Write-State $true
                 bool prewarm;
                 int expectedGen;
                 string cmdPayload;
-                Process currentProc;
 
                 lock (_lock)
                 {
                     while (!_dirty && !_disposed)
                     {
-                        Monitor.Wait(_lock, 180);
+                        Monitor.Wait(_lock, 200);
                     }
                     disposed = _disposed;
                     _dirty = false;
                     active = _active;
                     prewarm = _prewarmRequested;
                     expectedGen = _generation;
-                    currentProc = _process;
                     cmdPayload = CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(
                         expectedGen,
                         !active,
@@ -559,29 +592,6 @@ Write-State $true
                     return;
                 }
 
-                if (currentProc != null)
-                {
-                    bool exited = false;
-                    try
-                    {
-                        exited = currentProc.HasExited;
-                    }
-                    catch
-                    {
-                        exited = true;
-                    }
-                    if (exited)
-                    {
-                        try { currentProc.Dispose(); } catch { }
-                        lock (_lock)
-                        {
-                            if (_process == currentProc) _process = null;
-                        }
-                        currentProc = null;
-                        lastWrittenCmd = null;
-                    }
-                }
-
                 bool needHelper = active || prewarm;
                 if (needHelper)
                 {
@@ -598,13 +608,10 @@ Write-State $true
                         }
                     }
 
-                    if (currentProc == null && DateTime.UtcNow >= _nextLaunchAllowedUtc)
+                    bool helperAlive = IsHelperAlive();
+                    if (!helperAlive && DateTime.UtcNow >= _nextLaunchAllowedUtc && _launchAttempts < MaxLaunchAttempts)
                     {
-                        currentProc = LaunchHelperProcess();
-                        if (currentProc == null)
-                        {
-                            _nextLaunchAllowedUtc = DateTime.UtcNow.AddSeconds(3.0);
-                        }
+                        QueueHelperLaunch();
                     }
 
                     PollHelperState(expectedGen, active);
@@ -612,75 +619,80 @@ Write-State $true
             }
         }
 
-        private Process LaunchHelperProcess()
+        private bool IsHelperAlive()
+        {
+            try
+            {
+                if (!File.Exists(_statePath))
+                {
+                    return false;
+                }
+                DateTime mtime = File.GetLastWriteTimeUtc(_statePath);
+                return (DateTime.UtcNow - mtime).TotalSeconds < HelperHeartbeatTimeoutSeconds;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void QueueHelperLaunch()
         {
             try
             {
                 EnsureHelperScriptWritten();
 
-                string exe = "powershell.exe";
+                string psExe = ResolvePowerShellExe();
+                string vbsText = CustomLobbyBgPolicy.BuildWindowsVbsLauncher(
+                    psExe, _scriptPath, _selfPid, _cmdPath, _statePath, _vbsPath, _lnkPath);
+                File.WriteAllText(_vbsPath, vbsText, Encoding.Unicode);
+
+                byte[] lnkBytes = CustomLobbyBgPolicy.BuildWindowsShortcutLnk(
+                    @"%SystemRoot%\System32\wscript.exe",
+                    "//B //Nologo \"" + _vbsPath + "\"");
+                File.WriteAllBytes(_lnkPath, lnkBytes);
+
+                lock (_lock)
+                {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+                    _launchAttempts++;
+                    _nextLaunchAllowedUtc = DateTime.UtcNow.AddSeconds(LaunchRetryCooldownSeconds);
+                    _pendingOpenAttempt = _launchAttempts;
+                    _pendingOpenUrlPath = _lnkPath;
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (_lock)
+                {
+                    _launchAttempts++;
+                    _nextLaunchAllowedUtc = DateTime.UtcNow.AddSeconds(LaunchRetryCooldownSeconds);
+                }
+                LogSafe($"[WindowsLobbyAudioPlayer] 生成伴随启动脚本失败: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private static string ResolvePowerShellExe()
+        {
+            try
+            {
                 string sysRoot = Environment.GetEnvironmentVariable("SystemRoot");
                 if (!string.IsNullOrEmpty(sysRoot))
                 {
                     string candidate = Path.Combine(sysRoot, @"System32\WindowsPowerShell\v1.0\powershell.exe");
                     if (File.Exists(candidate))
                     {
-                        exe = candidate;
+                        return candidate;
                     }
                 }
-
-                string args = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File \"{0}\" -ParentPid {1} -CmdFile \"{2}\" -StateFile \"{3}\"",
-                    _scriptPath,
-                    _selfPid,
-                    _cmdPath,
-                    _statePath);
-
-                var psi = new ProcessStartInfo(exe)
-                {
-                    Arguments = args,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                Process started = Process.Start(psi);
-                if (started == null)
-                {
-                    LogSafe("[WindowsLobbyAudioPlayer] Process.Start 返回 null");
-                    return null;
-                }
-
-                lock (_lock)
-                {
-                    if (_disposed)
-                    {
-                        try
-                        {
-                            File.WriteAllText(
-                                _cmdPath,
-                                CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(_generation, true, true, "", true, 0f, 1f, true, _seekSeq, 0.0),
-                                Utf8NoBom);
-                        }
-                        catch
-                        {
-                        }
-                        try { started.Dispose(); } catch { }
-                        return null;
-                    }
-                    _process = started;
-                }
-
-                int childPid = 0;
-                try { childPid = started.Id; } catch { }
-                LogSafe($"[WindowsLobbyAudioPlayer] 启动 WPF 伴随音频进程: childPid={childPid}, parentPid={_selfPid}");
-                return started;
             }
-            catch (Exception ex)
+            catch
             {
-                LogSafe($"[WindowsLobbyAudioPlayer] 启动伴随音频进程异常: {ex.GetType().Name}: {ex.Message}");
-                return null;
             }
+            return "powershell.exe";
         }
 
         private void EnsureHelperScriptWritten()
@@ -709,7 +721,6 @@ Write-State $true
 
         private void PollHelperState(int expectedGen, bool active)
         {
-            if (!active) return;
             try
             {
                 if (!File.Exists(_statePath)) return;
@@ -725,7 +736,16 @@ Write-State $true
                 {
                     return;
                 }
-                if (stateGen != expectedGen)
+
+                if (IsHelperAlive())
+                {
+                    lock (_lock)
+                    {
+                        _launchAttempts = 0;
+                    }
+                }
+
+                if (!active || stateGen != expectedGen)
                 {
                     return;
                 }
