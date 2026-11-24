@@ -1,138 +1,326 @@
 #if !XINGSHU_ANDROID_PREVIEW
 using System;
-using System.Runtime.InteropServices;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Threading;
+using XingShu.Runtime;
 
 namespace XingShuRuntime.Utilities
 {
     /// <summary>
-    /// Windows-native companion audio decoder/player for CustomLobbyBackground.
-    /// Uses Windows Media Foundation (MFCreateSourceReaderFromURL -> PCM16) + WinMM (waveOut)
-    /// so custom lobby videos play audio reliably even when Unity's AudioManager has m_DisableAudio=true.
-    /// Zero external dependencies, zero StructLayout marshaling, and compiled out on Android preview builds.
+    /// Windows-native companion audio player for CustomLobbyBackground.
+    /// Zero [DllImport] and zero [ComImport] (100% safe inside IL2CPP + HybridCLR hot-update assemblies).
+    /// Launches a hidden STA Windows PowerShell helper hosting WPF System.Windows.Media.MediaPlayer
+    /// controlled via declarative .cmd/.state temp files, auto-exiting cleanly on QUIT or parent exit.
     /// </summary>
     internal sealed class WindowsLobbyAudioPlayer : IDisposable
     {
-        private const uint MF_VERSION = 0x00020070;
-        private const uint MFSTARTUP_NOSOCKET = 0x1;
-        private const uint MF_SOURCE_READER_ALL_STREAMS = 0xFFFFFFFE;
-        private const uint MF_SOURCE_READER_FIRST_AUDIO_STREAM = 0xFFFFFFFD;
-        private const uint MF_SOURCE_READERF_ERROR = 0x00000001;
-        private const uint MF_SOURCE_READERF_ENDOFSTREAM = 0x00000002;
-        private const uint MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED = 0x00000020;
+        private const string ScriptFileName = "xingshu_lobby_audio_v2.ps1";
+        private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
-        private const uint WHDR_DONE = 0x00000001;
-        private const uint WHDR_PREPARED = 0x00000002;
-        private const int RingBufferCount = 4;
-        private const int RingBufferCapacity = 65536;
-        private const int WaveFormatExSize = 18;
-        private const int PropVariantSize = 24;
+        private const string HelperScriptContent = @"param(
+    [int]$ParentPid = 0,
+    [string]$CmdFile = """",
+    [string]$StateFile = """"
+)
 
-        private static readonly int WaveHdrSize = IntPtr.Size == 8 ? 48 : 32;
-        private static readonly int WaveHdrLengthOffset = IntPtr.Size == 8 ? 8 : 4;
-        private static readonly int WaveHdrFlagsOffset = IntPtr.Size == 8 ? 24 : 16;
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
 
-        private static readonly Guid MF_MT_MAJOR_TYPE = new Guid("48eba18e-f8c9-4687-bf11-0a74c9f96a8f");
-        private static readonly Guid MF_MT_SUBTYPE = new Guid("f7e34c9a-42e8-4714-b74b-cb29d72c35e5");
-        private static readonly Guid MFMediaType_Audio = new Guid("73647561-0000-0010-8000-00aa00389b71");
-        private static readonly Guid MFAudioFormat_PCM = new Guid("00000001-0000-0010-8000-00aa00389b71");
-        private static readonly Guid MF_MT_AUDIO_NUM_CHANNELS = new Guid("37e48bf5-645e-4c5b-89de-ada9e29b696a");
-        private static readonly Guid MF_MT_AUDIO_SAMPLES_PER_SECOND = new Guid("5faeeae7-0290-4c31-9e8a-c534f68d9dba");
-        private static readonly Guid MF_MT_AUDIO_BITS_PER_SAMPLE = new Guid("f2deb57f-40fa-4764-aa33-ed4f2d1ff669");
+$dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+$mp = New-Object System.Windows.Media.MediaPlayer
+$utf8 = New-Object System.Text.UTF8Encoding($false)
 
-        [DllImport("mfplat.dll")]
-        private static extern int MFStartup(uint version, uint dwFlags);
+$script:opened = $false
+$script:hasOpenedOnce = $false
+$script:hasAudio = $false
+$script:duration = 0.0
+$script:curPath = """"
+$script:curGen = -1
+$script:curMuted = $true
+$script:curVol = 0.35
+$script:curSpeed = 1.0
+$script:curPaused = $true
+$script:lastSeekSeq = -1
+$script:lastCmdText = """"
+$script:lastStateWrite = [DateTime]::MinValue
+$script:pendingSeek = -1.0
+$script:lastError = """"
 
-        [DllImport("mfplat.dll")]
-        private static extern int MFShutdown();
-
-        [DllImport("mfplat.dll")]
-        private static extern int MFCreateMediaType(out IMFMediaType ppMFType);
-
-        [DllImport("mfreadwrite.dll", CharSet = CharSet.Unicode)]
-        private static extern int MFCreateSourceReaderFromURL(string pwszURL, IntPtr pAttributes, out IMFSourceReader ppSourceReader);
-
-        [DllImport("winmm.dll")]
-        private static extern int waveOutOpen(out IntPtr phwo, uint uDeviceID, IntPtr pwfx, IntPtr dwCallback, IntPtr dwInstance, uint fdwOpen);
-
-        [DllImport("winmm.dll")]
-        private static extern int waveOutPrepareHeader(IntPtr hwo, IntPtr pwh, uint cbwh);
-
-        [DllImport("winmm.dll")]
-        private static extern int waveOutUnprepareHeader(IntPtr hwo, IntPtr pwh, uint cbwh);
-
-        [DllImport("winmm.dll")]
-        private static extern int waveOutWrite(IntPtr hwo, IntPtr pwh, uint cbwh);
-
-        [DllImport("winmm.dll")]
-        private static extern int waveOutReset(IntPtr hwo);
-
-        [DllImport("winmm.dll")]
-        private static extern int waveOutClose(IntPtr hwo);
-
-        [ComImport, Guid("44ae0fa8-ea31-4109-8d2e-4cae4997c555"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IMFMediaType
-        {
-            void _0(); void _1(); void _2(); void _3();
-            [PreserveSig] int GetUINT32([In] ref Guid guidKey, out uint punValue);
-            void _5(); void _6(); void _7(); void _8(); void _9(); void _10(); void _11(); void _12(); void _13(); void _14();
-            void _15(); void _16(); void _17();
-            [PreserveSig] int SetUINT32([In] ref Guid guidKey, uint unValue);
-            void _19(); void _20();
-            [PreserveSig] int SetGUID([In] ref Guid guidKey, [In] ref Guid guidValue);
+function Write-State([bool]$force) {
+    if ([string]::IsNullOrEmpty($StateFile)) { return }
+    $now = [DateTime]::UtcNow
+    if (-not $force -and ($now - $script:lastStateWrite).TotalMilliseconds -lt 200) { return }
+    $script:lastStateWrite = $now
+    try {
+        $pos = 0.0
+        if ($script:opened) {
+            try { $pos = $mp.Position.TotalSeconds } catch {}
         }
+        $inv = [System.Globalization.CultureInfo]::InvariantCulture
+        $ha = if ($script:hasAudio) { ""1"" } else { ""0"" }
+        $op = if ($script:opened) { ""1"" } else { ""0"" }
+        $errClean = if ($script:lastError) { ($script:lastError -replace ""[\r\n]+"", "" "").Trim() } else { """" }
+        $line = ""$($script:curGen)|$op|$ha|$($pos.ToString('F3', $inv))|$($script:duration.ToString('F3', $inv))|$errClean""
+        [System.IO.File]::WriteAllText($StateFile, $line, $utf8)
+    } catch {}
+}
 
-        [ComImport, Guid("70ae66f2-c809-4e4f-8915-bdcb406b7993"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IMFSourceReader
-        {
-            [PreserveSig] int GetStreamSelection(uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] out bool pfSelected);
-            [PreserveSig] int SetStreamSelection(uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] bool fSelected);
-            [PreserveSig] int GetNativeMediaType(uint dwStreamIndex, uint dwMediaTypeIndex, out IMFMediaType ppMediaType);
-            [PreserveSig] int GetCurrentMediaType(uint dwStreamIndex, out IMFMediaType ppMediaType);
-            [PreserveSig] int SetCurrentMediaType(uint dwStreamIndex, IntPtr pdwReserved, IMFMediaType pMediaType);
-            [PreserveSig] int SetCurrentPosition([In] ref Guid guidTimeFormat, IntPtr varPosition);
-            [PreserveSig] int ReadSample(uint dwStreamIndex, uint dwControlFlags, out uint pdwActualStreamIndex, out uint pdwStreamFlags, out long pllTimestamp, out IMFSample ppSample);
+function Apply-Playback() {
+    if (-not $script:opened) { return }
+    try {
+        $mp.IsMuted = $script:curMuted
+        $mp.Volume = if ($script:curMuted) { 0.0 } else { [Math]::Max(0.0, [Math]::Min(1.0, $script:curVol)) }
+        $mp.SpeedRatio = [Math]::Max(0.5, [Math]::Min(2.0, $script:curSpeed))
+        if ($script:curPaused) {
+            $mp.Pause()
+        } else {
+            $mp.Play()
         }
+    } catch {}
+}
 
-        [ComImport, Guid("c40a00f2-b93a-4d80-ae8c-5a1c634f58e4"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IMFSample
-        {
-            void _0(); void _1(); void _2(); void _3(); void _4(); void _5(); void _6(); void _7(); void _8(); void _9();
-            void _10(); void _11(); void _12(); void _13(); void _14(); void _15(); void _16(); void _17(); void _18(); void _19();
-            void _20(); void _21(); void _22(); void _23(); void _24(); void _25(); void _26(); void _27(); void _28(); void _29();
-            [PreserveSig] int GetSampleFlags(out uint pdwSampleFlags);
-            [PreserveSig] int SetSampleFlags(uint dwSampleFlags);
-            [PreserveSig] int GetSampleTime(out long phnsSampleTime);
-            [PreserveSig] int SetSampleTime(long hnsSampleTime);
-            [PreserveSig] int GetSampleDuration(out long phnsSampleDuration);
-            [PreserveSig] int SetSampleDuration(long hnsSampleDuration);
-            [PreserveSig] int GetBufferCount(out uint pdwBufferCount);
-            [PreserveSig] int GetBufferByIndex(uint dwIndex, out IMFMediaBuffer ppBuffer);
-            [PreserveSig] int ConvertToContiguousBuffer(out IMFMediaBuffer ppBuffer);
-        }
+$mp.add_MediaOpened({
+    $script:opened = $true
+    $script:hasAudio = $mp.HasAudio
+    $script:lastError = """"
+    if ($mp.NaturalDuration.HasTimeSpan) {
+        $script:duration = $mp.NaturalDuration.TimeSpan.TotalSeconds
+    } else {
+        $script:duration = 0.0
+    }
+    if ($script:pendingSeek -gt 0.05) {
+        try { $mp.Position = [TimeSpan]::FromSeconds($script:pendingSeek) } catch {}
+        $script:pendingSeek = -1.0
+    }
+    Apply-Playback
+    Write-State $true
+})
 
-        [ComImport, Guid("045FA593-8799-42b8-BC8D-8968C6453507"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IMFMediaBuffer
-        {
-            [PreserveSig] int Lock(out IntPtr ppbBuffer, out uint pcbMaxLength, out uint pcbCurrentLength);
-            [PreserveSig] int Unlock();
-            [PreserveSig] int GetCurrentLength(out uint pcbCurrentLength);
+$mp.add_MediaEnded({
+    if ($script:opened -and -not $script:curPaused) {
+        try {
+            $mp.Position = [TimeSpan]::Zero
+            $mp.Play()
+        } catch {}
+    }
+})
+
+$mp.add_MediaFailed({
+    param($s, $e)
+    $script:opened = $false
+    $script:hasAudio = $false
+    try {
+        if ($e -and $e.ErrorException) { $script:lastError = $e.ErrorException.Message }
+        else { $script:lastError = ""MediaFailed"" }
+    } catch { $script:lastError = ""MediaFailed"" }
+    Write-State $true
+})
+
+$script:parentCheckCounter = 0
+$timer = New-Object System.Windows.Threading.DispatcherTimer
+$timer.Interval = [TimeSpan]::FromMilliseconds(50)
+
+function Shutdown-Helper() {
+    try { $timer.Stop() } catch {}
+    if ($script:hasOpenedOnce) {
+        try { $mp.Stop() } catch {}
+        try { $mp.Close() } catch {}
+    }
+    try {
+        if (-not [string]::IsNullOrEmpty($CmdFile) -and [System.IO.File]::Exists($CmdFile)) {
+            [System.IO.File]::Delete($CmdFile)
         }
+    } catch {}
+    try {
+        if (-not [string]::IsNullOrEmpty($StateFile) -and [System.IO.File]::Exists($StateFile)) {
+            [System.IO.File]::Delete($StateFile)
+        }
+    } catch {}
+    try { $dispatcher.InvokeShutdown() } catch {}
+}
+
+$timer.add_Tick({
+    $script:parentCheckCounter++
+    if ($ParentPid -gt 0 -and ($script:parentCheckCounter % 10 -eq 0)) {
+        try {
+            $p = [System.Diagnostics.Process]::GetProcessById($ParentPid)
+            if ($null -eq $p -or $p.HasExited) {
+                Shutdown-Helper
+                return
+            }
+        } catch {
+            Shutdown-Helper
+            return
+        }
+    }
+
+    if (-not [string]::IsNullOrEmpty($CmdFile) -and [System.IO.File]::Exists($CmdFile)) {
+        try {
+            $text = [System.IO.File]::ReadAllText($CmdFile, $utf8)
+            if (-not [string]::IsNullOrEmpty($text) -and $text -ne $script:lastCmdText) {
+                $map = @{}
+                foreach ($rawLine in ($text -split ""`n"")) {
+                    $line = $rawLine.Trim()
+                    $idx = $line.IndexOf('=')
+                    if ($idx -gt 0) {
+                        $map[$line.Substring(0, $idx)] = $line.Substring($idx + 1)
+                    }
+                }
+                if (-not ($map['QUIT'] -eq '1' -or $map.ContainsKey('SEEK_SEC'))) {
+                    return
+                }
+                $script:lastCmdText = $text
+                if ($map['QUIT'] -eq '1') {
+                    Shutdown-Helper
+                    return
+                }
+
+                $inv = [System.Globalization.CultureInfo]::InvariantCulture
+                $gen = 0
+                [int]::TryParse($map['GEN'], [ref]$gen) | Out-Null
+                $stop = ($map['STOP'] -eq '1')
+                $muted = ($map['MUTED'] -ne '0')
+                $vol = 0.35
+                [double]::TryParse($map['VOL'], [System.Globalization.NumberStyles]::Float, $inv, [ref]$vol) | Out-Null
+                $speed = 1.0
+                [double]::TryParse($map['SPEED'], [System.Globalization.NumberStyles]::Float, $inv, [ref]$speed) | Out-Null
+                $paused = ($map['PAUSED'] -eq '1')
+                $seekSeq = 0
+                [int]::TryParse($map['SEEK_SEQ'], [ref]$seekSeq) | Out-Null
+                $seekSec = 0.0
+                [double]::TryParse($map['SEEK_SEC'], [System.Globalization.NumberStyles]::Float, $inv, [ref]$seekSec) | Out-Null
+
+                $script:curMuted = $muted
+                $script:curVol = $vol
+                $script:curSpeed = $speed
+                $script:curPaused = $paused
+
+                if ($stop) {
+                    $script:curGen = $gen
+                    $script:curPath = """"
+                    $script:opened = $false
+                    $script:hasAudio = $false
+                    $script:duration = 0.0
+                    $script:lastError = """"
+                    $script:pendingSeek = -1.0
+                    if ($script:hasOpenedOnce) {
+                        try { $mp.Stop() } catch {}
+                        try { $mp.Close() } catch {}
+                        $script:hasOpenedOnce = $false
+                    }
+                    Write-State $true
+                    return
+                }
+
+                $pathB64 = $map['PATH_B64']
+                $targetPath = """"
+                if (-not [string]::IsNullOrEmpty($pathB64)) {
+                    $targetPath = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($pathB64))
+                }
+
+                if ($gen -ne $script:curGen -or $targetPath -ne $script:curPath) {
+                    $script:curGen = $gen
+                    $script:curPath = $targetPath
+                    $script:opened = $false
+                    $script:hasAudio = $false
+                    $script:duration = 0.0
+                    $script:lastError = """"
+                    $script:lastSeekSeq = $seekSeq
+                    $script:pendingSeek = if ($seekSec -gt 0.05) { $seekSec } else { -1.0 }
+                    if ($script:hasOpenedOnce) {
+                        try { $mp.Stop() } catch {}
+                        try { $mp.Close() } catch {}
+                    }
+                    if (-not [string]::IsNullOrEmpty($targetPath) -and [System.IO.File]::Exists($targetPath)) {
+                        $script:hasOpenedOnce = $true
+                        if ($script:curPaused) {
+                            $mp.IsMuted = $true
+                            $mp.Volume = 0.0
+                        } else {
+                            $mp.IsMuted = $script:curMuted
+                            $mp.Volume = if ($script:curMuted) { 0.0 } else { [Math]::Max(0.0, [Math]::Min(1.0, $script:curVol)) }
+                        }
+                        $mp.SpeedRatio = [Math]::Max(0.5, [Math]::Min(2.0, $script:curSpeed))
+                        $mp.Open((New-Object System.Uri($targetPath)))
+                        $mp.Play()
+                    } else {
+                        $script:lastError = ""FileNotFound""
+                    }
+                    Write-State $true
+                } else {
+                    if ($seekSeq -ne $script:lastSeekSeq) {
+                        $script:lastSeekSeq = $seekSeq
+                        if ($script:opened) {
+                            try { $mp.Position = [TimeSpan]::FromSeconds([Math]::Max(0.0, $seekSec)) } catch {}
+                        } else {
+                            $script:pendingSeek = $seekSec
+                        }
+                    }
+                    Apply-Playback
+                    Write-State $true
+                }
+            }
+        } catch {
+            $script:lastError = $_.Exception.Message
+        }
+    }
+
+    Write-State $false
+})
+
+$timer.Start()
+Write-State $true
+[System.Windows.Threading.Dispatcher]::Run()
+";
 
         private readonly object _lock = new object();
+        private readonly string _scriptPath;
+        private readonly string _cmdPath;
+        private readonly string _statePath;
+        private readonly int _selfPid;
+
         private Thread _worker;
-        private volatile bool _stopRequested;
-        private volatile bool _paused;
-        private volatile bool _muted = true;
-        private volatile float _volume = CustomLobbyBgPolicy.DefaultVolume;
-        private volatile float _speed = CustomLobbyBgPolicy.DefaultSpeed;
+        private Process _process;
+        private DateTime _nextLaunchAllowedUtc = DateTime.MinValue;
+        private bool _disposed;
+        private bool _dirty;
+        private bool _prewarmRequested;
+        private bool _active;
+        private string _activePath = "";
+        private int _generation;
+        private bool _muted = true;
+        private float _volume = CustomLobbyBgPolicy.DefaultVolume;
+        private float _speed = CustomLobbyBgPolicy.DefaultSpeed;
+        private bool _paused;
+        private int _seekSeq;
+        private double _seekSeconds;
+
         private volatile bool _hasAudio;
         private double _currentTimeSeconds;
-        private int _generation;
+        private int _loggedReadyGen = -1;
+        private int _loggedErrorGen = -1;
 
-        private bool _seekPending;
-        private double _seekTargetSeconds;
-        private IntPtr _activeWaveOut = IntPtr.Zero;
+        internal WindowsLobbyAudioPlayer()
+        {
+            int pid = 0;
+            try
+            {
+                pid = Process.GetCurrentProcess().Id;
+            }
+            catch
+            {
+            }
+            _selfPid = pid;
+            string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
+            string tempDir = Path.GetTempPath();
+            _scriptPath = Path.Combine(tempDir, ScriptFileName);
+            _cmdPath = Path.Combine(tempDir, $"xingshu_lobby_audio_{pid}_{tag}.cmd");
+            _statePath = Path.Combine(tempDir, $"xingshu_lobby_audio_{pid}_{tag}.state");
+        }
 
         internal bool HasAudio => _hasAudio;
 
@@ -147,529 +335,446 @@ namespace XingShuRuntime.Utilities
             }
         }
 
-        internal void StartFile(string fullPath, bool muted, float volume, float speed, bool paused, double startSeconds)
+        internal void Prewarm()
         {
-            Stop();
-            if (string.IsNullOrEmpty(fullPath))
-            {
-                return;
-            }
-
-            int gen;
             lock (_lock)
             {
-                _stopRequested = false;
+                if (_disposed) return;
+                _prewarmRequested = true;
+                _dirty = true;
+                EnsureWorkerThreadLocked();
+                Monitor.PulseAll(_lock);
+            }
+        }
+
+        internal void StartFile(string fullPath, bool muted, float volume, float speed, bool paused, double startSeconds)
+        {
+            if (string.IsNullOrEmpty(fullPath))
+            {
+                Stop();
+                return;
+            }
+            lock (_lock)
+            {
+                if (_disposed) return;
+                _active = true;
+                _activePath = fullPath;
+                _generation++;
                 _muted = muted;
                 _volume = CustomLobbyBgPolicy.ClampVolume(volume);
                 _speed = CustomLobbyBgPolicy.ClampSpeed(speed);
                 _paused = paused;
+                if (startSeconds > 0.05)
+                {
+                    _seekSeq++;
+                    _seekSeconds = startSeconds;
+                }
+                else
+                {
+                    _seekSeconds = 0.0;
+                }
                 _hasAudio = false;
                 _currentTimeSeconds = startSeconds > 0.0 ? startSeconds : 0.0;
-                _seekPending = startSeconds > 0.05;
-                _seekTargetSeconds = _currentTimeSeconds;
-                gen = ++_generation;
+                _loggedReadyGen = -1;
+                _loggedErrorGen = -1;
+                _dirty = true;
+                EnsureWorkerThreadLocked();
+                Monitor.PulseAll(_lock);
             }
-
-            Thread t = new Thread(() => WorkerMain(fullPath, gen))
-            {
-                IsBackground = true,
-                Name = "XingShu_LobbyAudio"
-            };
-            try
-            {
-                t.SetApartmentState(ApartmentState.MTA);
-            }
-            catch
-            {
-            }
-            _worker = t;
-            t.Start();
         }
 
         internal void SetAudioParams(bool muted, float volume, float speed)
         {
-            _muted = muted;
-            _volume = CustomLobbyBgPolicy.ClampVolume(volume);
-            _speed = CustomLobbyBgPolicy.ClampSpeed(speed);
+            float cv = CustomLobbyBgPolicy.ClampVolume(volume);
+            float cs = CustomLobbyBgPolicy.ClampSpeed(speed);
+            lock (_lock)
+            {
+                if (_disposed) return;
+                if (_muted == muted && Math.Abs(_volume - cv) < 0.0005f && Math.Abs(_speed - cs) < 0.0005f)
+                {
+                    return;
+                }
+                _muted = muted;
+                _volume = cv;
+                _speed = cs;
+                if (_active)
+                {
+                    _dirty = true;
+                    EnsureWorkerThreadLocked();
+                    Monitor.PulseAll(_lock);
+                }
+            }
         }
 
         internal void SetPaused(bool paused)
         {
-            _paused = paused;
-            if (paused)
+            lock (_lock)
             {
-                IntPtr hwo;
-                lock (_lock)
+                if (_disposed || _paused == paused) return;
+                _paused = paused;
+                if (_active)
                 {
-                    hwo = _activeWaveOut;
-                }
-                if (hwo != IntPtr.Zero)
-                {
-                    try { waveOutReset(hwo); } catch { }
+                    _dirty = true;
+                    EnsureWorkerThreadLocked();
+                    Monitor.PulseAll(_lock);
                 }
             }
         }
 
         internal void RequestSeek(double seconds)
         {
+            double clamped = seconds > 0.0 ? seconds : 0.0;
             lock (_lock)
             {
-                _seekTargetSeconds = seconds > 0.0 ? seconds : 0.0;
-                _seekPending = true;
-                _currentTimeSeconds = _seekTargetSeconds;
-                IntPtr hwo = _activeWaveOut;
-                if (hwo != IntPtr.Zero)
+                if (_disposed) return;
+                _seekSeq++;
+                _seekSeconds = clamped;
+                _currentTimeSeconds = clamped;
+                if (_active)
                 {
-                    try { waveOutReset(hwo); } catch { }
+                    _dirty = true;
+                    EnsureWorkerThreadLocked();
+                    Monitor.PulseAll(_lock);
                 }
             }
         }
 
         internal void Stop()
         {
-            _stopRequested = true;
-            IntPtr hwo;
-            Thread t;
             lock (_lock)
             {
+                if (!_active && !_prewarmRequested) return;
+                _active = false;
+                _activePath = "";
                 _generation++;
-                hwo = _activeWaveOut;
-                t = _worker;
-                _worker = null;
+                _hasAudio = false;
+                _currentTimeSeconds = 0.0;
+                if (_process != null || _worker != null)
+                {
+                    _dirty = true;
+                    Monitor.PulseAll(_lock);
+                }
             }
-            if (hwo != IntPtr.Zero)
-            {
-                try { waveOutReset(hwo); } catch { }
-            }
-            if (t != null && t.IsAlive && t != Thread.CurrentThread)
-            {
-                try { t.Join(400); } catch { }
-            }
-            _hasAudio = false;
         }
 
         public void Dispose()
         {
-            Stop();
+            bool sendQuit;
+            string quitPayload = "";
+            Process procToClose = null;
+            lock (_lock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                _active = false;
+                _prewarmRequested = false;
+                _hasAudio = false;
+                _generation++;
+                sendQuit = _process != null || _worker != null;
+                if (sendQuit)
+                {
+                    quitPayload = CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(
+                        _generation, true, true, "", true, 0f, 1f, true, _seekSeq, 0.0);
+                }
+                procToClose = _process;
+                _process = null;
+                _dirty = true;
+                Monitor.PulseAll(_lock);
+            }
+
+            if (sendQuit && !string.IsNullOrEmpty(quitPayload))
+            {
+                try
+                {
+                    File.WriteAllText(_cmdPath, quitPayload, Utf8NoBom);
+                }
+                catch
+                {
+                }
+            }
+
+            if (procToClose != null)
+            {
+                try
+                {
+                    procToClose.Dispose();
+                }
+                catch
+                {
+                }
+            }
         }
 
-        private void WorkerMain(string fullPath, int gen)
+        private void EnsureWorkerThreadLocked()
         {
-            bool mfStarted = false;
-            IMFSourceReader reader = null;
-            IntPtr hwo = IntPtr.Zero;
-            IntPtr propVarPtr = IntPtr.Zero;
-            IntPtr[] hdrPtrs = new IntPtr[RingBufferCount];
-            IntPtr[] dataPtrs = new IntPtr[RingBufferCount];
-            bool[] inUse = new bool[RingBufferCount];
+            if (_worker != null) return;
+            Thread t = new Thread(SyncLoop)
+            {
+                IsBackground = true,
+                Name = "XingShu_LobbyAudioSync"
+            };
+            _worker = t;
+            t.Start();
+        }
 
+        private void SyncLoop()
+        {
+            string lastWrittenCmd = null;
+            while (true)
+            {
+                bool disposed;
+                bool active;
+                bool prewarm;
+                int expectedGen;
+                string cmdPayload;
+                Process currentProc;
+
+                lock (_lock)
+                {
+                    while (!_dirty && !_disposed)
+                    {
+                        Monitor.Wait(_lock, 180);
+                    }
+                    disposed = _disposed;
+                    _dirty = false;
+                    active = _active;
+                    prewarm = _prewarmRequested;
+                    expectedGen = _generation;
+                    currentProc = _process;
+                    cmdPayload = CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(
+                        expectedGen,
+                        !active,
+                        disposed,
+                        active ? _activePath : "",
+                        _muted,
+                        _volume,
+                        _speed,
+                        _paused || !active,
+                        _seekSeq,
+                        _seekSeconds);
+                }
+
+                if (disposed)
+                {
+                    return;
+                }
+
+                if (currentProc != null)
+                {
+                    bool exited = false;
+                    try
+                    {
+                        exited = currentProc.HasExited;
+                    }
+                    catch
+                    {
+                        exited = true;
+                    }
+                    if (exited)
+                    {
+                        try { currentProc.Dispose(); } catch { }
+                        lock (_lock)
+                        {
+                            if (_process == currentProc) _process = null;
+                        }
+                        currentProc = null;
+                        lastWrittenCmd = null;
+                    }
+                }
+
+                bool needHelper = active || prewarm;
+                if (needHelper)
+                {
+                    if (!string.Equals(cmdPayload, lastWrittenCmd, StringComparison.Ordinal))
+                    {
+                        try
+                        {
+                            File.WriteAllText(_cmdPath, cmdPayload, Utf8NoBom);
+                            lastWrittenCmd = cmdPayload;
+                        }
+                        catch (Exception ex)
+                        {
+                            LogSafe($"[WindowsLobbyAudioPlayer] 写入指令文件失败: {ex.Message}");
+                        }
+                    }
+
+                    if (currentProc == null && DateTime.UtcNow >= _nextLaunchAllowedUtc)
+                    {
+                        currentProc = LaunchHelperProcess();
+                        if (currentProc == null)
+                        {
+                            _nextLaunchAllowedUtc = DateTime.UtcNow.AddSeconds(3.0);
+                        }
+                    }
+
+                    PollHelperState(expectedGen, active);
+                }
+            }
+        }
+
+        private Process LaunchHelperProcess()
+        {
             try
             {
-                if (MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET) != 0)
-                {
-                    return;
-                }
-                mfStarted = true;
+                EnsureHelperScriptWritten();
 
-                if (MFCreateSourceReaderFromURL(fullPath, IntPtr.Zero, out reader) != 0 || reader == null)
+                string exe = "powershell.exe";
+                string sysRoot = Environment.GetEnvironmentVariable("SystemRoot");
+                if (!string.IsNullOrEmpty(sysRoot))
                 {
-                    return;
-                }
-
-                reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, false);
-                if (reader.SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, true) != 0)
-                {
-                    return;
+                    string candidate = Path.Combine(sysRoot, @"System32\WindowsPowerShell\v1.0\powershell.exe");
+                    if (File.Exists(candidate))
+                    {
+                        exe = candidate;
+                    }
                 }
 
-                if (!ConfigurePcm16Output(reader, out uint channels, out uint sampleRate))
-                {
-                    return;
-                }
+                string args = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File \"{0}\" -ParentPid {1} -CmdFile \"{2}\" -StateFile \"{3}\"",
+                    _scriptPath,
+                    _selfPid,
+                    _cmdPath,
+                    _statePath);
 
-                if (!OpenWaveOut(channels, sampleRate, out hwo))
+                var psi = new ProcessStartInfo(exe)
                 {
-                    return;
-                }
+                    Arguments = args,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
 
-                propVarPtr = AllocZeroed(PropVariantSize);
-                for (int i = 0; i < RingBufferCount; i++)
+                Process started = Process.Start(psi);
+                if (started == null)
                 {
-                    dataPtrs[i] = Marshal.AllocHGlobal(RingBufferCapacity);
-                    hdrPtrs[i] = AllocZeroed(WaveHdrSize);
-                    WriteWaveHdr(hdrPtrs[i], dataPtrs[i], (uint)RingBufferCapacity);
+                    LogSafe("[WindowsLobbyAudioPlayer] Process.Start 返回 null");
+                    return null;
                 }
 
                 lock (_lock)
                 {
-                    if (_stopRequested || _generation != gen)
+                    if (_disposed)
+                    {
+                        try
+                        {
+                            File.WriteAllText(
+                                _cmdPath,
+                                CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(_generation, true, true, "", true, 0f, 1f, true, _seekSeq, 0.0),
+                                Utf8NoBom);
+                        }
+                        catch
+                        {
+                        }
+                        try { started.Dispose(); } catch { }
+                        return null;
+                    }
+                    _process = started;
+                }
+
+                int childPid = 0;
+                try { childPid = started.Id; } catch { }
+                LogSafe($"[WindowsLobbyAudioPlayer] 启动 WPF 伴随音频进程: childPid={childPid}, parentPid={_selfPid}");
+                return started;
+            }
+            catch (Exception ex)
+            {
+                LogSafe($"[WindowsLobbyAudioPlayer] 启动伴随音频进程异常: {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private void EnsureHelperScriptWritten()
+        {
+            bool needWrite = true;
+            try
+            {
+                if (File.Exists(_scriptPath))
+                {
+                    string existing = File.ReadAllText(_scriptPath, Utf8NoBom);
+                    if (string.Equals(existing, HelperScriptContent, StringComparison.Ordinal))
+                    {
+                        needWrite = false;
+                    }
+                }
+            }
+            catch
+            {
+                needWrite = true;
+            }
+            if (needWrite)
+            {
+                File.WriteAllText(_scriptPath, HelperScriptContent, Utf8NoBom);
+            }
+        }
+
+        private void PollHelperState(int expectedGen, bool active)
+        {
+            if (!active) return;
+            try
+            {
+                if (!File.Exists(_statePath)) return;
+                string raw = File.ReadAllText(_statePath, Utf8NoBom);
+                if (!CustomLobbyBgPolicy.TryParseWindowsAudioState(
+                    raw,
+                    out int stateGen,
+                    out bool opened,
+                    out bool hasAudio,
+                    out double posSec,
+                    out double durSec,
+                    out string error))
+                {
+                    return;
+                }
+                if (stateGen != expectedGen)
+                {
+                    return;
+                }
+
+                bool logReady = false;
+                bool logErr = false;
+                lock (_lock)
+                {
+                    if (_disposed || !_active || _generation != stateGen)
                     {
                         return;
                     }
-                    _activeWaveOut = hwo;
+                    _hasAudio = opened && hasAudio;
+                    _currentTimeSeconds = posSec;
+                    if (!string.IsNullOrEmpty(error) && _loggedErrorGen != stateGen)
+                    {
+                        _loggedErrorGen = stateGen;
+                        logErr = true;
+                    }
+                    else if (opened && _loggedReadyGen != stateGen)
+                    {
+                        _loggedReadyGen = stateGen;
+                        logReady = true;
+                    }
                 }
-                _hasAudio = true;
 
-                byte[] srcBuf = new byte[RingBufferCapacity];
-                byte[] dstBuf = new byte[RingBufferCapacity];
-                float prevGain = _muted ? 0f : _volume;
-                double fracPos = 0.0;
-                bool wasPaused = _paused;
-                int cursor = 0;
-
-                while (!_stopRequested && _generation == gen)
+                if (logErr)
                 {
-                    bool pausedNow = _paused;
-                    if (pausedNow)
-                    {
-                        if (!wasPaused)
-                        {
-                            try { waveOutReset(hwo); } catch { }
-                            ReclaimFinishedOrResetBuffers(hwo, hdrPtrs, inUse);
-                            prevGain = 0f;
-                        }
-                        wasPaused = true;
-                        Thread.Sleep(25);
-                        continue;
-                    }
-
-                    if (wasPaused)
-                    {
-                        wasPaused = false;
-                        prevGain = 0f; // soft fade-in after resume
-                    }
-
-                    double? seekTo = null;
-                    lock (_lock)
-                    {
-                        if (_seekPending)
-                        {
-                            _seekPending = false;
-                            seekTo = _seekTargetSeconds;
-                        }
-                    }
-                    if (seekTo.HasValue)
-                    {
-                        try { waveOutReset(hwo); } catch { }
-                        ReclaimFinishedOrResetBuffers(hwo, hdrPtrs, inUse);
-                        SeekReader(reader, propVarPtr, seekTo.Value);
-                        fracPos = 0.0;
-                        prevGain = 0f;
-                    }
-
-                    ReclaimFinishedOrResetBuffers(hwo, hdrPtrs, inUse);
-
-                    int slot = FindFreeSlot(inUse, ref cursor);
-                    if (slot < 0)
-                    {
-                        Thread.Sleep(8);
-                        continue;
-                    }
-
-                    uint actualIdx, streamFlags;
-                    long timestamp100Ns;
-                    IMFSample sample;
-                    int hrRead = reader.ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, out actualIdx, out streamFlags, out timestamp100Ns, out sample);
-                    if (hrRead != 0 || (streamFlags & MF_SOURCE_READERF_ERROR) != 0)
-                    {
-                        if (sample != null) Marshal.ReleaseComObject(sample);
-                        break;
-                    }
-
-                    if ((streamFlags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0)
-                    {
-                        if (ConfigurePcm16Output(reader, out uint newCh, out uint newSr) && (newCh != channels || newSr != sampleRate))
-                        {
-                            CloseWaveOut(hwo, hdrPtrs, inUse);
-                            channels = newCh;
-                            sampleRate = newSr;
-                            if (!OpenWaveOut(channels, sampleRate, out hwo))
-                            {
-                                if (sample != null) Marshal.ReleaseComObject(sample);
-                                break;
-                            }
-                            lock (_lock) { _activeWaveOut = hwo; }
-                            fracPos = 0.0;
-                        }
-                    }
-
-                    if ((streamFlags & MF_SOURCE_READERF_ENDOFSTREAM) != 0 && sample == null)
-                    {
-                        SeekReader(reader, propVarPtr, 0.0);
-                        fracPos = 0.0;
-                        continue;
-                    }
-
-                    if (sample == null)
-                    {
-                        Thread.Sleep(5);
-                        continue;
-                    }
-
-                    try
-                    {
-                        lock (_lock)
-                        {
-                            _currentTimeSeconds = timestamp100Ns / 10000000.0;
-                        }
-
-                        IMFMediaBuffer mediaBuf = null;
-                        try
-                        {
-                            if (sample.ConvertToContiguousBuffer(out mediaBuf) != 0 || mediaBuf == null)
-                            {
-                                continue;
-                            }
-                            IntPtr rawPtr;
-                            uint maxLen, curLen;
-                            if (mediaBuf.Lock(out rawPtr, out maxLen, out curLen) != 0)
-                            {
-                                continue;
-                            }
-                            try
-                            {
-                                int len = (int)curLen;
-                                if (len <= 0) continue;
-                                if (len > srcBuf.Length)
-                                {
-                                    srcBuf = new byte[len];
-                                }
-                                Marshal.Copy(rawPtr, srcBuf, 0, len);
-
-                                float targetGain = _muted ? 0f : _volume;
-                                CustomLobbyBgPolicy.ProcessPcm16Chunk(
-                                    srcBuf, len, (int)channels, _speed, prevGain, targetGain,
-                                    ref fracPos, dstBuf, out int dstBytes);
-                                prevGain = targetGain;
-
-                                if (dstBytes > 0)
-                                {
-                                    if (dstBytes > RingBufferCapacity) dstBytes = RingBufferCapacity;
-                                    Marshal.Copy(dstBuf, 0, dataPtrs[slot], dstBytes);
-                                    WriteWaveHdr(hdrPtrs[slot], dataPtrs[slot], (uint)dstBytes);
-                                    if (waveOutPrepareHeader(hwo, hdrPtrs[slot], (uint)WaveHdrSize) == 0)
-                                    {
-                                        if (waveOutWrite(hwo, hdrPtrs[slot], (uint)WaveHdrSize) == 0)
-                                        {
-                                            inUse[slot] = true;
-                                        }
-                                        else
-                                        {
-                                            waveOutUnprepareHeader(hwo, hdrPtrs[slot], (uint)WaveHdrSize);
-                                        }
-                                    }
-                                }
-                            }
-                            finally
-                            {
-                                mediaBuf.Unlock();
-                            }
-                        }
-                        finally
-                        {
-                            if (mediaBuf != null) Marshal.ReleaseComObject(mediaBuf);
-                        }
-                    }
-                    finally
-                    {
-                        Marshal.ReleaseComObject(sample);
-                    }
-
-                    if ((streamFlags & MF_SOURCE_READERF_ENDOFSTREAM) != 0)
-                    {
-                        SeekReader(reader, propVarPtr, 0.0);
-                        fracPos = 0.0;
-                    }
+                    LogSafe($"[WindowsLobbyAudioPlayer] 音频解码失败 (gen={stateGen}): {error}");
                 }
-            }
-            catch
-            {
-            }
-            finally
-            {
-                _hasAudio = false;
-                lock (_lock)
+                else if (logReady)
                 {
-                    if (_activeWaveOut == hwo)
-                    {
-                        _activeWaveOut = IntPtr.Zero;
-                    }
+                    LogSafe($"[WindowsLobbyAudioPlayer] 音频就绪 (gen={stateGen}): hasAudio={hasAudio}, duration={durSec:F2}s");
                 }
-                if (hwo != IntPtr.Zero)
-                {
-                    CloseWaveOut(hwo, hdrPtrs, inUse);
-                }
-                if (propVarPtr != IntPtr.Zero)
-                {
-                    Marshal.FreeHGlobal(propVarPtr);
-                }
-                for (int i = 0; i < RingBufferCount; i++)
-                {
-                    if (hdrPtrs[i] != IntPtr.Zero) { Marshal.FreeHGlobal(hdrPtrs[i]); hdrPtrs[i] = IntPtr.Zero; }
-                    if (dataPtrs[i] != IntPtr.Zero) { Marshal.FreeHGlobal(dataPtrs[i]); dataPtrs[i] = IntPtr.Zero; }
-                }
-                if (reader != null)
-                {
-                    try { Marshal.ReleaseComObject(reader); } catch { }
-                }
-                if (mfStarted)
-                {
-                    try { MFShutdown(); } catch { }
-                }
-            }
-        }
-
-        private static bool ConfigurePcm16Output(IMFSourceReader reader, out uint channels, out uint sampleRate)
-        {
-            channels = 0;
-            sampleRate = 0;
-            IMFMediaType req = null;
-            IMFMediaType actual = null;
-            try
-            {
-                if (MFCreateMediaType(out req) != 0 || req == null) return false;
-                Guid gMajor = MF_MT_MAJOR_TYPE, gAudio = MFMediaType_Audio;
-                Guid gSub = MF_MT_SUBTYPE, gPcm = MFAudioFormat_PCM;
-                Guid gBits = MF_MT_AUDIO_BITS_PER_SAMPLE;
-                req.SetGUID(ref gMajor, ref gAudio);
-                req.SetGUID(ref gSub, ref gPcm);
-                req.SetUINT32(ref gBits, 16);
-
-                if (reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, IntPtr.Zero, req) != 0)
-                {
-                    return false;
-                }
-                if (reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, out actual) != 0 || actual == null)
-                {
-                    return false;
-                }
-
-                Guid gCh = MF_MT_AUDIO_NUM_CHANNELS, gSr = MF_MT_AUDIO_SAMPLES_PER_SECOND;
-                actual.GetUINT32(ref gCh, out channels);
-                actual.GetUINT32(ref gSr, out sampleRate);
-                if (channels > 2)
-                {
-                    Marshal.ReleaseComObject(actual);
-                    actual = null;
-                    req.SetUINT32(ref gCh, 2);
-                    if (reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, IntPtr.Zero, req) == 0
-                        && reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, out actual) == 0
-                        && actual != null)
-                    {
-                        actual.GetUINT32(ref gCh, out channels);
-                        actual.GetUINT32(ref gSr, out sampleRate);
-                    }
-                }
-                return channels >= 1 && channels <= 2 && sampleRate >= 8000;
-            }
-            catch
-            {
-                return false;
-            }
-            finally
-            {
-                if (actual != null) try { Marshal.ReleaseComObject(actual); } catch { }
-                if (req != null) try { Marshal.ReleaseComObject(req); } catch { }
-            }
-        }
-
-        private static bool OpenWaveOut(uint channels, uint sampleRate, out IntPtr hwo)
-        {
-            hwo = IntPtr.Zero;
-            IntPtr wfxPtr = IntPtr.Zero;
-            try
-            {
-                wfxPtr = AllocZeroed(WaveFormatExSize);
-                ushort blockAlign = (ushort)(channels * 2);
-                uint avgBytesPerSec = sampleRate * blockAlign;
-                Marshal.WriteInt16(wfxPtr, 0, 1);                      // wFormatTag = WAVE_FORMAT_PCM
-                Marshal.WriteInt16(wfxPtr, 2, (short)channels);        // nChannels
-                Marshal.WriteInt32(wfxPtr, 4, (int)sampleRate);        // nSamplesPerSec
-                Marshal.WriteInt32(wfxPtr, 8, (int)avgBytesPerSec);    // nAvgBytesPerSec
-                Marshal.WriteInt16(wfxPtr, 12, (short)blockAlign);     // nBlockAlign
-                Marshal.WriteInt16(wfxPtr, 14, 16);                    // wBitsPerSample
-                Marshal.WriteInt16(wfxPtr, 16, 0);                     // cbSize
-                return waveOutOpen(out hwo, 0xFFFFFFFFu, wfxPtr, IntPtr.Zero, IntPtr.Zero, 0) == 0 && hwo != IntPtr.Zero;
-            }
-            finally
-            {
-                if (wfxPtr != IntPtr.Zero) Marshal.FreeHGlobal(wfxPtr);
-            }
-        }
-
-        private static IntPtr AllocZeroed(int size)
-        {
-            IntPtr ptr = Marshal.AllocHGlobal(size);
-            byte[] zeros = new byte[size];
-            Marshal.Copy(zeros, 0, ptr, size);
-            return ptr;
-        }
-
-        private static void WriteWaveHdr(IntPtr hdrPtr, IntPtr dataPtr, uint length)
-        {
-            byte[] zeros = new byte[WaveHdrSize];
-            Marshal.Copy(zeros, 0, hdrPtr, WaveHdrSize);
-            Marshal.WriteIntPtr(hdrPtr, 0, dataPtr);
-            Marshal.WriteInt32(hdrPtr, WaveHdrLengthOffset, (int)length);
-        }
-
-        private static void ReclaimFinishedOrResetBuffers(IntPtr hwo, IntPtr[] hdrPtrs, bool[] inUse)
-        {
-            for (int i = 0; i < RingBufferCount; i++)
-            {
-                if (!inUse[i] || hdrPtrs[i] == IntPtr.Zero) continue;
-                uint flags = (uint)Marshal.ReadInt32(hdrPtrs[i], WaveHdrFlagsOffset);
-                if ((flags & WHDR_DONE) != 0 || (flags & WHDR_PREPARED) == 0)
-                {
-                    try { waveOutUnprepareHeader(hwo, hdrPtrs[i], (uint)WaveHdrSize); } catch { }
-                    inUse[i] = false;
-                }
-            }
-        }
-
-        private static int FindFreeSlot(bool[] inUse, ref int cursor)
-        {
-            for (int offset = 0; offset < RingBufferCount; offset++)
-            {
-                int idx = (cursor + offset) % RingBufferCount;
-                if (!inUse[idx])
-                {
-                    cursor = (idx + 1) % RingBufferCount;
-                    return idx;
-                }
-            }
-            return -1;
-        }
-
-        private static void SeekReader(IMFSourceReader reader, IntPtr propVarPtr, double seconds)
-        {
-            try
-            {
-                byte[] zeros = new byte[PropVariantSize];
-                Marshal.Copy(zeros, 0, propVarPtr, PropVariantSize);
-                Marshal.WriteInt16(propVarPtr, 0, 20); // VT_I8
-                long hns = seconds > 0.0 ? (long)(seconds * 10000000.0) : 0L;
-                Marshal.WriteInt64(propVarPtr, 8, hns);
-                Guid guidNull = Guid.Empty;
-                reader.SetCurrentPosition(ref guidNull, propVarPtr);
             }
             catch
             {
             }
         }
 
-        private static void CloseWaveOut(IntPtr hwo, IntPtr[] hdrPtrs, bool[] inUse)
+        private static void LogSafe(string message)
         {
-            try { waveOutReset(hwo); } catch { }
-            for (int i = 0; i < RingBufferCount; i++)
+            try
             {
-                if (inUse[i] && hdrPtrs[i] != IntPtr.Zero)
-                {
-                    try { waveOutUnprepareHeader(hwo, hdrPtrs[i], (uint)WaveHdrSize); } catch { }
-                    inUse[i] = false;
-                }
+                XingShuRuntimeHost.LogLifecycle(message);
             }
-            try { waveOutClose(hwo); } catch { }
+            catch
+            {
+            }
         }
     }
 }

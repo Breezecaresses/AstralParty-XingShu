@@ -927,14 +927,15 @@ namespace XingShuRuntime.Utilities
             {
                 EnsureVideoPlayer();
                 _activeVideoFullPath = fullPath;
+                _companionAudio.Prewarm();
                 _videoPlayer.Stop();
+                ConfigureVideoAudioBeforePrepare();
                 _videoPlayer.source = VideoSource.Url;
                 _videoPlayer.url = CustomLobbyBgPolicy.BuildFileUri(fullPath);
                 _videoPlayer.renderMode = VideoRenderMode.RenderTexture;
                 _videoPlayer.aspectRatio = VideoAspectRatio.NoScaling;
                 _videoPlayer.playOnAwake = false;
                 _videoPlayer.playbackSpeed = _speed;
-                ConfigureVideoAudioBeforePrepare();
                 ApplyVideoPlaybackSettings();
 
                 _videoPreparing = true;
@@ -1069,20 +1070,24 @@ namespace XingShuRuntime.Utilities
                         }
                     }
                 }
-                else if (playing && _companionAudio.HasAudio && Time.unscaledTime - _lastAudioDriftCheckAt >= 1.5f)
+                else if (playing && _companionAudio.HasAudio)
                 {
-                    _lastAudioDriftCheckAt = Time.unscaledTime;
-                    try
+                    float checkInterval = (Time.unscaledTime - _videoStartedAt) < 4.0f ? 0.5f : 1.5f;
+                    if (Time.unscaledTime - _lastAudioDriftCheckAt >= checkInterval)
                     {
-                        double vt = _videoPlayer.time;
-                        double at = _companionAudio.CurrentTimeSeconds;
-                        if (vt >= 0.0 && Math.Abs(at - vt) > 0.45)
+                        _lastAudioDriftCheckAt = Time.unscaledTime;
+                        try
                         {
-                            _companionAudio.RequestSeek(vt);
+                            double vt = _videoPlayer.time;
+                            double at = _companionAudio.CurrentTimeSeconds;
+                            if (vt >= 0.0 && Math.Abs(at - vt) > 0.45)
+                            {
+                                _companionAudio.RequestSeek(vt);
+                            }
                         }
-                    }
-                    catch
-                    {
+                        catch
+                        {
+                        }
                     }
                 }
             }

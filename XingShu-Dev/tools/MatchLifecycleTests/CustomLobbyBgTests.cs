@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using XingShuRuntime.Utilities;
 
 namespace XingShu.Tests
@@ -216,6 +217,62 @@ namespace XingShu.Tests
             Assert(outLen == 64, "0.5x speed doubles output bytes: " + outLen);
         }
 
+        private static void TestWindowsAudioProtocol()
+        {
+            string zhPath = @"E:\工作流\大厅素材\星引擎_40301496754-1-192.mp4";
+            string cmd = CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(
+                generation: 3,
+                stop: false,
+                quit: false,
+                fullPath: zhPath,
+                muted: false,
+                volume: 1.5f,   // should clamp to 1.0
+                speed: 0.25f,   // should clamp to 0.5
+                paused: false,
+                seekSeq: 2,
+                seekSeconds: 15.25);
+
+            string expectedB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(zhPath));
+            Assert(cmd.Contains("GEN=3\n"), "cmd GEN");
+            Assert(cmd.Contains("STOP=0\n"), "cmd STOP");
+            Assert(cmd.Contains("QUIT=0\n"), "cmd QUIT");
+            Assert(cmd.Contains("PATH_B64=" + expectedB64 + "\n"), "cmd Chinese UTF-8 base64");
+            Assert(cmd.Contains("MUTED=0\n"), "cmd MUTED=0");
+            Assert(cmd.Contains("VOL=1.0000\n"), "cmd clamped volume");
+            Assert(cmd.Contains("SPEED=0.5000\n"), "cmd clamped speed");
+            Assert(cmd.Contains("PAUSED=0\n"), "cmd PAUSED=0");
+            Assert(cmd.Contains("SEEK_SEQ=2\n"), "cmd SEEK_SEQ");
+            Assert(cmd.Contains("SEEK_SEC=15.250\n"), "cmd SEEK_SEC");
+
+            string stopQuit = CustomLobbyBgPolicy.BuildWindowsAudioCommandPayload(
+                generation: 4, stop: true, quit: true, fullPath: null,
+                muted: true, volume: -0.5f, speed: 5.0f, paused: true, seekSeq: 0, seekSeconds: -3.0);
+            Assert(stopQuit.Contains("STOP=1\n") && stopQuit.Contains("QUIT=1\n"), "stop/quit flags");
+            Assert(stopQuit.Contains("PATH_B64=\n"), "empty path base64");
+            Assert(stopQuit.Contains("VOL=0.0000\n") && stopQuit.Contains("SPEED=2.0000\n"), "clamped extremes");
+            Assert(stopQuit.Contains("SEEK_SEC=0.000\n"), "negative seek clamped to 0");
+
+            int gen;
+            bool opened;
+            bool hasAudio;
+            double pos;
+            double dur;
+            string err;
+
+            Assert(CustomLobbyBgPolicy.TryParseWindowsAudioState(
+                "3|1|1|15.125|109.000|", out gen, out opened, out hasAudio, out pos, out dur, out err), "parse playing state");
+            Assert(gen == 3 && opened && hasAudio && Math.Abs(pos - 15.125) < 0.001 && Math.Abs(dur - 109.0) < 0.001 && err == "",
+                "playing state fields");
+
+            Assert(CustomLobbyBgPolicy.TryParseWindowsAudioState(
+                "5|0|0|0.000|0.000|Codec missing | detail error", out gen, out opened, out hasAudio, out pos, out dur, out err), "parse error with pipe");
+            Assert(gen == 5 && !opened && !hasAudio && err == "Codec missing | detail error", "error preserves pipe and spaces");
+
+            Assert(!CustomLobbyBgPolicy.TryParseWindowsAudioState("", out gen, out opened, out hasAudio, out pos, out dur, out err), "empty invalid");
+            Assert(!CustomLobbyBgPolicy.TryParseWindowsAudioState("bad|1|1|0|0|", out gen, out opened, out hasAudio, out pos, out dur, out err), "non-int gen invalid");
+            Assert(!CustomLobbyBgPolicy.TryParseWindowsAudioState("1|1|1|0", out gen, out opened, out hasAudio, out pos, out dur, out err), "too few fields invalid");
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -225,6 +282,7 @@ namespace XingShu.Tests
             TestClampersAndFillModeAndUri();
             TestAudioAndVanillaBgmPolicy();
             TestPcm16Processing();
+            TestWindowsAudioProtocol();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

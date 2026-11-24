@@ -28,6 +28,10 @@ namespace XingShuRuntime.Utilities
 
         internal bool HasAudio => _prepared && _player != null;
 
+        internal void Prewarm()
+        {
+        }
+
         internal double CurrentTimeSeconds
         {
             get

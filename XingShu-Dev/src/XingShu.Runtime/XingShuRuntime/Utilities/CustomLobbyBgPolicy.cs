@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text;
 
 namespace XingShuRuntime.Utilities
 {
@@ -397,6 +399,97 @@ namespace XingShuRuntime.Utilities
             }
             fracFramePos = pos >= maxSrcFrames ? (pos - maxSrcFrames) : 0.0;
             dstBytes = outFrames * frameSize;
+        }
+
+        internal static string BuildWindowsAudioCommandPayload(
+            int generation,
+            bool stop,
+            bool quit,
+            string fullPath,
+            bool muted,
+            float volume,
+            float speed,
+            bool paused,
+            int seekSeq,
+            double seekSeconds)
+        {
+            string b64 = string.IsNullOrEmpty(fullPath)
+                ? ""
+                : Convert.ToBase64String(Encoding.UTF8.GetBytes(fullPath));
+            float clampedVol = ClampVolume(volume);
+            float clampedSpeed = ClampSpeed(speed);
+            double safeSeek = seekSeconds > 0.0 && !double.IsNaN(seekSeconds) && !double.IsInfinity(seekSeconds)
+                ? seekSeconds
+                : 0.0;
+
+            var sb = new StringBuilder(256);
+            sb.Append("GEN=").Append(generation).Append('\n');
+            sb.Append("STOP=").Append(stop ? "1" : "0").Append('\n');
+            sb.Append("QUIT=").Append(quit ? "1" : "0").Append('\n');
+            sb.Append("PATH_B64=").Append(b64).Append('\n');
+            sb.Append("MUTED=").Append(muted ? "1" : "0").Append('\n');
+            sb.Append("VOL=").Append(clampedVol.ToString("0.0000", CultureInfo.InvariantCulture)).Append('\n');
+            sb.Append("SPEED=").Append(clampedSpeed.ToString("0.0000", CultureInfo.InvariantCulture)).Append('\n');
+            sb.Append("PAUSED=").Append(paused ? "1" : "0").Append('\n');
+            sb.Append("SEEK_SEQ=").Append(seekSeq).Append('\n');
+            sb.Append("SEEK_SEC=").Append(safeSeek.ToString("0.000", CultureInfo.InvariantCulture)).Append('\n');
+            return sb.ToString();
+        }
+
+        internal static bool TryParseWindowsAudioState(
+            string content,
+            out int generation,
+            out bool opened,
+            out bool hasAudio,
+            out double posSeconds,
+            out double durationSeconds,
+            out string error)
+        {
+            generation = 0;
+            opened = false;
+            hasAudio = false;
+            posSeconds = 0.0;
+            durationSeconds = 0.0;
+            error = "";
+            if (string.IsNullOrEmpty(content))
+            {
+                return false;
+            }
+            string trimmed = content.Trim();
+            int p1 = trimmed.IndexOf('|');
+            if (p1 < 0) return false;
+            int p2 = trimmed.IndexOf('|', p1 + 1);
+            if (p2 < 0) return false;
+            int p3 = trimmed.IndexOf('|', p2 + 1);
+            if (p3 < 0) return false;
+            int p4 = trimmed.IndexOf('|', p3 + 1);
+            if (p4 < 0) return false;
+            int p5 = trimmed.IndexOf('|', p4 + 1);
+
+            string genStr = trimmed.Substring(0, p1);
+            string openStr = trimmed.Substring(p1 + 1, p2 - p1 - 1);
+            string audioStr = trimmed.Substring(p2 + 1, p3 - p2 - 1);
+            string posStr = trimmed.Substring(p3 + 1, p4 - p3 - 1);
+            string durStr = p5 >= 0 ? trimmed.Substring(p4 + 1, p5 - p4 - 1) : trimmed.Substring(p4 + 1);
+
+            if (!int.TryParse(genStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out generation))
+            {
+                return false;
+            }
+            opened = openStr == "1";
+            hasAudio = audioStr == "1";
+            if (!double.TryParse(posStr, NumberStyles.Float, CultureInfo.InvariantCulture, out posSeconds)
+                || double.IsNaN(posSeconds) || double.IsInfinity(posSeconds) || posSeconds < 0.0)
+            {
+                posSeconds = 0.0;
+            }
+            if (!double.TryParse(durStr, NumberStyles.Float, CultureInfo.InvariantCulture, out durationSeconds)
+                || double.IsNaN(durationSeconds) || double.IsInfinity(durationSeconds) || durationSeconds < 0.0)
+            {
+                durationSeconds = 0.0;
+            }
+            error = p5 >= 0 ? trimmed.Substring(p5 + 1).Trim() : "";
+            return true;
         }
     }
 }
