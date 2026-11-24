@@ -174,6 +174,48 @@ namespace XingShu.Tests
             Assert(CustomLobbyBgPolicy.ShouldMuteVanillaLobbyBgm(true, true, true, true), "both visible -> mute vanilla BGM");
         }
 
+        private static void TestPcm16Processing()
+        {
+            byte[] src = new byte[8 * 4]; // 8 stereo frames
+            for (int f = 0; f < 8; f++)
+            {
+                short l = (short)(2000 * (f + 1));
+                short r = (short)(-2000 * (f + 1));
+                int o = f * 4;
+                src[o] = (byte)(l & 0xFF); src[o + 1] = (byte)((l >> 8) & 0xFF);
+                src[o + 2] = (byte)(r & 0xFF); src[o + 3] = (byte)((r >> 8) & 0xFF);
+            }
+
+            byte[] dst = new byte[src.Length * 3];
+            double frac = 0.0;
+            int outLen;
+
+            // Zero gain -> all zero silent bytes
+            CustomLobbyBgPolicy.ProcessPcm16Chunk(src, src.Length, 2, 1.0f, 0f, 0f, ref frac, dst, out outLen);
+            Assert(outLen == src.Length, "1.0x length preserved");
+            for (int i = 0; i < outLen; i++)
+            {
+                Assert(dst[i] == 0, "zero gain produces silent PCM byte at " + i);
+            }
+
+            // 0.5x gain halves sample values cleanly
+            frac = 0.0;
+            CustomLobbyBgPolicy.ProcessPcm16Chunk(src, src.Length, 2, 1.0f, 0.5f, 0.5f, ref frac, dst, out outLen);
+            short halfL = (short)(dst[0] | (dst[1] << 8));
+            short halfR = (short)(dst[2] | (dst[3] << 8));
+            Assert(halfL == 1000 && halfR == -1000, "0.5x gain halves sample: " + halfL + "," + halfR);
+
+            // 2.0x speed halves frame count (~4 frames = 16 bytes)
+            frac = 0.0;
+            CustomLobbyBgPolicy.ProcessPcm16Chunk(src, src.Length, 2, 2.0f, 1.0f, 1.0f, ref frac, dst, out outLen);
+            Assert(outLen == 16, "2.0x speed halves output bytes: " + outLen);
+
+            // 0.5x speed doubles frame count (~16 frames = 64 bytes)
+            frac = 0.0;
+            CustomLobbyBgPolicy.ProcessPcm16Chunk(src, src.Length, 2, 0.5f, 1.0f, 1.0f, ref frac, dst, out outLen);
+            Assert(outLen == 64, "0.5x speed doubles output bytes: " + outLen);
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -182,6 +224,7 @@ namespace XingShu.Tests
             TestIndexSelection();
             TestClampersAndFillModeAndUri();
             TestAudioAndVanillaBgmPolicy();
+            TestPcm16Processing();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

@@ -311,5 +311,92 @@ namespace XingShuRuntime.Utilities
         {
             return featureEnabled && muteVanillaBgm && (homeVisible || subBgVisible);
         }
+
+        internal static void ProcessPcm16Chunk(
+            byte[] src,
+            int srcBytes,
+            int channels,
+            float speed,
+            float startGain,
+            float endGain,
+            ref double fracFramePos,
+            byte[] dst,
+            out int dstBytes)
+        {
+            dstBytes = 0;
+            if (src == null || dst == null || channels <= 0 || srcBytes <= 0 || dst.Length <= 0)
+            {
+                return;
+            }
+            int frameSize = channels * 2;
+            int maxSrcFrames = Math.Min(srcBytes, src.Length) / frameSize;
+            int maxDstFrames = dst.Length / frameSize;
+            if (maxSrcFrames <= 0 || maxDstFrames <= 0)
+            {
+                return;
+            }
+
+            float clampedSpeed = ClampSpeed(speed);
+            float g0 = ClampVolume(startGain);
+            float g1 = ClampVolume(endGain);
+
+            if (Math.Abs(clampedSpeed - 1f) < 0.015f)
+            {
+                int count = Math.Min(maxSrcFrames, maxDstFrames);
+                fracFramePos = 0.0;
+                for (int f = 0; f < count; f++)
+                {
+                    float g = g0 + (g1 - g0) * ((f + 0.5f) / count);
+                    int baseIdx = f * frameSize;
+                    for (int c = 0; c < channels; c++)
+                    {
+                        int idx = baseIdx + c * 2;
+                        short s = (short)(src[idx] | (src[idx + 1] << 8));
+                        int scaled = (int)Math.Round(s * g);
+                        if (scaled > short.MaxValue) scaled = short.MaxValue;
+                        else if (scaled < short.MinValue) scaled = short.MinValue;
+                        short outS = (short)scaled;
+                        dst[idx] = (byte)(outS & 0xFF);
+                        dst[idx + 1] = (byte)((outS >> 8) & 0xFF);
+                    }
+                }
+                dstBytes = count * frameSize;
+                return;
+            }
+
+            double pos = fracFramePos >= 0.0 ? fracFramePos : 0.0;
+            int outFrames = 0;
+            while (outFrames < maxDstFrames)
+            {
+                int i0 = (int)pos;
+                if (i0 >= maxSrcFrames)
+                {
+                    break;
+                }
+                int i1 = i0 + 1 < maxSrcFrames ? i0 + 1 : i0;
+                double t = pos - i0;
+                float g = g0 + (g1 - g0) * ((outFrames + 0.5f) / maxDstFrames);
+                int b0 = i0 * frameSize;
+                int b1 = i1 * frameSize;
+                int bd = outFrames * frameSize;
+                for (int c = 0; c < channels; c++)
+                {
+                    int o = c * 2;
+                    short s0 = (short)(src[b0 + o] | (src[b0 + o + 1] << 8));
+                    short s1 = (short)(src[b1 + o] | (src[b1 + o + 1] << 8));
+                    double interp = s0 + (s1 - s0) * t;
+                    int scaled = (int)Math.Round(interp * g);
+                    if (scaled > short.MaxValue) scaled = short.MaxValue;
+                    else if (scaled < short.MinValue) scaled = short.MinValue;
+                    short outS = (short)scaled;
+                    dst[bd + o] = (byte)(outS & 0xFF);
+                    dst[bd + o + 1] = (byte)((outS >> 8) & 0xFF);
+                }
+                outFrames++;
+                pos += clampedSpeed;
+            }
+            fracFramePos = pos >= maxSrcFrames ? (pos - maxSrcFrames) : 0.0;
+            dstBytes = outFrames * frameSize;
+        }
     }
 }

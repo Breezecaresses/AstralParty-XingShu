@@ -84,6 +84,13 @@ namespace XingShuRuntime.Utilities
         private string _pendingCriPath = "";
         private LobbyBgMediaKind _pendingCriKind = LobbyBgMediaKind.Unknown;
         private float _pendingCriStartedAt;
+        private string _activeVideoFullPath = "";
+        private float _lastAudioDriftCheckAt = -99f;
+#if !XINGSHU_ANDROID_PREVIEW
+        private readonly WindowsLobbyAudioPlayer _companionAudio = new WindowsLobbyAudioPlayer();
+#else
+        private readonly AndroidLobbyAudioPlayer _companionAudio = new AndroidLobbyAudioPlayer();
+#endif
 
         // Cached reflection handles (Android IL2CPP stripped-API safe)
         private static bool _reflInit;
@@ -102,11 +109,6 @@ namespace XingShuRuntime.Utilities
         private static MethodInfo _criCtrlSetAssetMethod;
         private static PropertyInfo _vpIsLoopingProp;
         private static PropertyInfo _vpAudioModeProp;
-        private static PropertyInfo _vpControlledAudioTrackCountProp;
-        private static MethodInfo _vpSetControlledAudioTrackCountMethod;
-        private static MethodInfo _vpEnableAudioTrackMethod;
-        private static MethodInfo _vpSetMuteMethod;
-        private static MethodInfo _vpSetVolMethod;
         private static Type _criCtrlType;
         private static Type _criUsmAssetType;
 
@@ -143,6 +145,7 @@ namespace XingShuRuntime.Utilities
                 RestoreVanillaLobbyBgm();
                 TeardownActiveMedia(restoreVanilla: true);
                 DestroyOverlayLoaders();
+                _companionAudio.Dispose();
             }
             catch
             {
@@ -150,6 +153,18 @@ namespace XingShuRuntime.Utilities
             if (Instance == this)
             {
                 Instance = null;
+            }
+        }
+
+        private void OnApplicationQuit()
+        {
+            try
+            {
+                RestoreVanillaLobbyBgm();
+                _companionAudio.Dispose();
+            }
+            catch
+            {
             }
         }
 
@@ -291,8 +306,7 @@ namespace XingShuRuntime.Utilities
             }
         }
 
-        internal bool SupportsAudioControl =>
-            _vpAudioModeProp != null && _vpSetMuteMethod != null && _vpSetVolMethod != null;
+        internal bool SupportsAudioControl => true;
 
         internal bool MuteVanillaBgm
         {
@@ -912,6 +926,7 @@ namespace XingShuRuntime.Utilities
             try
             {
                 EnsureVideoPlayer();
+                _activeVideoFullPath = fullPath;
                 _videoPlayer.Stop();
                 _videoPlayer.source = VideoSource.Url;
                 _videoPlayer.url = CustomLobbyBgPolicy.BuildFileUri(fullPath);
@@ -988,6 +1003,8 @@ namespace XingShuRuntime.Utilities
                     ApplyVideoPlaybackSettings();
                     _videoStarted = true;
                     _videoStartedAt = Time.unscaledTime;
+                    _lastAudioDriftCheckAt = Time.unscaledTime;
+                    _companionAudio.StartFile(_activeVideoFullPath, _muted, _volume, _speed, _pausedForAway, 0.0);
 
                     ReleaseActiveNTexture();
                     NTexture nt = new NTexture(_videoRt);
@@ -1045,10 +1062,27 @@ namespace XingShuRuntime.Utilities
                             _videoPlayer.time = 0.0;
                             _videoPlayer.Play();
                             _videoStartedAt = Time.unscaledTime;
+                            _companionAudio.RequestSeek(0.0);
                         }
                         catch
                         {
                         }
+                    }
+                }
+                else if (playing && _companionAudio.HasAudio && Time.unscaledTime - _lastAudioDriftCheckAt >= 1.5f)
+                {
+                    _lastAudioDriftCheckAt = Time.unscaledTime;
+                    try
+                    {
+                        double vt = _videoPlayer.time;
+                        double at = _companionAudio.CurrentTimeSeconds;
+                        if (vt >= 0.0 && Math.Abs(at - vt) > 0.45)
+                        {
+                            _companionAudio.RequestSeek(vt);
+                        }
+                    }
+                    catch
+                    {
                     }
                 }
             }
@@ -1064,15 +1098,20 @@ namespace XingShuRuntime.Utilities
             {
                 _pausedForAway = true;
                 try { _videoPlayer.Pause(); } catch { }
+                try { _companionAudio.SetPaused(true); } catch { }
             }
             else if (anyLobbyVisible && _pausedForAway)
             {
                 _pausedForAway = false;
                 try
                 {
+                    double vt = 0.0;
+                    try { vt = _videoPlayer.time; } catch { }
                     _videoPlayer.Play();
                     ApplyVideoPlaybackSettings();
                     _videoStartedAt = Time.unscaledTime;
+                    _companionAudio.RequestSeek(vt);
+                    _companionAudio.SetPaused(false);
                 }
                 catch
                 {
@@ -1085,40 +1124,21 @@ namespace XingShuRuntime.Utilities
             if (_videoPlayer == null) return;
             try
             {
+                // Always silence Unity's own VideoPlayer audio backend (game sets AudioManager.m_DisableAudio=true
+                // and Windows backend rejects Direct audio output); audio is driven by _companionAudio instead.
                 if (_vpAudioModeProp != null)
                 {
-                    object directMode;
+                    object noneMode;
                     try
                     {
-                        directMode = Enum.Parse(_vpAudioModeProp.PropertyType, "Direct", false);
+                        noneMode = Enum.Parse(_vpAudioModeProp.PropertyType, "None", false);
                     }
                     catch
                     {
-                        directMode = Enum.ToObject(_vpAudioModeProp.PropertyType, CustomLobbyBgPolicy.VideoAudioOutputModeDirectValue);
+                        noneMode = Enum.ToObject(_vpAudioModeProp.PropertyType, 0);
                     }
-                    _vpAudioModeProp.SetValue(_videoPlayer, directMode, null);
+                    _vpAudioModeProp.SetValue(_videoPlayer, noneMode, null);
                 }
-            }
-            catch
-            {
-            }
-            try
-            {
-                if (_vpControlledAudioTrackCountProp != null)
-                {
-                    _vpControlledAudioTrackCountProp.SetValue(_videoPlayer, (ushort)1, null);
-                }
-                else if (_vpSetControlledAudioTrackCountMethod != null)
-                {
-                    _vpSetControlledAudioTrackCountMethod.Invoke(_videoPlayer, new object[] { (ushort)1 });
-                }
-            }
-            catch
-            {
-            }
-            try
-            {
-                _vpEnableAudioTrackMethod?.Invoke(_videoPlayer, new object[] { (ushort)0, true });
             }
             catch
             {
@@ -1127,6 +1147,8 @@ namespace XingShuRuntime.Utilities
 
         private void ApplyVideoPlaybackSettings()
         {
+            _companionAudio.SetAudioParams(_muted, _volume, _speed);
+
             if (_videoPlayer != null)
             {
                 try
@@ -1141,20 +1163,6 @@ namespace XingShuRuntime.Utilities
                     if (_vpIsLoopingProp != null)
                     {
                         _vpIsLoopingProp.SetValue(_videoPlayer, true, null);
-                    }
-                }
-                catch
-                {
-                }
-                try
-                {
-                    if (_vpSetMuteMethod != null)
-                    {
-                        _vpSetMuteMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted });
-                    }
-                    if (_vpSetVolMethod != null)
-                    {
-                        _vpSetVolMethod.Invoke(_videoPlayer, new object[] { (ushort)0, _muted ? 0f : _volume });
                     }
                 }
                 catch
@@ -1602,7 +1610,10 @@ namespace XingShuRuntime.Utilities
             _pausedForAway = false;
             _criPhase = CriSwitchPhase.Idle;
             _pendingCriPath = "";
+            _activeVideoFullPath = "";
             ActiveMediaKind = LobbyBgMediaKind.Unknown;
+
+            try { _companionAudio.Stop(); } catch { }
 
             if (_videoPlayer != null)
             {
@@ -1763,11 +1774,6 @@ namespace XingShuRuntime.Utilities
             Type vpType = typeof(VideoPlayer);
             _vpIsLoopingProp = vpType.GetProperty("isLooping", anyInst);
             _vpAudioModeProp = vpType.GetProperty("audioOutputMode", anyInst);
-            _vpControlledAudioTrackCountProp = vpType.GetProperty("controlledAudioTrackCount", anyInst);
-            _vpSetControlledAudioTrackCountMethod = vpType.GetMethod("SetControlledAudioTrackCount", anyInst);
-            _vpEnableAudioTrackMethod = vpType.GetMethod("EnableAudioTrack", anyInst);
-            _vpSetMuteMethod = vpType.GetMethod("SetDirectAudioMute", anyInst);
-            _vpSetVolMethod = vpType.GetMethod("SetDirectAudioVolume", anyInst);
 
             // CriWare runtime reflection (avoids hard compile dependency on CriMw DLLs)
             try
