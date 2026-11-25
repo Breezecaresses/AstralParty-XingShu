@@ -45,6 +45,8 @@ namespace XingShuRuntime.UI
         private string _starBuffSearchQuery = "";
         private int _starBuffPage;
         private int _lastStarBuffRevision = -1;
+        private int _lastRenderedAnchorMode = -1;
+        private bool _lastRenderedGlassActive;
         private bool _suppressCallbacks;
 
         internal GameObject Root => _root;
@@ -61,7 +63,7 @@ namespace XingShuRuntime.UI
             XingShuViewCardHelper.CreatePageScroll(_root, "PlayerStarBuffScrollView", out GameObject content);
 
             GameObject card = XingShuViewCardHelper.CreateCardContainer(content, "PlayerStarBuffHudCard", 784f);
-            Text title = XingShuUIFactory.CreateText(card, "Title", "角色星级Buff显示（左侧头像⭐区域）", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Text title = XingShuUIFactory.CreateText(card, "Title", "角色Buff显示（左侧头像⭐区域）", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
             XingShuViewCardHelper.PlaceTopLeft(title.rectTransform, new Vector2(20f, -12f), new Vector2(450f, 26f));
 
             _starBuffSummaryText = XingShuUIFactory.CreateText(card, "Description",
@@ -268,7 +270,17 @@ namespace XingShuRuntime.UI
             {
                 _starBuffPage = resetPage ? 0 : Math.Max(0, totalPages - 1);
             }
-            if (_starBuffFilterBtnTexts != null)
+            if (_starBuffFilterButtons != null)
+            {
+                for (int i = 0; i < _starBuffFilterButtons.Length; i++)
+                {
+                    if (_starBuffFilterButtons[i] != null)
+                    {
+                        XingShuGlassSkin.ApplySelectableButton(_starBuffFilterButtons[i], i == _starBuffFilterTab);
+                    }
+                }
+            }
+            if (!XingShuGlassSkin.IsActive && _starBuffFilterBtnTexts != null)
             {
                 for (int i = 0; i < _starBuffFilterBtnTexts.Length; i++)
                 {
@@ -356,13 +368,29 @@ namespace XingShuRuntime.UI
             if (_starBuffOffXText != null) _starBuffOffXText.text = $"{Mathf.RoundToInt(offX)} px";
             if (_starBuffOffYText != null) _starBuffOffYText.text = $"{Mathf.RoundToInt(offY)} px";
             if (_starBuffMaxText != null) _starBuffMaxText.text = $"{maxIcons} 个";
-            if (_starBuffAnchorBtnTexts != null)
+            bool glassActive = XingShuGlassSkin.IsActive;
+            if (forceCatalog || anchorMode != _lastRenderedAnchorMode || glassActive != _lastRenderedGlassActive)
             {
-                for (int i = 0; i < _starBuffAnchorBtnTexts.Length; i++)
+                _lastRenderedAnchorMode = anchorMode;
+                _lastRenderedGlassActive = glassActive;
+                if (_starBuffAnchorButtons != null)
                 {
-                    if (_starBuffAnchorBtnTexts[i] != null)
+                    for (int i = 0; i < _starBuffAnchorButtons.Length; i++)
                     {
-                        _starBuffAnchorBtnTexts[i].color = i == anchorMode ? XingShuUITheme.LimeAccent : XingShuUITheme.PrimaryText;
+                        if (_starBuffAnchorButtons[i] != null)
+                        {
+                            XingShuGlassSkin.ApplySelectableButton(_starBuffAnchorButtons[i], i == anchorMode);
+                        }
+                    }
+                }
+                if (!glassActive && _starBuffAnchorBtnTexts != null)
+                {
+                    for (int i = 0; i < _starBuffAnchorBtnTexts.Length; i++)
+                    {
+                        if (_starBuffAnchorBtnTexts[i] != null)
+                        {
+                            _starBuffAnchorBtnTexts[i].color = i == anchorMode ? XingShuUITheme.LimeAccent : XingShuUITheme.PrimaryText;
+                        }
                     }
                 }
             }

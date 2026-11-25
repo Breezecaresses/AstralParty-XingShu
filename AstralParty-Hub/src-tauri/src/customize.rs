@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -8,7 +9,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, UriSchemeContext, UriSchemeResponder, Wry, http};
 
 use crate::{
     domain::error::{HubError, HubResult},
@@ -793,6 +794,201 @@ pub async fn customize_clear_launcher_bg(app: AppHandle) -> HubResult<LauncherBg
     })
 }
 
+fn decode_uri_component(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return None;
+            }
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            let val = u8::from_str_radix(hex, 16).ok()?;
+            out.push(val);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn media_mime_for_filename(name: &str) -> Option<&'static str> {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "mp4" => Some("video/mp4"),
+        "webm" => Some("video/webm"),
+        "mov" => Some("video/quicktime"),
+        "m4v" => Some("video/x-m4v"),
+        "wmv" => Some("video/x-ms-wmv"),
+        _ => None,
+    }
+}
+
+fn parse_lobby_media_route(uri_path: &str) -> Option<(String, String, &'static str)> {
+    let trimmed = uri_path.strip_prefix('/')?;
+    let (raw_id, raw_file) = trimmed.split_once('/')?;
+    if raw_id.is_empty()
+        || raw_id.len() > 100
+        || !raw_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
+    }
+    let decoded_file = decode_uri_component(raw_file)?;
+    if !is_single_safe_filename(&decoded_file) {
+        return None;
+    }
+    let mime = media_mime_for_filename(&decoded_file)?;
+    Some((raw_id.to_string(), decoded_file, mime))
+}
+
+fn parse_http_range(header: &str, total_len: u64) -> Option<(u64, u64)> {
+    if total_len == 0 {
+        return None;
+    }
+    let spec = header.trim().strip_prefix("bytes=")?;
+    let first = spec.split(',').next()?.trim();
+    let (start_s, end_s) = first.split_once('-')?;
+    if start_s.is_empty() {
+        let suffix: u64 = end_s.trim().parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        let start = total_len.saturating_sub(suffix);
+        Some((start, total_len - 1))
+    } else {
+        let start: u64 = start_s.trim().parse().ok()?;
+        if start >= total_len {
+            return None;
+        }
+        let end = if end_s.trim().is_empty() {
+            (start + (4 * 1024 * 1024 - 1)).min(total_len - 1)
+        } else {
+            end_s.trim().parse::<u64>().ok()?.min(total_len - 1)
+        };
+        if end < start {
+            return None;
+        }
+        Some((start, end))
+    }
+}
+
+pub(crate) fn respond_lobby_media(
+    ctx: UriSchemeContext<'_, Wry>,
+    request: http::Request<Vec<u8>>,
+    response: UriSchemeResponder,
+) {
+    let app = ctx.app_handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let method = request.method().clone();
+        if method != http::Method::GET && method != http::Method::HEAD {
+            if let Ok(resp) = http::Response::builder()
+                .status(http::StatusCode::METHOD_NOT_ALLOWED)
+                .body(Vec::new())
+            {
+                response.respond(resp);
+            }
+            return;
+        }
+        let range_header = request
+            .headers()
+            .get(http::header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .map(ToString::to_string);
+        let parsed = parse_lobby_media_route(request.uri().path());
+        let resp_res = match parsed {
+            None => http::Response::builder()
+                .status(http::StatusCode::NOT_FOUND)
+                .body(Vec::new()),
+            Some((id, file_name, mime)) => {
+                let target_path = {
+                    let center = app.state::<ExtensionCenter>();
+                    extension_center::get_game(&center.db, &id)
+                        .and_then(|game| extension_center::game_root(&game))
+                        .map(|root| root.join(LOBBY_BG_DIR_NAME).join(&file_name))
+                        .ok()
+                };
+                match target_path {
+                    Some(path) if path.is_file() => {
+                        let read_res = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<(u64, Option<(u64, u64)>, Vec<u8>)> {
+                            let mut file = fs::File::open(&path)?;
+                            let total = file.metadata()?.len();
+                            if total > MAX_MEDIA_BYTES {
+                                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "too large"));
+                            }
+                            if let Some(rh) = range_header.as_deref() {
+                                if let Some((start, end)) = parse_http_range(rh, total) {
+                                    let len = (end - start + 1).min(8 * 1024 * 1024) as usize;
+                                    let clamped_end = start + len as u64 - 1;
+                                    let mut buf = vec![0u8; len];
+                                    if method != http::Method::HEAD {
+                                        file.seek(SeekFrom::Start(start))?;
+                                        file.read_exact(&mut buf)?;
+                                    } else {
+                                        buf.clear();
+                                    }
+                                    return Ok((total, Some((start, clamped_end)), buf));
+                                }
+                            }
+                            if method == http::Method::HEAD {
+                                return Ok((total, None, Vec::new()));
+                            }
+                            let mut buf = Vec::with_capacity(total.min(32 * 1024 * 1024) as usize);
+                            file.read_to_end(&mut buf)?;
+                            Ok((total, None, buf))
+                        })
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok());
+
+                        match read_res {
+                            Some((total, Some((start, end)), bytes)) => http::Response::builder()
+                                .status(http::StatusCode::PARTIAL_CONTENT)
+                                .header("Content-Type", mime)
+                                .header("Accept-Ranges", "bytes")
+                                .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+                                .header("Content-Length", (end - start + 1).to_string())
+                                .header("Cache-Control", "no-cache")
+                                .header("X-Content-Type-Options", "nosniff")
+                                .header("Access-Control-Allow-Origin", "http://tauri.localhost")
+                                .body(bytes),
+                            Some((total, None, bytes)) => http::Response::builder()
+                                .status(http::StatusCode::OK)
+                                .header("Content-Type", mime)
+                                .header("Accept-Ranges", "bytes")
+                                .header("Content-Length", total.to_string())
+                                .header("Cache-Control", "no-cache")
+                                .header("X-Content-Type-Options", "nosniff")
+                                .header("Access-Control-Allow-Origin", "http://tauri.localhost")
+                                .body(bytes),
+                            None => http::Response::builder()
+                                .status(http::StatusCode::NOT_FOUND)
+                                .body(Vec::new()),
+                        }
+                    }
+                    _ => http::Response::builder()
+                        .status(http::StatusCode::NOT_FOUND)
+                        .body(Vec::new()),
+                }
+            }
+        };
+        if let Ok(resp) = resp_res {
+            response.respond(resp);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,5 +1040,22 @@ mod tests {
         assert_eq!(style, "粗体");
         assert!(is_likely_cjk_font(&disp, "msyhbd.ttc"));
         assert!(!is_likely_cjk_font("Consolas", "consola.ttf"));
+    }
+
+    #[test]
+    fn lobby_media_route_and_http_range_validation() {
+        let ok = parse_lobby_media_route("/steam_cn/demo%20bg.mp4").unwrap();
+        assert_eq!(ok.0, "steam_cn");
+        assert_eq!(ok.1, "demo bg.mp4");
+        assert_eq!(ok.2, "video/mp4");
+
+        assert!(parse_lobby_media_route("/steam_cn/..%2Fsecret.png").is_none());
+        assert!(parse_lobby_media_route("/steam_cn/evil.exe").is_none());
+        assert!(parse_lobby_media_route("/bad:id/test.png").is_none());
+
+        assert_eq!(parse_http_range("bytes=0-1023", 5000), Some((0, 1023)));
+        assert_eq!(parse_http_range("bytes=1000-", 2000), Some((1000, 1999)));
+        assert_eq!(parse_http_range("bytes=-500", 2000), Some((1500, 1999)));
+        assert_eq!(parse_http_range("bytes=3000-4000", 2000), None);
     }
 }

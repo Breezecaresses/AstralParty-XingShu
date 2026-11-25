@@ -71,6 +71,10 @@ namespace XingShuRuntime.UI
         // ==================== 字体管理 ====================
         private static Font _cachedFont;
         private static Font _fallbackFont;
+        private static Font _crispFont;
+        private static Font _crispBoldFont;
+        private static bool _hasDedicatedBoldFace;
+        private static bool _crispBoldProbed;
         private static bool _usingGameFont;
         private static float _nextFontProbe;
 
@@ -118,11 +122,42 @@ namespace XingShuRuntime.UI
             return font;
         }
 
-        internal static void RefreshFonts(GameObject root)
+        internal static Font GetCrispUiFont()
+        {
+            return GetMainFont();
+        }
+
+        internal static bool HasDedicatedBoldFace => false;
+
+        internal static Font GetCrispBoldFont()
+        {
+            return GetMainFont();
+        }
+
+        internal static void ApplyCrispFont(UnityEngine.UI.Text txt, bool preferCrisp)
+        {
+            if (txt == null) return;
+            if (preferCrisp && txt.fontSize > 0 && txt.fontSize < 12)
+            {
+                txt.fontSize = 12;
+            }
+            Font f = GetFontForText(txt.text);
+            if (txt.font != f) txt.font = f;
+        }
+
+        internal static void RefreshFonts(GameObject root, bool glassMode = false)
         {
             if (root == null) return;
             foreach (UnityEngine.UI.Text text in root.GetComponentsInChildren<UnityEngine.UI.Text>(true))
-                text.font = GetFontForText(text.text);
+            {
+                if (text == null) continue;
+                if (glassMode && text.fontSize > 0 && text.fontSize < 12)
+                {
+                    text.fontSize = 12;
+                }
+                Font f = GetFontForText(text.text);
+                if (text.font != f) text.font = f;
+            }
         }
 
         private static Font GetFallbackFont()
@@ -133,6 +168,7 @@ namespace XingShuRuntime.UI
             {
                 _fallbackFont = Font.CreateDynamicFontFromOSFont(new string[]
                 {
+                    "Microsoft YaHei UI",
                     "Microsoft YaHei",
                     "SimHei",
                     "Noto Sans CJK SC",
@@ -141,7 +177,7 @@ namespace XingShuRuntime.UI
                     "PingFang SC",
                     "Hiragino Sans GB",
                     "Arial"
-                }, 16);
+                }, 32);
             }
             catch (Exception ex)
             {

@@ -4,6 +4,7 @@ import {
   ArrowRightLeft,
   Blocks,
   Bookmark,
+  BookOpen,
   ChevronDown,
   Compass,
   Download,
@@ -146,6 +147,10 @@ export const ModrinthWorkshopLayout: React.FC = () => {
                     <Layers size={15} />
                     <span>{zh ? '语音 · 特效' : 'Voice & VFX'}</span>
                   </Link>
+                  <Link to="/extensions/plugin-guide" className="mr-dropdown-item" role="menuitem">
+                    <BookOpen size={15} />
+                    <span>{zh ? '外部优化 Mod 接入指南' : 'Plugin SDK Guide'}</span>
+                  </Link>
                 </div>
               )}
             </div>
@@ -161,6 +166,11 @@ export const ModrinthWorkshopLayout: React.FC = () => {
 
             <NavLink to="/extensions/mods" className={({ isActive }) => (isActive ? 'is-active' : '')}>
               <span>{zh ? '模组列表' : 'Mods'}</span>
+            </NavLink>
+
+            <NavLink to="/extensions/plugin-guide" className={({ isActive }) => (isActive ? 'is-active' : '')}>
+              <BookOpen size={14} style={{ marginRight: 5, verticalAlign: '-2px' }} />
+              <span>{zh ? '插件接入指南' : 'Plugin SDK'}</span>
             </NavLink>
 
             {isPlatformAdmin(user) && (
@@ -219,6 +229,15 @@ export const ModrinthWorkshopLayout: React.FC = () => {
                   >
                     <Sparkles size={15} />
                     <span>{zh ? '投稿审核入口' : 'Anonymous submission'}</span>
+                  </Link>
+                  <Link
+                    to="/extensions/plugin-guide"
+                    className="mr-dropdown-item"
+                    role="menuitem"
+                    onClick={() => setPublishOpen(false)}
+                  >
+                    <BookOpen size={15} />
+                    <span>{zh ? '插件接入指南' : 'Plugin SDK Guide'}</span>
                   </Link>
                   <button
                     type="button"

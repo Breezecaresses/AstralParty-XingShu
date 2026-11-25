@@ -13,6 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   Sliders,
+  Sparkles,
   Trash2,
   Type as TypeIcon,
   Upload,
@@ -25,7 +26,8 @@ import { useTranslation } from '../../i18n';
 import { api, type DroppedModRecord } from '../../shared/api/tauri';
 import { isTauriRuntime } from '../../shared/runtime';
 import { useExtensionTarget } from '../extensions/ExtensionWorkspace';
-import { broadcastLauncherBgImage, useLauncherAppearance } from '../launcher/launcherTheme';
+import { LauncherPersonalizationCard } from '../launcher/LauncherPersonalizationCard';
+import { broadcastLauncherBgImage, useLauncherAppearance, useLauncherTheme } from '../launcher/launcherTheme';
 import { errorMessage } from '../launcher/launcherModel';
 import './customize.css';
 
@@ -154,6 +156,7 @@ export function CustomizePage() {
   const [newProfileName, setNewProfileName] = useState('');
 
   const appearance = useLauncherAppearance();
+  const { replayStartup } = useLauncherTheme();
 
   const reloadLobbyBg = useCallback(async () => {
     if (!tauri || !installationId) return;
@@ -435,7 +438,7 @@ export function CustomizePage() {
     { id: 'audio', Icon: Volume2, zh: '音效' },
     { id: 'packs', Icon: PackageOpen, zh: '资源包' },
     { id: 'fonts', Icon: TypeIcon, zh: '字体', badge: '调试' },
-    { id: 'lobbyBg', Icon: Home, zh: '主页背景', badge: '已内置' },
+    { id: 'lobbyBg', Icon: Home, zh: '主页背景' },
     { id: 'characters', Icon: UserRound, zh: '角色' },
     { id: 'homeUiDebug', Icon: Wrench, zh: '主界面调试', badge: '调试' },
   ];
@@ -476,16 +479,22 @@ export function CustomizePage() {
   const renderLobbyBgSection = () => {
     const cfg = lobbyState?.config;
     const isEnabled = Boolean(cfg?.enabled);
+    const fillObjectFit: 'cover' | 'contain' | 'fill' =
+      cfg?.fillMode === 'contain' ? 'contain' : cfg?.fillMode === 'stretch' ? 'fill' : 'cover';
+    const previewBrightness = typeof cfg?.brightness === 'number' ? Math.max(0.3, Math.min(1, cfg.brightness)) : 1;
+    const streamUrl =
+      isEnabled && selectedMedia && installationId && tauri
+        ? `http://lobby-media.localhost/${encodeURIComponent(installationId)}/${encodeURIComponent(selectedMedia.fileName)}?v=${cfg?.updatedAt ?? 0}`
+        : null;
+    const imagePreviewSrc =
+      isEnabled && selectedMedia?.kind === 'image'
+        ? selectedMedia.previewDataUrl || streamUrl
+        : null;
     return (
       <>
         <div className="xs-cust-head">
           <div>
-            <h1>{zh ? '自定义 · 主页背景（已内置）' : 'Customize · Lobby Background'}</h1>
-            <p className="xs-cust-head-sub">
-              {zh
-                ? '原本独立的「自定义大厅背景」已彻底内置到星枢核心，修改后自动与游戏内 `F1 -> 大厅背景` 双向实时同步。'
-                : 'Built directly into XingShu core and live-synced with the game.'}
-            </p>
+            <h1>{zh ? '自定义 · 主页背景' : 'Customize · Lobby Background'}</h1>
           </div>
           <div className="xs-cust-actions">
             <button type="button" className="xs-cust-btn" disabled={busy || !installationId} onClick={() => void handleImportLobbyBg('video')}>
@@ -502,28 +511,57 @@ export function CustomizePage() {
         {renderGameBar()}
 
         <section className="pcl-card">
-          <div className="xs-cust-preview-box">
-            {isEnabled && selectedMedia?.previewDataUrl ? (
-              <img src={selectedMedia.previewDataUrl} alt={selectedMedia.fileName} />
-            ) : (
-              <div className="xs-cust-preview-placeholder">
-                <Home size={28} />
-                <strong>
-                  {isEnabled && selectedMedia
-                    ? `${selectedMedia.fileName}（${selectedMedia.kind.toUpperCase()}）`
-                    : zh
-                      ? '游戏默认背景'
-                      : 'Game Default Background'}
-                </strong>
-                <span>
-                  {isEnabled && selectedMedia
-                    ? `${formatBytes(selectedMedia.sizeBytes)} · 点击下方开关与素材即可即时切换`
-                    : zh
-                      ? '选择图片或视频后自动复制到游戏 lobbybg 目录并在游戏内生效'
-                      : 'Import image or video media to override the game lobby'}
-                </span>
-              </div>
-            )}
+          <div className="xs-cust-preview-stage">
+            <div className="xs-cust-preview-box">
+              {imagePreviewSrc && selectedMedia ? (
+                <>
+                  <img
+                    src={imagePreviewSrc}
+                    alt={selectedMedia.fileName}
+                    style={{ objectFit: fillObjectFit, filter: `brightness(${previewBrightness})` }}
+                  />
+                  <span className="xs-cust-preview-badge">
+                    16:9 图片预览 · {selectedMedia.fileName}
+                  </span>
+                </>
+              ) : isEnabled && selectedMedia?.kind === 'video' && streamUrl ? (
+                <>
+                  <video
+                    key={streamUrl}
+                    src={streamUrl}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    controls
+                    style={{ objectFit: fillObjectFit, filter: `brightness(${previewBrightness})` }}
+                  />
+                  <span className="xs-cust-preview-badge">
+                    16:9 视频预览 · {selectedMedia.fileName}
+                  </span>
+                </>
+              ) : (
+                <div className="xs-cust-preview-placeholder">
+                  <Home size={28} />
+                  <strong>
+                    {isEnabled && selectedMedia
+                      ? `${selectedMedia.fileName}（${selectedMedia.kind.toUpperCase()}）`
+                      : zh
+                        ? '游戏默认背景（16:9 视口）'
+                        : 'Game Default Background (16:9)'}
+                  </strong>
+                  <span>
+                    {isEnabled && selectedMedia
+                      ? selectedMedia.kind === 'usm' || selectedMedia.kind === 'bundle'
+                        ? `${formatBytes(selectedMedia.sizeBytes)} · 原生动效包将在游戏大厅内直接解码播放`
+                        : `${formatBytes(selectedMedia.sizeBytes)} · 点击下方开关与素材即可即时切换`
+                      : zh
+                        ? '选择图片或视频后自动复制到游戏 lobbybg 目录并在游戏内生效'
+                        : 'Import image or video media to override the game lobby'}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
@@ -1101,10 +1139,20 @@ export function CustomizePage() {
     <>
       <div className="xs-cust-head">
         <div>
-          <h1>星枢自定义 · 外观背景</h1>
-          <p className="xs-cust-head-sub">只改变星枢启动器本身的外观与通透质感，不影响游戏内画面。</p>
+          <h1>{zh ? '星枢自定义背景' : 'XingShu Custom Background'}</h1>
+          <p className="xs-cust-head-sub">
+            {zh
+              ? '自定义星枢启动器背景、通透质感、主题配色与启动开屏动画，不影响游戏内画面。'
+              : 'Customize launcher wallpaper, frosted glass opacity, color theme, and startup splash.'}
+          </p>
         </div>
         <div className="xs-cust-actions">
+          {tauri && (
+            <button type="button" className="xs-cust-btn" onClick={replayStartup}>
+              <Sparkles size={13} />
+              <span>{zh ? '预览启动动画' : 'Preview startup animation'}</span>
+            </button>
+          )}
           <button type="button" className="xs-cust-btn" onClick={() => void handleClearLauncherWallpaper()} disabled={busy}>
             <RotateCcw size={13} />
             <span>无背景 / 恢复默认</span>
@@ -1117,20 +1165,22 @@ export function CustomizePage() {
       </div>
 
       <section className="pcl-card">
-        <div className="xs-cust-preview-box">
-          {appearance.imageUrl ? (
-            <img
-              src={appearance.imageUrl}
-              alt={appearance.fileName || 'Launcher Background'}
-              style={{ filter: appearance.blur > 0 ? `blur(${Math.round(appearance.blur * 0.24)}px)` : undefined }}
-            />
-          ) : (
-            <div className="xs-cust-preview-placeholder">
-              <Paintbrush size={28} />
-              <strong>默认外观（无自定义图片背景）</strong>
-              <span>支持 PNG / JPG / WebP / BMP；导入后全启动器自动呈现毛玻璃通透质感</span>
-            </div>
-          )}
+        <div className="xs-cust-preview-stage">
+          <div className="xs-cust-preview-box">
+            {appearance.imageUrl ? (
+              <img
+                src={appearance.imageUrl}
+                alt={appearance.fileName || 'Launcher Background'}
+                style={{ filter: appearance.blur > 0 ? `blur(${Math.round(appearance.blur * 0.24)}px)` : undefined }}
+              />
+            ) : (
+              <div className="xs-cust-preview-placeholder">
+                <Paintbrush size={28} />
+                <strong>默认外观（无自定义图片背景）</strong>
+                <span>支持 PNG / JPG / WebP / BMP；导入后全启动器自动呈现毛玻璃通透质感</span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div style={{ marginTop: 14 }}>
@@ -1165,6 +1215,8 @@ export function CustomizePage() {
           </div>
         </div>
       </section>
+
+      <LauncherPersonalizationCard />
     </>
   );
 
@@ -1193,7 +1245,7 @@ export function CustomizePage() {
           </div>
 
           <div className="xs-cust-rail-group">
-            <span className="xs-cust-rail-title">{zh ? '星枢自定义' : 'XingShu Style'}</span>
+            <span className="xs-cust-rail-title">{zh ? '星枢自定义背景' : 'XingShu Background'}</span>
             <button
               type="button"
               className={`xs-cust-rail-item${section === 'launcherBg' ? ' is-active' : ''}`}
@@ -1203,7 +1255,7 @@ export function CustomizePage() {
               }}
             >
               <ImageIcon size={15} />
-              <span>背景</span>
+              <span>{zh ? '背景与个性化' : 'Background & Theme'}</span>
             </button>
           </div>
         </aside>

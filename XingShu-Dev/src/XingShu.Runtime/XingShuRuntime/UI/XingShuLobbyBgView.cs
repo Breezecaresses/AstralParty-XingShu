@@ -570,6 +570,12 @@ namespace XingShuRuntime.UI
         {
             if (btn == null) return;
             Image img = btn.GetComponent<Image>();
+            Text txt = btn.GetComponentInChildren<Text>();
+            if (XingShuGlassSkin.IsActive)
+            {
+                XingShuGlassSkin.ApplySelectableButton(img, txt, active);
+                return;
+            }
             if (img != null)
             {
                 img.color = active ? new Color(1f, 0.86f, 0.38f, 1f) : Color.white;
@@ -719,12 +725,20 @@ namespace XingShuRuntime.UI
 
         private void UpdateFileRowHighlights(int activeIdx)
         {
+            bool glass = XingShuGlassSkin.IsActive;
             for (int i = 0; i < _fileRowBgs.Count; i++)
             {
                 Image img = _fileRowBgs[i];
                 if (img == null) continue;
                 bool active = (i == activeIdx);
-                img.color = active ? new Color(1f, 0.88f, 0.45f, 1f) : new Color(0.95f, 0.96f, 0.99f, 0.92f);
+                if (glass)
+                {
+                    XingShuGlassSkin.ApplySelectableButton(img, null, active);
+                }
+                else
+                {
+                    img.color = active ? new Color(1f, 0.88f, 0.45f, 1f) : new Color(0.95f, 0.96f, 0.99f, 0.92f);
+                }
             }
         }
 

@@ -472,6 +472,8 @@ namespace XingShuRuntime.Features
             return !(mNonOne && nNonOne);
         }
 
+        internal static float ActiveNativeClockScale => GetNativeEffectiveSpeedForTiming();
+
         /// <summary>
         /// 获取供网络与协程计时预算补偿使用的只读有效倍率 (Phase 2D-2B3-R4 / Phase 2D-2B4B)
         /// 仅当当前处于原生加速引擎且真正生效（且未被智能暂停挂起）时，返回 Native Effective Speed；其余模式（智能暂停中、托管模式、未就绪、停用）严格返回 1.0f

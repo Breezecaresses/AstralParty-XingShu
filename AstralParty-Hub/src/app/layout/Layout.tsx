@@ -98,6 +98,21 @@ export const DesktopLayout: React.FC = () => {
     let unlisten: (() => void) | undefined;
     let failsafeTimer: ReturnType<typeof setTimeout> | undefined;
 
+    listen('xingshu:splash-finished', () => {
+      if (disposed) return;
+      if (failsafeTimer) {
+        clearTimeout(failsafeTimer);
+        failsafeTimer = undefined;
+      }
+      setSplashMounted(false);
+      runEntranceTransition(true);
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+
     if (!startupAnimEnabledRef.current || prefersReducedMotion()) {
       invoke('finish_splash_and_show_main').catch(() => {});
       setSplashMounted(false);
@@ -109,21 +124,6 @@ export const DesktopLayout: React.FC = () => {
           setStartupStage('ready');
         }
       }, 6000);
-
-      listen('xingshu:splash-finished', () => {
-        if (disposed) return;
-        if (failsafeTimer) {
-          clearTimeout(failsafeTimer);
-          failsafeTimer = undefined;
-        }
-        setSplashMounted(false);
-        runEntranceTransition(true);
-      })
-        .then((fn) => {
-          if (disposed) fn();
-          else unlisten = fn;
-        })
-        .catch(() => {});
 
       invoke<boolean>('get_startup_splash_active')
         .then((active) => {

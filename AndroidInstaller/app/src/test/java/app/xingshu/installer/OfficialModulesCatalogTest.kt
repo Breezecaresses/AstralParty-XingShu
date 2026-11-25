@@ -8,32 +8,27 @@ import org.junit.Test
 class OfficialModulesCatalogTest {
     @Test
     fun allOfficialModulesMatchExpectedIdsAndSafeFormat() {
-        assertEquals(21, OfficialModulesCatalog.ALL.size)
+        assertEquals(16, OfficialModulesCatalog.ALL.size)
         val expected = listOf(
             "hand-monitor",
             "battle-stats",
-            "avatar-praise",
-            "quick-thanks",
-            "star-coin-shop",
+            "auto-social",
             "defense-hint",
             "knockback-preview",
-            "monster-targeting",
-            "monster-cooldown",
+            "monster-action",
             "free-camera",
             "game-speed",
             "thinking-time",
             "action-guard",
             "replay-player",
             "static-portraits",
-            "settlement-capture",
             "select-map-name",
-            "battle-card-points",
-            "custom-lobby-bg",
+            "player-star-buffs",
             "megath-damage",
             "player-combat-hud",
         )
         assertEquals(expected, OfficialModulesCatalog.ALL.map { it.id })
-        assertEquals(21, OfficialModulesCatalog.ALL.map { it.id }.distinct().size)
+        assertEquals(16, OfficialModulesCatalog.ALL.map { it.id }.distinct().size)
         OfficialModulesCatalog.ALL.forEach { mod ->
             assertTrue("Unsafe id: ${mod.id}", OfficialModulesCatalog.isSafeId(mod.id))
             assertTrue(mod.name.isNotBlank())
@@ -45,7 +40,7 @@ class OfficialModulesCatalogTest {
     @Test
     fun csvSerializerDeduplicatesAndRejectsTraversal() {
         val fullCsv = OfficialModulesCatalog.allIdsCsv()
-        assertEquals(21, fullCsv.split(",").size)
+        assertEquals(16, fullCsv.split(",").size)
         assertEquals(
             "hand-monitor,game-speed",
             OfficialModulesCatalog.toSafeCsv(listOf(" hand-monitor ", "../evil", "HAND-MONITOR", "game-speed")),

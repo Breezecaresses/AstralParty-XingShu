@@ -26,7 +26,9 @@ import { ModrinthBrowsePage } from '../pages/workshop-web/ModrinthBrowsePage';
 import { ModrinthAuthorPage } from '../pages/workshop-web/ModrinthAuthorPage';
 import { ModrinthAdminPage } from '../pages/workshop-web/ModrinthAdminPage';
 import { ModrinthProjectDetailPage } from '../pages/workshop-web/ModrinthProjectDetailPage';
+import { ModrinthPluginGuidePage } from '../pages/workshop-web/ModrinthPluginGuidePage';
 import { PlatformAccountPage } from '../pages/account/PlatformAccountPage';
+import { PluginSdkGuidePage } from '../pages/tools/PluginSdkGuidePage';
 
 const desktopOnly = (element: ReactNode) =>
   isTauriRuntime() ? element : <Navigate to="/extensions/mods" replace />;
@@ -161,6 +163,14 @@ export const router = createBrowserRouter([
       {
         path: 'extensions/mods',
         element: isTauriRuntime() ? <ModsPage /> : <ModrinthBrowsePage />,
+      },
+      {
+        path: 'extensions/plugin-guide',
+        element: isTauriRuntime() ? <PluginSdkGuidePage /> : <ModrinthPluginGuidePage />,
+      },
+      {
+        path: 'tools/plugin-guide',
+        element: isTauriRuntime() ? <PluginSdkGuidePage /> : <Navigate to="/extensions/plugin-guide" replace />,
       },
       {
         path: 'extensions/creator',

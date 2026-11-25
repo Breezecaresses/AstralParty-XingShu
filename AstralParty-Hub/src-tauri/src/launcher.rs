@@ -62,6 +62,10 @@ pub struct ConflictInspectItem {
     category: String,
     relative_path: String,
     sha256: String,
+    #[serde(default)]
+    full_path: String,
+    #[serde(default)]
+    reason: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -697,8 +701,9 @@ pub async fn launcher_inspect_conflicts(
             ));
         }
         let stdout = String::from_utf8_lossy(&result.stdout);
-        let report: ConflictInspectReport = serde_json::from_str(stdout.trim())
+        let mut report: ConflictInspectReport = serde_json::from_str(stdout.trim())
             .map_err(|_| error("CHECK_FAILED", "无法解析冲突扫描结果。"))?;
+        enrich_conflict_report(&root, &mut report);
         Ok(report)
     })
     .await
@@ -959,7 +964,7 @@ fn build_official_module_xspkg(module: &ModuleDefinition) -> HubResult<Vec<u8>> 
         },
         compatibility: CompatibilityMeta {
             game: GameCompatibility {
-                app_id: "astralparty".to_string(),
+                app_id: "2622000".to_string(),
                 platforms: vec![
                     "STEAM_CN".to_string(),
                     "STEAM_GLOBAL".to_string(),
@@ -1459,6 +1464,119 @@ pub async fn launcher_open_mods_dir(installation_id: String, center: State<'_, E
     Ok(())
 }
 
+fn sanitize_conflict_rel_path(raw: &str) -> Option<PathBuf> {
+    let clean = raw.trim().replace('\\', "/");
+    if clean.is_empty() || clean.contains('\0') {
+        return None;
+    }
+    let rel = PathBuf::from(&clean);
+    let mut normalized = PathBuf::new();
+    for comp in rel.components() {
+        match comp {
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn resolve_conflict_target_path(root: &Path, relative_path: &str) -> Option<PathBuf> {
+    let rel = sanitize_conflict_rel_path(relative_path)?;
+    let direct = root.join(&rel);
+    if direct.exists() {
+        return Some(direct);
+    }
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("_Data")) {
+                let candidate = p.join(&rel);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    if direct.parent().is_some_and(Path::exists) {
+        return Some(direct);
+    }
+    Some(root.to_path_buf())
+}
+
+fn describe_conflict_reason(item: &ConflictInspectItem) -> String {
+    let cat = item.category.to_ascii_lowercase();
+    let plugin = item.plugin_name.to_ascii_lowercase();
+    let rel = item.relative_path.to_ascii_lowercase();
+    if plugin.contains("apx") || cat.contains("apx") || rel.contains("apx_") {
+        return "冲突原因：检测到第三方 APX 插件资源/组件；它与星枢共同挂载辅助界面及核心资产（如 dependence 或 __data），共存会导致功能中心重叠、按钮错位或钩子互冲。".to_string();
+    }
+    if plugin.contains("bepinex")
+        || plugin.contains("melonloader")
+        || rel.contains("bepinex")
+        || rel.contains("melonloader")
+        || rel.ends_with("winhttp.dll")
+        || rel.ends_with("version.dll")
+    {
+        return "冲突原因：检测到第三方通用注入框架或代理 DLL（如 BepInEx / MelonLoader / 代理加载器）；游戏启动时会抢占同一初始化入口，容易引发双重挂载闪退或版本冲突。".to_string();
+    }
+    if rel.ends_with("__data") || rel.ends_with(".dll") {
+        return "冲突原因：该游戏核心运行库 / AssetBundle 已被第三方补丁或未知版本修改（SHA-256 与官方原版及星枢历史基线均不匹配），直接覆盖或共存会导致代码偏移与崩溃。".to_string();
+    }
+    "冲突原因：该文件位于与星枢官方插件 Mod 相同的游戏扩展挂载点，建议点击「打开位置」核查后再备份清理。".to_string()
+}
+
+fn enrich_conflict_report(root: &Path, report: &mut ConflictInspectReport) {
+    for item in &mut report.items {
+        if item.full_path.trim().is_empty() {
+            if let Some(resolved) = resolve_conflict_target_path(root, &item.relative_path) {
+                item.full_path = resolved.to_string_lossy().replace('\\', "/");
+            }
+        }
+        if item.reason.trim().is_empty() {
+            item.reason = describe_conflict_reason(item);
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn launcher_reveal_conflict_item(
+    installation_id: String,
+    relative_path: String,
+    center: State<'_, ExtensionCenter>,
+) -> HubResult<()> {
+    let game = extension_center::get_game(&center.db, &installation_id)?;
+    let (root, _) = canonical_game(&game)?;
+    let target = resolve_conflict_target_path(&root, &relative_path)
+        .ok_or_else(|| error("INVALID_PATH", "冲突文件路径不合法。"))?;
+    #[cfg(windows)]
+    {
+        if target.is_file() {
+            Command::new("explorer")
+                .arg(format!("/select,{}", target.to_string_lossy()))
+                .spawn()
+                .map_err(|_| error("OPEN_DIR_FAILED", "无法定位冲突文件。"))?;
+        } else {
+            let folder = if target.is_dir() {
+                target.as_path()
+            } else {
+                target.parent().unwrap_or(&root)
+            };
+            Command::new("explorer")
+                .arg(folder)
+                .spawn()
+                .map_err(|_| error("OPEN_DIR_FAILED", "无法打开冲突所在目录。"))?;
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = target;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1678,5 +1796,75 @@ mod tests {
         let merged = modules_from_bundle(&parsed).unwrap();
         assert_eq!(merged.len(), expected_len);
         assert!(merged.iter().any(|m| m.id == "future-mod-3"));
+    }
+
+    #[test]
+    fn conflict_report_enrichment_resolves_paths_and_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("AstralParty_CN_Data").join("dependence");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let apx_file = data_dir.join("apx_modern_assist_ui.bundle");
+        std::fs::write(&apx_file, b"apx").unwrap();
+
+        let mut report = ConflictInspectReport {
+            ok: false,
+            platform: "STEAM_CN".to_string(),
+            platform_label: "Steam 国服".to_string(),
+            game_root: dir.path().to_string_lossy().to_string(),
+            target_sha256: String::new(),
+            target_state: "conflict".to_string(),
+            has_conflicts: true,
+            target_is_conflict: true,
+            plugin_names: vec!["APX 插件".to_string()],
+            items: vec![ConflictInspectItem {
+                plugin_name: "APX 插件".to_string(),
+                category: "apx".to_string(),
+                relative_path: "dependence/apx_modern_assist_ui.bundle".to_string(),
+                sha256: "deadbeef".to_string(),
+                full_path: String::new(),
+                reason: String::new(),
+            }],
+            has_backup: false,
+            backup_is_vanilla: false,
+            summary: String::new(),
+            conflict_prompt: String::new(),
+        };
+        enrich_conflict_report(dir.path(), &mut report);
+        assert!(report.items[0].full_path.ends_with("AstralParty_CN_Data/dependence/apx_modern_assist_ui.bundle"));
+        assert!(report.items[0].reason.contains("APX"));
+        assert!(resolve_conflict_target_path(dir.path(), "../Windows/System32").is_none());
+    }
+
+    #[test]
+    fn official_fallback_xspkg_passes_install_compatibility() {
+        let mod_def = ModuleDefinition {
+            id: "monster-action".to_string(),
+            name: "怪物行动可视".to_string(),
+            description: "测试兼容检查".to_string(),
+        };
+        let bytes = build_official_module_xspkg(&mod_def).unwrap();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &bytes).unwrap();
+        let parsed = crate::packages::parser::PackageParser::parse_archive(tmp.path()).unwrap();
+        assert_eq!(parsed.compatibility.game.app_id, "2622000");
+
+        for plat in ["STEAM_CN", "TAPTAP", "BILIBILI", "WEGAME"] {
+            let game = GameInstallation {
+                id: format!("inst-{plat}"),
+                platform: plat.to_string(),
+                platform_app_id: None,
+                install_path: "C:/fake/game".to_string(),
+                executable_path: None,
+                detected_build_id: None,
+                detected_version: None,
+                detection_method: "TEST".to_string(),
+                is_valid: true,
+                is_primary: true,
+                last_verified_at: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            crate::install::engine::InstallEngine::check_compatibility(&parsed, &game).unwrap();
+        }
     }
 }

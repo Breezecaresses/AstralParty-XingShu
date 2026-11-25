@@ -364,6 +364,27 @@ namespace XingShu.Tests
             Assert(!CustomLobbyBgPolicy.TryParseSidecarJson("{}", out parsed), "empty object rejected");
         }
 
+        private static void TestNativeClockSpeedCompensation()
+        {
+            float s1 = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(1.0f, 1.0f, 1.0f, true);
+            Assert(Math.Abs(s1 - 1.0f) < 0.001f, "1x native -> 1.0f");
+
+            float s2 = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(1.0f, 2.0f, 1.0f, true);
+            Assert(Math.Abs(s2 - 0.5f) < 0.001f, "2x native -> 0.5f");
+
+            float s5 = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(1.5f, 5.0f, 1.0f, true);
+            Assert(Math.Abs(s5 - 0.3f) < 0.001f, "1.5x user at 5x native -> 0.3f");
+
+            float s10Min = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(0.5f, 10.0f, 1.0f, true);
+            Assert(Math.Abs(s10Min - 0.05f) < 0.001f, "0.5x user at 10x native clamped >= 0.05f");
+
+            float scaledManaged = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(1.0f, 1.0f, 2.5f, false);
+            Assert(Math.Abs(scaledManaged - 0.4f) < 0.001f, "2.5x unityTimeScale fallback -> 0.4f");
+
+            float nanGuard = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(1.25f, float.NaN, 0f, false);
+            Assert(Math.Abs(nanGuard - 1.25f) < 0.001f, "NaN/0 clock guard preserves user speed");
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -377,6 +398,7 @@ namespace XingShu.Tests
             TestWindowsShortcutAndVbsBuilders();
             TestPlaybackPositionExtrapolation();
             TestSidecarConfigJsonRoundtrip();
+            TestNativeClockSpeedCompensation();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

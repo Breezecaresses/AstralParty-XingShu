@@ -51,6 +51,21 @@ internal static class PlayerStarBuffTests
         PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(5, 0, true, 0, 0, 0, 3, 2, out permNet, out tempNet);
         Check(permNet == 2 && tempNet == 3, "preserves 3-star +2 baseline + skill +3 after server sync");
 
+        // 1c. Final ATK/DEF single-value display + PVE star-upgrade base move speed
+        string adBuffed = PlayerCombatStatusPolicy.FormatAtkDefTokens(1, 10, 0, 2);
+        Check(adBuffed == "攻[color=#82D8FF]10[/color] 防[color=#82D8FF]2[/color]", "formats single final buffed ATK/DEF without parentheses");
+        string adBase = PlayerCombatStatusPolicy.FormatAtkDefTokens(2, 2, 1, 1);
+        Check(adBase == "攻[color=#FF9E7D]2[/color] 防[color=#9EC8FF]1[/color]", "formats single base ATK/DEF cleanly");
+
+        int reqStar, pveMv;
+        Check(PlayerCombatStatusPolicy.TryParsePveStarMoveBonus("达到1星时攻击力+1、移动速度+1", 3, out reqStar, out pveMv) && reqStar == 1 && pveMv == 1, "parses Molly Lv1 1-star +1 move");
+        Check(PlayerCombatStatusPolicy.TryParsePveStarMoveBonus("达到3星时攻击力+1、移动速度+2", 3, out reqStar, out pveMv) && reqStar == 3 && pveMv == 2, "parses Molly Lv4 3-star +2 move");
+        Check(!PlayerCombatStatusPolicy.TryParsePveStarMoveBonus("达到3星时攻击力+1、移动速度+2", 2, out reqStar, out pveMv), "skips 3-star move bonus when hero is only 2 stars");
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(2, 0, true, 0, 0, 0, 0, 2, 3, out permNet, out tempNet);
+        Check(permNet == 5 && tempNet == 0 && PlayerCombatStatusPolicy.FormatMoveSpeedToken(permNet, tempNet) == "[color=#7CFF9B]移速+5[/color]", "combines Molly 3-star +3 with +2 chip into 移速+5");
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(2, 0, true, 0, 0, 0, 4, 2, 3, out permNet, out tempNet);
+        Check(permNet == 5 && tempNet == 4, "combines PVE star +3, chip +2, and +4 temp skill buff");
+
         // 2. Buff classification tests
         Check(PlayerStarBuffPolicy.ClassifyBuff(21026, 1, false, false, "疾行", "移动速度+3") == StarBuffCategory.Move, "疾行 classified as Move");
         Check(PlayerStarBuffPolicy.ClassifyBuff(9001, 1, false, false, "迟缓", "移动速度-2") == StarBuffCategory.Move, "减速 classified as Move");

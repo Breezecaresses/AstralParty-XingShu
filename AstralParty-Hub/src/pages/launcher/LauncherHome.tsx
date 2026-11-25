@@ -7,6 +7,8 @@ import {
   Blocks,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   EyeOff,
   FolderOpen,
@@ -14,7 +16,9 @@ import {
   Orbit,
   Play,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   UserRound,
 } from 'lucide-react';
@@ -25,6 +29,11 @@ import { openPlatformAuthModal, usePlatformAccount } from '../../shared/platform
 import { assetUrl, isTauriRuntime } from '../../shared/runtime';
 import type { GameLaunchResult } from '../../shared/types';
 import { extensionChannels, useExtensionTarget } from '../extensions/ExtensionWorkspace';
+import {
+  HOME_SHORTCUTS,
+  MAX_HOME_SHORTCUTS,
+  useHomeQuickShortcuts,
+} from './topBarTools';
 import {
   LAUNCH_TIPS_EN,
   LAUNCH_TIPS_ZH,
@@ -423,26 +432,15 @@ export function LauncherHome() {
     },
   ];
 
-  const quickItems = [
-    {
-      to: '/extensions/launcher',
-      Icon: Blocks,
-      title: zh ? '模组管理' : 'Mod Manager',
-      desc: zh ? '启停局内工具与功能扩展' : 'Manage in-game tools & mods',
-    },
-    {
-      to: '/diagnostics',
-      Icon: ShieldCheck,
-      title: zh ? '运行诊断' : 'Runtime diagnostics',
-      desc: zh ? '检查游戏安装、官方插件和连接' : 'Check game, plugin and connection',
-    },
-    {
-      to: '/maintenance/transactions',
-      Icon: Check,
-      title: zh ? '安装记录' : 'Install history',
-      desc: zh ? '查看模组安装与恢复' : 'Review installs and rollback',
-    },
-  ];
+  const {
+    shortcuts: quickShortcuts,
+    hasKey: hasQuickKey,
+    toggleKey: toggleQuickKey,
+    moveKey: moveQuickKey,
+    resetDefaults: resetQuickDefaults,
+  } = useHomeQuickShortcuts();
+  const [editingQuick, setEditingQuick] = useState(false);
+  const [quickMsg, setQuickMsg] = useState('');
 
   return (
     <div className="launcher-home pcl-launch-page">
@@ -863,21 +861,115 @@ export function LauncherHome() {
                   <p>{zh ? '常用工作台与数据中心直达' : 'Frequent tools and game codex'}</p>
                 </div>
               </div>
-              <Link className="pcl-card-more" to="/tools">
-                {zh ? '全部工具' : 'All tools'}
-                <ArrowUpRight size={14} />
-              </Link>
+              <div className="pcl-quick-head-actions">
+                <button
+                  type="button"
+                  className={`pcl-btn-mini${editingQuick ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setQuickMsg('');
+                    setEditingQuick((v) => !v);
+                  }}
+                >
+                  <SlidersHorizontal size={13} />
+                  <span>{editingQuick ? (zh ? '完成' : 'Done') : (zh ? '自定义' : 'Customize')}</span>
+                </button>
+                <Link className="pcl-card-more" to="/tools">
+                  {zh ? '全部工具' : 'All tools'}
+                  <ArrowUpRight size={14} />
+                </Link>
+              </div>
             </header>
 
+            {editingQuick && (
+              <div className="pcl-quick-editor">
+                <div className="pcl-quick-editor-head">
+                  <span>
+                    {zh
+                      ? `勾选首页「快捷入口」卡片（已选 ${quickShortcuts.length} / ${MAX_HOME_SHORTCUTS} 个，可点击左右箭头排序）`
+                      : `Select up to ${MAX_HOME_SHORTCUTS} home shortcuts (${quickShortcuts.length}/${MAX_HOME_SHORTCUTS})`}
+                  </span>
+                  <button
+                    type="button"
+                    className="pcl-btn-mini"
+                    onClick={() => {
+                      setQuickMsg('');
+                      resetQuickDefaults();
+                    }}
+                  >
+                    <RotateCcw size={12} />
+                    <span>{zh ? '恢复默认' : 'Reset'}</span>
+                  </button>
+                </div>
+
+                {quickShortcuts.length > 0 && (
+                  <div className="pcl-quick-order-row">
+                    {quickShortcuts.map((item, idx) => (
+                      <div key={item.key} className="pcl-quick-order-chip">
+                        <span>{zh ? item.zh : item.en}</span>
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          title={zh ? '前移' : 'Move left'}
+                          onClick={() => moveQuickKey(item.key, -1)}
+                        >
+                          <ChevronLeft size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === quickShortcuts.length - 1}
+                          title={zh ? '后移' : 'Move right'}
+                          onClick={() => moveQuickKey(item.key, 1)}
+                        >
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {quickMsg && <div className="pcl-pin-limit-note">{quickMsg}</div>}
+
+                <div className="pcl-quick-picker-grid">
+                  {HOME_SHORTCUTS.map((item) => {
+                    const ItemIcon = item.Icon;
+                    const active = hasQuickKey(item.key);
+                    const disabled = !active && quickShortcuts.length >= MAX_HOME_SHORTCUTS;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        disabled={disabled}
+                        className={`pcl-quick-pick-btn${active ? ' is-selected' : ''}`}
+                        onClick={() => {
+                          const res = toggleQuickKey(item.key);
+                          if (res.limitReached) {
+                            setQuickMsg(zh ? `首页快捷入口最多保留 ${MAX_HOME_SHORTCUTS} 个` : `Max ${MAX_HOME_SHORTCUTS} shortcuts`);
+                          } else if (res.minReached) {
+                            setQuickMsg(zh ? '至少保留 1 个快捷入口' : 'Keep at least 1 shortcut');
+                          } else {
+                            setQuickMsg('');
+                          }
+                        }}
+                      >
+                        <ItemIcon size={13} />
+                        <span>{zh ? item.zh : item.en}</span>
+                        {active && <Check size={12} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="pcl-quick-grid">
-              {quickItems.map(({ to, Icon, title, desc }) => (
-                <Link key={to} to={to} className="pcl-quick-tile">
+              {quickShortcuts.map(({ key, to, Icon, zh: titleZh, en: titleEn, detailZh, detailEn }) => (
+                <Link key={key} to={to} className="pcl-quick-tile">
                   <span className="pcl-quick-icon">
                     <Icon size={17} />
                   </span>
                   <div className="pcl-quick-copy">
-                    <strong>{title}</strong>
-                    <small>{desc}</small>
+                    <strong>{zh ? titleZh : titleEn}</strong>
+                    <small>{zh ? detailZh : detailEn}</small>
                   </div>
                   <ArrowUpRight size={14} className="pcl-quick-arrow" />
                 </Link>

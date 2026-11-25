@@ -12,7 +12,6 @@ import {
   Minus,
   PackagePlus,
   Paintbrush,
-  Palette,
   Pin,
   Play,
   Plus,
@@ -33,7 +32,6 @@ import {
   usePlatformAccount,
 } from '../../shared/platformAccountClient';
 import { assetUrl, isTauriRuntime } from '../../shared/runtime';
-import { PCL_THEMES, useLauncherTheme } from './launcherTheme';
 import {
   MAX_PINNED_TOP_TOOLS,
   PINNABLE_TOOLS,
@@ -90,6 +88,19 @@ function resolveRouteMeta(
         backEn: 'Back to Tools',
         titleZh: '星枢开房',
         titleEn: 'XingShu Room',
+      },
+    };
+  }
+  if (pathname.startsWith('/tools/plugin-guide')) {
+    return {
+      tab: 'tools',
+      subPage: {
+        tab: 'tools',
+        backTo: '/tools',
+        backZh: '返回工具库',
+        backEn: 'Back to Tools',
+        titleZh: '外部 Mod 接入指南',
+        titleEn: 'Plugin SDK Guide',
       },
     };
   }
@@ -333,23 +344,19 @@ function resolveRouteMeta(
 }
 
 export function LauncherNav() {
-  const { locale, setLocale } = useTranslation();
+  const { locale } = useTranslation();
   const zh = locale === 'zh-CN';
   const { pathname, search } = useLocation();
   const navigate = useNavigate();
-  const { theme, setTheme } = useLauncherTheme();
-  const activePreset = PCL_THEMES.find((item) => item.id === theme) ?? PCL_THEMES[0];
   const { user: platUser, gameBindings } = usePlatformAccount();
   const { pinnedKeys, pinnedTools, isPinned, togglePin, movePin, clearPins } = usePinnedTopTools();
 
   const { tab, subPage } = resolveRouteMeta(pathname, search, pinnedKeys);
 
   const [maximized, setMaximized] = useState(false);
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [platMenuOpen, setPlatMenuOpen] = useState(false);
   const [pinMenuOpen, setPinMenuOpen] = useState(false);
   const [pinLimitMsg, setPinLimitMsg] = useState('');
-  const themePickerRef = useRef<HTMLDivElement>(null);
   const platPickerRef = useRef<HTMLDivElement>(null);
   const pinPickerRef = useRef<HTMLDivElement>(null);
 
@@ -456,11 +463,8 @@ export function LauncherNav() {
   }, []);
 
   useEffect(() => {
-    if (!themeMenuOpen && !platMenuOpen && !pinMenuOpen) return;
+    if (!platMenuOpen && !pinMenuOpen) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (themePickerRef.current && !themePickerRef.current.contains(event.target as Node)) {
-        setThemeMenuOpen(false);
-      }
       if (platPickerRef.current && !platPickerRef.current.contains(event.target as Node)) {
         setPlatMenuOpen(false);
       }
@@ -470,7 +474,6 @@ export function LauncherNav() {
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setThemeMenuOpen(false);
         setPlatMenuOpen(false);
         setPinMenuOpen(false);
       }
@@ -481,7 +484,7 @@ export function LauncherNav() {
       document.removeEventListener('mousedown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [pinMenuOpen, platMenuOpen, themeMenuOpen]);
+  }, [pinMenuOpen, platMenuOpen]);
 
   const runWindowAction = (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauriRuntime()) return;
@@ -636,7 +639,6 @@ export function LauncherNav() {
               onClick={() => {
                 setPinLimitMsg('');
                 setPinMenuOpen((v) => !v);
-                setThemeMenuOpen(false);
                 setPlatMenuOpen(false);
               }}
             >
@@ -761,7 +763,6 @@ export function LauncherNav() {
                   className={`pcl-plat-pill${platMenuOpen ? ' is-open' : ''}`}
                   onClick={() => {
                     setPlatMenuOpen((v) => !v);
-                    setThemeMenuOpen(false);
                   }}
                 >
                   <PlatformUserAvatar
@@ -833,74 +834,6 @@ export function LauncherNav() {
               </>
             )}
           </div>
-
-          <div className="pcl-theme-picker-wrap" ref={themePickerRef}>
-            <button
-              type="button"
-              className={`pcl-title-pill-btn${themeMenuOpen ? ' is-open' : ''}`}
-              aria-label={zh ? '主题配色' : 'Theme palette'}
-              aria-expanded={themeMenuOpen}
-              aria-haspopup="dialog"
-              title={zh ? `当前主题：${activePreset.nameZh}` : `Theme: ${activePreset.nameEn}`}
-              onClick={() => setThemeMenuOpen((open) => !open)}
-            >
-              <Palette size={14} />
-              <span
-                className="pcl-theme-dot"
-                style={{ background: activePreset.swatchPrimary }}
-                aria-hidden="true"
-              />
-            </button>
-
-            {themeMenuOpen && (
-              <div
-                className="pcl-theme-popover"
-                role="dialog"
-                aria-label={zh ? '快速切换主题' : 'Quick theme picker'}
-              >
-                <div className="pcl-theme-popover-head">
-                  <span>{zh ? '主题配色' : 'PCL2 Themes'}</span>
-                  <small>{zh ? activePreset.nameZh : activePreset.nameEn}</small>
-                </div>
-                <div className="pcl-theme-popover-grid">
-                  {PCL_THEMES.map((preset) => {
-                    const selected = preset.id === theme;
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        className={`pcl-theme-option${selected ? ' is-selected' : ''}`}
-                        onClick={() => {
-                          setTheme(preset.id);
-                        }}
-                      >
-                        <span
-                          className="pcl-theme-swatch"
-                          style={{
-                            background: `linear-gradient(135deg, ${preset.swatchPrimary} 0%, ${preset.swatchSecondary} 100%)`,
-                          }}
-                          aria-hidden="true"
-                        />
-                        <span className="pcl-theme-name">{zh ? preset.nameZh : preset.nameEn}</span>
-                        {selected && <Check size={13} className="pcl-theme-check" aria-hidden="true" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <button
-            type="button"
-            className="pcl-lang-toggle"
-            aria-label={zh ? '切换界面语言为英文' : 'Switch language to Chinese'}
-            title={zh ? '切换语言 (中 / EN)' : 'Switch language (中 / EN)'}
-            onClick={() => setLocale(zh ? 'en-US' : 'zh-CN')}
-          >
-            <span className={zh ? 'is-active' : ''}>中</span>
-            <span className={!zh ? 'is-active' : ''}>EN</span>
-          </button>
         </div>
 
         <div className="pcl-window-controls" data-no-drag>

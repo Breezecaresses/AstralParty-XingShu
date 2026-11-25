@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using XingShu.Runtime;
+using XingShuRuntime.Core;
+using XingShuRuntime.Utilities;
 
 namespace XingShuRuntime.UI
 {
@@ -13,35 +15,158 @@ namespace XingShuRuntime.UI
     /// </summary>
     internal static class XingShuGlassSkin
     {
-        internal static readonly Color BackdropDim = new Color(0.03f, 0.05f, 0.10f, 0.54f);
-        internal static readonly Color ShellFill = new Color(0.08f, 0.11f, 0.17f, 0.84f);
-        internal static readonly Color ShellBorder = new Color(1f, 1f, 1f, 0.18f);
-        internal static readonly Color RailFill = new Color(0.11f, 0.15f, 0.23f, 0.72f);
-        internal static readonly Color RailBorder = new Color(1f, 1f, 1f, 0.14f);
-        internal static readonly Color HeaderFill = new Color(0.14f, 0.19f, 0.28f, 0.62f);
+        internal static readonly string[] GlassPresetNames = new string[]
+        {
+            "星夜深蓝",
+            "星樱绯紫",
+            "极光青雾",
+            "琥珀暖金",
+            "曜石纯黑",
+            "自定义色调",
+        };
 
-        internal static readonly Color CardFill = new Color(1f, 1f, 1f, 0.085f);
-        internal static readonly Color CardAccentFill = new Color(0.36f, 0.68f, 1f, 0.14f);
-        internal static readonly Color CardBorder = new Color(1f, 1f, 1f, 0.16f);
-        internal static readonly Color CardAccentBorder = new Color(0.50f, 0.78f, 1f, 0.34f);
+        internal static Color BackdropDim { get; private set; } = new Color(0.02f, 0.04f, 0.08f, 0.56f);
+        internal static Color ShellFill { get; private set; } = new Color(0.06f, 0.09f, 0.14f, 0.86f);
+        internal static Color ShellBorder { get; private set; } = new Color(1f, 1f, 1f, 0.24f);
+        internal static Color RailFill { get; private set; } = new Color(0.09f, 0.13f, 0.21f, 0.82f);
+        internal static Color RailBorder { get; private set; } = new Color(1f, 1f, 1f, 0.16f);
+        internal static Color HeaderFill { get; private set; } = new Color(0.14f, 0.19f, 0.28f, 0.80f);
 
-        internal static readonly Color TabNormalFill = new Color(1f, 1f, 1f, 0.05f);
-        internal static readonly Color TabHoverFill = new Color(1f, 1f, 1f, 0.12f);
-        internal static readonly Color TabSelectedFill = new Color(0.36f, 0.68f, 1f, 0.25f);
-        internal static readonly Color TabSelectedBorder = new Color(0.55f, 0.82f, 1f, 0.65f);
+        internal static Color CardFill { get; private set; } = new Color(0.13f, 0.18f, 0.27f, 0.78f);
+        internal static Color CardAccentFill { get; private set; } = new Color(0.17f, 0.34f, 0.55f, 0.82f);
+        internal static Color CardBorder { get; private set; } = new Color(1f, 1f, 1f, 0.22f);
+        internal static Color CardAccentBorder { get; private set; } = new Color(0.45f, 0.78f, 1f, 0.44f);
 
-        internal static readonly Color ButtonFill = new Color(1f, 1f, 1f, 0.12f);
-        internal static readonly Color ButtonAccentFill = new Color(0.28f, 0.60f, 0.96f, 0.86f);
-        internal static readonly Color InputFill = new Color(0.05f, 0.07f, 0.12f, 0.62f);
+        internal static Color TabNormalFill { get; private set; } = new Color(1f, 1f, 1f, 0.06f);
+        internal static Color TabHoverFill { get; private set; } = new Color(1f, 1f, 1f, 0.14f);
+        internal static Color TabSelectedFill { get; private set; } = new Color(0.28f, 0.58f, 0.92f, 0.42f);
+        internal static Color TabSelectedBorder { get; private set; } = new Color(0.55f, 0.82f, 1f, 0.72f);
 
-        internal static readonly Color TextPrimary = new Color(0.95f, 0.97f, 1.00f, 1f);
-        internal static readonly Color TextSecondary = new Color(0.74f, 0.80f, 0.89f, 1f);
-        internal static readonly Color TextMuted = new Color(0.56f, 0.64f, 0.75f, 1f);
-        internal static readonly Color AccentBlue = new Color(0.42f, 0.75f, 1.00f, 1f);
-        internal static readonly Color AccentMint = new Color(0.32f, 0.86f, 0.66f, 1f);
-        internal static readonly Color DividerLine = new Color(1f, 1f, 1f, 0.12f);
+        internal static Color ButtonFill { get; private set; } = new Color(0.22f, 0.29f, 0.40f, 0.86f);
+        internal static Color ButtonAccentFill { get; private set; } = new Color(0.20f, 0.52f, 0.90f, 0.92f);
+        internal static Color InputFill { get; private set; } = new Color(0.05f, 0.08f, 0.13f, 0.78f);
+
+        internal static readonly Color TextPrimary = new Color(0.96f, 0.98f, 1.00f, 1f);
+        internal static readonly Color TextSecondary = new Color(0.84f, 0.89f, 0.96f, 1f);
+        internal static readonly Color TextMuted = new Color(0.68f, 0.76f, 0.86f, 1f);
+        internal static Color AccentBlue { get; private set; } = new Color(0.48f, 0.80f, 1.00f, 1f);
+        internal static Color AccentMint { get; private set; } = new Color(0.36f, 0.89f, 0.69f, 1f);
+        internal static readonly Color DividerLine = new Color(1f, 1f, 1f, 0.16f);
 
         private static readonly Dictionary<string, Sprite> _spriteCache = new Dictionary<string, Sprite>();
+        private static int _paletteRevision;
+        private static int _controlSpritesRevision = -1;
+        private static Sprite _cachedSliderTrackSprite;
+        private static Sprite _cachedSliderFillSprite;
+        private static Sprite _cachedSliderHandleSprite;
+        private static Sprite _cachedToggleBgSprite;
+        private static Sprite _cachedToggleCheckSprite;
+        private static Sprite _cachedInputSprite;
+
+        private sealed class CachedPageNodes
+        {
+            internal int ChildCount;
+            internal float NextScanAt;
+            internal Image[] Images;
+            internal Text[] Texts;
+        }
+
+        private static readonly Dictionary<int, CachedPageNodes> _pageNodeCache = new Dictionary<int, CachedPageNodes>();
+
+        internal static bool IsActive => XingShuUICenter.IsGlassActive;
+
+        internal static void RefreshPaletteFromConfig()
+        {
+            int preset = XingShuConfigService.GetInt(XingShuConfigKeys.UiGlassThemePreset, XingShuConfigKeys.UiGlassThemePresetDefault);
+            if (preset < 0 || preset > 5) preset = XingShuConfigKeys.UiGlassThemePresetDefault;
+
+            float customHue = XingShuMobileUIHelper.FiniteClamp(
+                XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassCustomHue, XingShuConfigKeys.UiGlassCustomHueDefault),
+                XingShuConfigKeys.UiGlassCustomHueMin,
+                XingShuConfigKeys.UiGlassCustomHueMax,
+                XingShuConfigKeys.UiGlassCustomHueDefault);
+            float shellAlpha = XingShuMobileUIHelper.FiniteClamp(
+                XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassShellAlpha, XingShuConfigKeys.UiGlassShellAlphaDefault),
+                XingShuConfigKeys.UiGlassShellAlphaMin,
+                XingShuConfigKeys.UiGlassShellAlphaMax,
+                XingShuConfigKeys.UiGlassShellAlphaDefault);
+            float cardAlpha = XingShuMobileUIHelper.FiniteClamp(
+                XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassCardAlpha, XingShuConfigKeys.UiGlassCardAlphaDefault),
+                XingShuConfigKeys.UiGlassCardAlphaMin,
+                XingShuConfigKeys.UiGlassCardAlphaMax,
+                XingShuConfigKeys.UiGlassCardAlphaDefault);
+
+            // Quantize alpha to 2.5% steps & hue to 5-degree steps to keep generated SDF sprite cache bounded.
+            float qShellA = Mathf.Round(shellAlpha * 40f) / 40f;
+            float qCardA = Mathf.Round(cardAlpha * 40f) / 40f;
+
+            float hueDeg;
+            float baseSat;
+            float accentSat;
+            switch (preset)
+            {
+                case 1: // 星樱绯紫
+                    hueDeg = 328f; baseSat = 0.44f; accentSat = 0.68f;
+                    break;
+                case 2: // 极光青雾
+                    hueDeg = 186f; baseSat = 0.48f; accentSat = 0.70f;
+                    break;
+                case 3: // 琥珀暖金
+                    hueDeg = 34f; baseSat = 0.46f; accentSat = 0.74f;
+                    break;
+                case 4: // 曜石纯黑
+                    hueDeg = 220f; baseSat = 0.06f; accentSat = 0.18f;
+                    break;
+                case 5: // 自定义色调
+                    hueDeg = Mathf.Round(customHue / 5f) * 5f; baseSat = 0.46f; accentSat = 0.72f;
+                    break;
+                default: // 0 星夜深蓝
+                    hueDeg = 214f; baseSat = 0.50f; accentSat = 0.70f;
+                    break;
+            }
+
+            float h = (hueDeg % 360f) / 360f;
+            Color shellRgb = Color.HSVToRGB(h, baseSat * 0.95f, preset == 4 ? 0.08f : 0.14f);
+            Color railRgb = Color.HSVToRGB(h, baseSat, preset == 4 ? 0.11f : 0.19f);
+            Color headerRgb = Color.HSVToRGB(h, baseSat * 0.85f, preset == 4 ? 0.14f : 0.25f);
+            Color cardRgb = Color.HSVToRGB(h, baseSat * 0.82f, preset == 4 ? 0.13f : 0.24f);
+            Color cardAccentRgb = Color.HSVToRGB(h, Mathf.Min(0.75f, accentSat * 0.78f), preset == 4 ? 0.22f : 0.42f);
+            Color btnRgb = Color.HSVToRGB(h, baseSat * 0.68f, preset == 4 ? 0.24f : 0.36f);
+            Color btnAccentRgb = Color.HSVToRGB(h, accentSat, preset == 4 ? 0.36f : 0.78f);
+            Color inputRgb = Color.HSVToRGB(h, baseSat * 0.9f, 0.10f);
+            Color accentLight = preset == 4 ? new Color(0.84f, 0.88f, 0.95f, 1f) : Color.HSVToRGB(h, 0.52f, 0.98f);
+            Color secondaryAccent = preset == 1 ? new Color(1.00f, 0.62f, 0.84f, 1f)
+                : (preset == 3 ? new Color(1.00f, 0.82f, 0.42f, 1f) : new Color(0.36f, 0.89f, 0.69f, 1f));
+
+            BackdropDim = new Color(shellRgb.r * 0.35f, shellRgb.g * 0.35f, shellRgb.b * 0.35f, Mathf.Clamp(qShellA * 0.65f, 0.28f, 0.62f));
+            ShellFill = new Color(shellRgb.r, shellRgb.g, shellRgb.b, qShellA);
+            RailFill = new Color(railRgb.r, railRgb.g, railRgb.b, Mathf.Clamp(qShellA - 0.04f, 0.40f, 0.94f));
+            HeaderFill = new Color(headerRgb.r, headerRgb.g, headerRgb.b, Mathf.Clamp(qCardA + 0.04f, 0.38f, 0.94f));
+            CardFill = new Color(cardRgb.r, cardRgb.g, cardRgb.b, qCardA);
+            CardAccentFill = new Color(cardAccentRgb.r, cardAccentRgb.g, cardAccentRgb.b, Mathf.Clamp(qCardA + 0.06f, 0.42f, 0.95f));
+            ButtonFill = new Color(btnRgb.r, btnRgb.g, btnRgb.b, Mathf.Clamp(qCardA + 0.08f, 0.55f, 0.94f));
+            ButtonAccentFill = new Color(btnAccentRgb.r, btnAccentRgb.g, btnAccentRgb.b, 0.92f);
+            InputFill = new Color(inputRgb.r, inputRgb.g, inputRgb.b, Mathf.Clamp(qCardA + 0.02f, 0.45f, 0.90f));
+            TabSelectedFill = new Color(accentLight.r * 0.55f, accentLight.g * 0.55f, accentLight.b * 0.55f, 0.44f);
+            TabSelectedBorder = new Color(accentLight.r, accentLight.g, accentLight.b, 0.76f);
+            CardAccentBorder = new Color(accentLight.r, accentLight.g, accentLight.b, 0.48f);
+            ShellBorder = new Color(Mathf.Lerp(1f, accentLight.r, 0.25f), Mathf.Lerp(1f, accentLight.g, 0.25f), Mathf.Lerp(1f, accentLight.b, 0.25f), 0.24f);
+            AccentBlue = accentLight;
+            AccentMint = secondaryAccent;
+            _paletteRevision++;
+        }
+
+        private static void EnsureControlSprites()
+        {
+            if (_controlSpritesRevision == _paletteRevision && _cachedSliderTrackSprite != null) return;
+            _controlSpritesRevision = _paletteRevision;
+            _cachedSliderTrackSprite = GetRoundedPanelSprite(6, InputFill, DividerLine, 1f);
+            _cachedSliderFillSprite = GetRoundedPanelSprite(6, AccentBlue, Color.clear, 1f);
+            _cachedSliderHandleSprite = GetRoundedPanelSprite(12, Color.white, AccentBlue, 1.5f);
+            _cachedToggleBgSprite = GetRoundedPanelSprite(8, new Color(1f, 1f, 1f, 0.12f), new Color(1f, 1f, 1f, 0.44f), 1.4f);
+            _cachedToggleCheckSprite = GetRoundedPanelSprite(6, AccentMint, Color.clear, 1f);
+            _cachedInputSprite = GetRoundedPanelSprite(8, InputFill, new Color(1f, 1f, 1f, 0.28f), 1.2f);
+        }
 
         internal static Sprite GetRoundedPanelSprite(int radius, Color fill, Color border, float borderThickness = 1.5f)
         {
@@ -125,6 +250,70 @@ namespace XingShuRuntime.UI
         internal static Sprite ButtonAccentSprite => GetRoundedPanelSprite(9, ButtonAccentFill, new Color(0.75f, 0.90f, 1f, 0.45f), 1.2f);
         internal static Sprite PillBadgeSprite => GetRoundedPanelSprite(10, new Color(0.32f, 0.65f, 1f, 0.22f), new Color(0.52f, 0.80f, 1f, 0.42f), 1f);
 
+        internal static void ApplySelectableButton(Button btn, bool selected)
+        {
+            if (btn == null) return;
+            ApplySelectableButton(btn.GetComponent<Image>(), btn.GetComponentInChildren<Text>(), selected);
+        }
+
+        internal static void ApplySelectableButton(Image img, Text txt, bool selected)
+        {
+            if (IsActive)
+            {
+                if (img != null)
+                {
+                    ApplySprite(img, selected ? ButtonAccentSprite : ButtonSprite, Image.Type.Sliced, false);
+                }
+                if (txt != null)
+                {
+                    txt.color = selected ? TextPrimary : TextSecondary;
+                    XingShuUITheme.ApplyCrispFont(txt, true);
+                }
+                return;
+            }
+
+            Sprite sp = XingShuUIAssetService.GetSprite(selected ? "button_selected.png" : "button_secondary.png");
+            if (img != null)
+            {
+                img.sprite = sp;
+                img.type = (sp != null && sp.border != Vector4.zero) ? Image.Type.Sliced : Image.Type.Simple;
+                img.color = XingShuUIAssetService.IsFallbackSprite(sp)
+                    ? (selected ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
+                    : Color.white;
+            }
+            if (txt != null)
+            {
+                txt.color = selected ? Color.white : XingShuUITheme.PrimaryText;
+            }
+        }
+
+        internal static void ApplyStatusBadge(Image bg, Text txt, Color vanillaBgColor, Color vanillaTextColor, Color glassTextColor)
+        {
+            if (IsActive)
+            {
+                if (bg != null) ApplySprite(bg, PillBadgeSprite, Image.Type.Sliced, false);
+                if (txt != null)
+                {
+                    txt.color = glassTextColor;
+                    XingShuUITheme.ApplyCrispFont(txt, true);
+                }
+                return;
+            }
+
+            if (bg != null) bg.color = vanillaBgColor;
+            if (txt != null) txt.color = vanillaTextColor;
+        }
+
+        internal static void InvalidateRestyleCache(GameObject pageRoot = null)
+        {
+            if (pageRoot == null)
+            {
+                _pageNodeCache.Clear();
+                return;
+            }
+            _pageNodeCache.Remove(pageRoot.GetInstanceID());
+        }
+
         /// <summary>
         /// Walks existing module page GameObjects and translates opaque light/game-colored surfaces,
         /// outlines, and dark text into clean translucent frosted glass styling so all 22+ views work
@@ -133,133 +322,258 @@ namespace XingShuRuntime.UI
         internal static void RestylePageForGlass(GameObject pageRoot)
         {
             if (pageRoot == null) return;
-            XingShuNativeGameUI.ClearPendingBindingsUnder(pageRoot);
+            InvalidateRestyleCache(pageRoot);
+            RestylePageInternal(pageRoot, forceRescan: true);
+        }
 
-            Image[] images = pageRoot.GetComponentsInChildren<Image>(true);
+        /// <summary>
+        /// Zero-GC steady-state LateUpdate pass so dynamic controls clicked or refreshed during Update
+        /// never flash vanilla artwork or dark text for even a single frame.
+        /// </summary>
+        internal static void RestylePageForGlassFast(GameObject pageRoot)
+        {
+            if (pageRoot == null) return;
+            RestylePageInternal(pageRoot, forceRescan: false);
+        }
+
+        private static void RestylePageInternal(GameObject pageRoot, bool forceRescan)
+        {
+            EnsureControlSprites();
+            int key = pageRoot.GetInstanceID();
+            int childCount = pageRoot.transform.childCount;
+            float now = Time.unscaledTime;
+
+            if (!_pageNodeCache.TryGetValue(key, out CachedPageNodes nodes)
+                || nodes == null
+                || forceRescan
+                || nodes.ChildCount != childCount
+                || now >= nodes.NextScanAt)
+            {
+                XingShuNativeGameUI.ClearPendingBindingsUnder(pageRoot);
+                Outline[] outlines = pageRoot.GetComponentsInChildren<Outline>(true);
+                for (int i = 0; i < outlines.Length; i++)
+                {
+                    if (outlines[i] != null) UnityEngine.Object.Destroy(outlines[i]);
+                }
+
+                nodes = new CachedPageNodes
+                {
+                    ChildCount = childCount,
+                    NextScanAt = now + 0.50f,
+                    Images = pageRoot.GetComponentsInChildren<Image>(true),
+                    Texts = pageRoot.GetComponentsInChildren<Text>(true),
+                };
+                _pageNodeCache[key] = nodes;
+            }
+
+            ApplyGlassStylingToNodes(nodes);
+        }
+
+        private static void ApplyGlassStylingToNodes(CachedPageNodes nodes)
+        {
+            Sprite sliderTrackSprite = _cachedSliderTrackSprite;
+            Sprite sliderFillSprite = _cachedSliderFillSprite;
+            Sprite sliderHandleSprite = _cachedSliderHandleSprite;
+            Sprite toggleBgSprite = _cachedToggleBgSprite;
+            Sprite toggleCheckSprite = _cachedToggleCheckSprite;
+            Sprite inputSprite = _cachedInputSprite;
+            Sprite pillBadgeSprite = PillBadgeSprite;
+            Sprite btnNormalSprite = ButtonSprite;
+            Sprite btnAccentSprite = ButtonAccentSprite;
+            Sprite cardNormalSprite = CardSprite;
+            Sprite cardAccentSprite = CardAccentSprite;
+
+            Image[] images = nodes.Images;
             for (int i = 0; i < images.Length; i++)
             {
                 Image img = images[i];
-                if (img == null) continue;
+                if (img == null)
+                {
+                    nodes.NextScanAt = 0f;
+                    continue;
+                }
+                if (img.GetComponent<Mask>() != null || img.GetComponent<RectMask2D>() != null) continue;
 
                 string n = img.gameObject.name;
-                bool isToggleVisual = n == "Background" || n == "Checkmark";
-                if (isToggleVisual)
+                if (n.Equals("Viewport", StringComparison.OrdinalIgnoreCase)) continue;
+                string sp = img.sprite != null ? (img.sprite.name ?? "") : "";
+
+                // 1. Sliders (track, fill, hide star trail, crisp handle)
+                if (img.GetComponentInParent<Slider>() != null)
                 {
-                    if (n == "Background")
+                    if (n.Equals("Trail", StringComparison.OrdinalIgnoreCase) || sp.IndexOf("SliderTrail", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        img.sprite = GetRoundedPanelSprite(8, new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.35f), 1.4f);
-                        img.color = Color.white;
-                        img.type = Image.Type.Sliced;
+                        if (img.enabled) img.enabled = false;
+                        continue;
                     }
-                    else
+                    if (n.Equals("Background", StringComparison.OrdinalIgnoreCase) || sp.IndexOf("SliderBg", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        img.sprite = GetRoundedPanelSprite(6, AccentMint, Color.clear, 1f);
-                        img.color = Color.white;
-                        img.type = Image.Type.Sliced;
+                        ApplySprite(img, sliderTrackSprite, Image.Type.Sliced, false);
+                        continue;
                     }
-                    continue;
+                    if (n.IndexOf("Fill", StringComparison.OrdinalIgnoreCase) >= 0 && img.transform.parent != null && img.transform.parent.name.IndexOf("Fill Area", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        ApplySprite(img, sliderFillSprite, Image.Type.Sliced, false);
+                        continue;
+                    }
+                    if (n.IndexOf("Handle", StringComparison.OrdinalIgnoreCase) >= 0 && img.transform.parent != null && img.transform.parent.name.IndexOf("Handle", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        ApplySprite(img, sliderHandleSprite, Image.Type.Simple, true);
+                        continue;
+                    }
                 }
 
+                // 2. Toggles (box background & checkmark)
+                if (img.GetComponentInParent<Toggle>() != null)
+                {
+                    if (n.Equals("Background", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ApplySprite(img, toggleBgSprite, Image.Type.Sliced, false);
+                        continue;
+                    }
+                    if (n.Equals("Checkmark", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ApplySprite(img, toggleCheckSprite, Image.Type.Sliced, false);
+                        continue;
+                    }
+                }
+
+                // 3. Buttons (distinguish selected/primary vs standard glass pill)
                 if (img.GetComponent<Button>() != null)
                 {
-                    // Avoid turning small dot/icon buttons completely opaque; keep crisp glass pills.
-                    img.sprite = ButtonSprite;
-                    img.type = Image.Type.Sliced;
-                    img.color = Color.white;
+                    bool isAccentBtn = img.sprite == btnAccentSprite
+                        || sp.IndexOf("button_selected", StringComparison.OrdinalIgnoreCase) >= 0
+                        || sp.IndexOf("button_primary", StringComparison.OrdinalIgnoreCase) >= 0
+                        || sp.IndexOf("BtnSmallOk", StringComparison.OrdinalIgnoreCase) >= 0
+                        || sp.IndexOf("BtnLargeOk", StringComparison.OrdinalIgnoreCase) >= 0
+                        || sp.IndexOf("TabGold", StringComparison.OrdinalIgnoreCase) >= 0
+                        || (img.sprite != btnNormalSprite && img.color.r > 0.72f && img.color.b > 0.30f && img.color.g < 0.52f);
+                    ApplySprite(img, isAccentBtn ? btnAccentSprite : btnNormalSprite, Image.Type.Sliced, false);
                     continue;
                 }
 
+                // 4. InputFields
                 if (img.GetComponent<InputField>() != null)
                 {
-                    img.sprite = GetRoundedPanelSprite(8, InputFill, new Color(1f, 1f, 1f, 0.24f), 1.2f);
-                    img.type = Image.Type.Sliced;
-                    img.color = Color.white;
+                    ApplySprite(img, inputSprite, Image.Type.Sliced, false);
                     continue;
                 }
 
-                if (n.IndexOf("Fill", StringComparison.OrdinalIgnoreCase) >= 0 && img.transform.parent != null && img.transform.parent.name.IndexOf("Fill Area", StringComparison.OrdinalIgnoreCase) >= 0)
+                // 5. Scrollbar parts
+                if (img.GetComponentInParent<Scrollbar>() != null) continue;
+
+                // 6. Hotkey / Status badges
+                if ((n.IndexOf("Badge", StringComparison.OrdinalIgnoreCase) >= 0
+                     || sp.IndexOf("hotkey_badge", StringComparison.OrdinalIgnoreCase) >= 0
+                     || sp.IndexOf("UidPill", StringComparison.OrdinalIgnoreCase) >= 0)
+                    && n.IndexOf("Card", StringComparison.OrdinalIgnoreCase) < 0)
                 {
-                    img.sprite = GetRoundedPanelSprite(6, AccentBlue, Color.clear, 1f);
-                    img.type = Image.Type.Sliced;
-                    img.color = Color.white;
+                    ApplySprite(img, pillBadgeSprite, Image.Type.Sliced, false);
                     continue;
                 }
 
-                if (n.IndexOf("Handle", StringComparison.OrdinalIgnoreCase) >= 0 && img.transform.parent != null && img.transform.parent.name.IndexOf("Handle", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    img.sprite = GetRoundedPanelSprite(12, Color.white, AccentBlue, 1.5f);
-                    img.type = Image.Type.Simple;
-                    img.color = Color.white;
-                    continue;
-                }
+                // 7. Cards & section containers (including EngineSelectorCard, EnableRowCard, Header, Status, Shortcut_*, Native_RoundedLightCard)
+                bool isSmallDeco = n.IndexOf("Dot", StringComparison.OrdinalIgnoreCase) >= 0
+                    || n.IndexOf("Swatch", StringComparison.OrdinalIgnoreCase) >= 0
+                    || n.IndexOf("Divider", StringComparison.OrdinalIgnoreCase) >= 0
+                    || n.IndexOf("Icon", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (isSmallDeco) continue;
 
-                bool looksLikeCard = n.StartsWith("Card", StringComparison.OrdinalIgnoreCase)
-                    || n.IndexOf("Card_", StringComparison.OrdinalIgnoreCase) >= 0
+                bool looksLikeCard = n.IndexOf("Card", StringComparison.OrdinalIgnoreCase) >= 0
+                    || n.Equals("Header", StringComparison.OrdinalIgnoreCase)
+                    || n.Equals("Status", StringComparison.OrdinalIgnoreCase)
+                    || n.StartsWith("Shortcut_", StringComparison.OrdinalIgnoreCase)
+                    || n.StartsWith("Row_", StringComparison.OrdinalIgnoreCase)
                     || n.IndexOf("Feature", StringComparison.OrdinalIgnoreCase) >= 0
-                    || n.IndexOf("Panel", StringComparison.OrdinalIgnoreCase) >= 0;
+                    || n.IndexOf("Panel", StringComparison.OrdinalIgnoreCase) >= 0
+                    || n.IndexOf("Section", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sp.IndexOf("card_base", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sp.IndexOf("card_feature", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sp.IndexOf("RoundedLightCard", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sp.IndexOf("RoundedDarkFrame", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sp.IndexOf("LightPattern", StringComparison.OrdinalIgnoreCase) >= 0
+                    || (img.color.a > 0.08f && sp.IndexOf("UISprite", StringComparison.OrdinalIgnoreCase) >= 0 && img.rectTransform.rect.height >= 36f);
 
                 if (looksLikeCard)
                 {
-                    bool accent = n.IndexOf("Header", StringComparison.OrdinalIgnoreCase) >= 0 || n.IndexOf("Feature", StringComparison.OrdinalIgnoreCase) >= 0;
-                    img.sprite = accent ? CardAccentSprite : CardSprite;
-                    img.type = Image.Type.Sliced;
-                    img.color = Color.white;
+                    bool accent = n.IndexOf("Header", StringComparison.OrdinalIgnoreCase) >= 0
+                        || n.IndexOf("Feature", StringComparison.OrdinalIgnoreCase) >= 0
+                        || n.IndexOf("EngineSelector", StringComparison.OrdinalIgnoreCase) >= 0
+                        || sp.IndexOf("card_feature", StringComparison.OrdinalIgnoreCase) >= 0;
+                    ApplySprite(img, accent ? cardAccentSprite : cardNormalSprite, Image.Type.Sliced, false);
                     continue;
                 }
 
-                if (img.color.a > 0.08f && img.sprite != null)
+                if (img.color.a > 0.08f && sp.IndexOf("button_", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    string sp = img.sprite.name ?? "";
-                    if (sp.IndexOf("card_base", StringComparison.OrdinalIgnoreCase) >= 0
-                        || sp.IndexOf("card_feature", StringComparison.OrdinalIgnoreCase) >= 0
-                        || sp.IndexOf("UISprite", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        img.sprite = CardSprite;
-                        img.type = Image.Type.Sliced;
-                        img.color = Color.white;
-                    }
-                    else if (sp.IndexOf("button_", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        img.sprite = ButtonSprite;
-                        img.type = Image.Type.Sliced;
-                        img.color = Color.white;
-                    }
+                    ApplySprite(img, btnNormalSprite, Image.Type.Sliced, false);
                 }
             }
 
-            // Strip heavy black outlines so glass typography stays clean and crisp
-            Outline[] outlines = pageRoot.GetComponentsInChildren<Outline>(true);
-            for (int i = 0; i < outlines.Length; i++)
-            {
-                if (outlines[i] != null) UnityEngine.Object.Destroy(outlines[i]);
-            }
-
-            Text[] texts = pageRoot.GetComponentsInChildren<Text>(true);
+            Text[] texts = nodes.Texts;
             for (int i = 0; i < texts.Length; i++)
             {
                 Text txt = texts[i];
-                if (txt == null) continue;
+                if (txt == null)
+                {
+                    nodes.NextScanAt = 0f;
+                    continue;
+                }
+                XingShuUITheme.ApplyCrispFont(txt, true);
+
                 Color c = txt.color;
                 float lum = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
                 string name = txt.gameObject.name;
 
-                if (txt.fontStyle == FontStyle.Bold || name == "Title" || name == "Text")
+                if (txt.GetComponentInParent<Button>() != null)
                 {
-                    txt.color = lum < 0.55f ? TextPrimary : c;
+                    if (lum < 0.58f && c != TextPrimary) txt.color = TextPrimary;
+                    continue;
                 }
-                else if (name.IndexOf("Value", StringComparison.OrdinalIgnoreCase) >= 0)
+
+                bool isBadgeText = name.IndexOf("Badge", StringComparison.OrdinalIgnoreCase) >= 0
+                    || (txt.transform.parent != null && txt.transform.parent.name.IndexOf("Badge", StringComparison.OrdinalIgnoreCase) >= 0);
+                if (isBadgeText)
                 {
-                    txt.color = AccentBlue;
+                    if (lum < 0.55f) txt.color = AccentMint;
+                    continue;
                 }
-                else if (name.IndexOf("Status", StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf("Hint", StringComparison.OrdinalIgnoreCase) >= 0)
+
+                if (name.IndexOf("Value", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("Speed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("Zoom", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    txt.color = lum < 0.62f ? AccentMint : c;
+                    if (c != AccentBlue) txt.color = AccentBlue;
                 }
-                else if (lum < 0.60f)
+                else if (name.IndexOf("Status", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("Hint", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("Indicator", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    if (lum < 0.62f && c != AccentMint) txt.color = AccentMint;
+                }
+                else if (txt.fontStyle == FontStyle.Bold
+                    || name == "Title"
+                    || name == "Text"
+                    || name == "Name"
+                    || name == "CardTitle"
+                    || name == "Label"
+                    || name == "EngineLabel")
+                {
+                    if (lum < 0.75f && c != TextPrimary) txt.color = TextPrimary;
+                }
+                else if (lum < 0.75f && c != TextSecondary)
                 {
                     txt.color = TextSecondary;
                 }
             }
+        }
+
+        private static void ApplySprite(Image img, Sprite sprite, Image.Type type, bool preserveAspect)
+        {
+            if (img.sprite != sprite) img.sprite = sprite;
+            if (img.type != type) img.type = type;
+            if (img.preserveAspect != preserveAspect) img.preserveAspect = preserveAspect;
+            if (img.color != Color.white) img.color = Color.white;
         }
     }
 
@@ -305,7 +619,7 @@ namespace XingShuRuntime.UI
             _pluginSummaryText = XingShuUIFactory.CreateText(hero, "Status", "", 13, XingShuGlassSkin.AccentMint, TextAnchor.MiddleLeft);
             XingShuViewCardHelper.PlaceStretchTop(_pluginSummaryText.rectTransform, 94f, 26f, 240f);
 
-            Button backBtn = XingShuViewCardHelper.CreateActionButton(hero, "SwitchToOriginal", "切换原版游戏风 UI", () => _onSwitchOriginalStyle?.Invoke(), 172f, 34f, 13);
+            Button backBtn = XingShuViewCardHelper.CreateActionButton(hero, "SwitchToOriginal", "切换原版 UI 皮肤", () => _onSwitchOriginalStyle?.Invoke(), 172f, 34f, 13);
             XingShuViewCardHelper.PlaceTopRight(backBtn.GetComponent<RectTransform>(), new Vector2(-20f, -102f), new Vector2(172f, 34f));
 
             RebuildMountedPluginCards();

@@ -102,7 +102,7 @@ fn spawn_splash_watchdog(
 }
 
 #[tauri::command]
-fn finish_splash_and_show_main(app: tauri::AppHandle) {
+async fn finish_splash_and_show_main(app: tauri::AppHandle) {
     reveal_main_and_close_splash(&app);
 }
 
@@ -112,23 +112,23 @@ fn get_startup_splash_active(state: tauri::State<'_, SplashState>) -> bool {
 }
 
 #[tauri::command]
-fn replay_startup_splash(app: tauri::AppHandle, state: tauri::State<'_, SplashState>) -> Result<(), String> {
+async fn replay_startup_splash(app: tauri::AppHandle, state: tauri::State<'_, SplashState>) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window("splash") {
         if state.active.load(Ordering::SeqCst) {
+            let _ = existing.show();
             let _ = existing.set_focus();
             return Ok(());
         }
         let _ = existing.close();
+        for _ in 0..20 {
+            if app.get_webview_window("splash").is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
-    let next_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    state.active.store(true, Ordering::SeqCst);
-
-    if let Some(main_win) = app.get_webview_window("main") {
-        let _ = main_win.hide();
-    }
-
-    WebviewWindowBuilder::new(
+    let splash_win = WebviewWindowBuilder::new(
         &app,
         "splash",
         WebviewUrl::App("index.html?window=splash&replay=1".into()),
@@ -142,9 +142,23 @@ fn replay_startup_splash(app: tauri::AppHandle, state: tauri::State<'_, SplashSt
     .resizable(false)
     .always_on_top(true)
     .skip_taskbar(true)
-    .visible(true)
+    .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
+
+    let next_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.active.store(true, Ordering::SeqCst);
+
+    if let Err(err) = splash_win.show() {
+        state.active.store(false, Ordering::SeqCst);
+        let _ = splash_win.close();
+        return Err(err.to_string());
+    }
+    let _ = splash_win.set_focus();
+
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.hide();
+    }
 
     spawn_splash_watchdog(app.clone(), state.active.clone(), state.generation.clone(), next_gen);
     Ok(())
@@ -159,6 +173,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(game_art::GameArt::default())
         .register_asynchronous_uri_scheme_protocol("game-art", game_art::respond)
+        .register_asynchronous_uri_scheme_protocol("lobby-media", customize::respond_lobby_media)
         .manage(module_panel::ModulePanelTarget::default())
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
@@ -440,6 +455,7 @@ pub fn run() {
             launcher::launcher_session,
             launcher::launcher_install,
             launcher::launcher_inspect_conflicts,
+            launcher::launcher_reveal_conflict_item,
             launcher::launcher_restore,
             launcher::launcher_start,
             launcher::launcher_mods,

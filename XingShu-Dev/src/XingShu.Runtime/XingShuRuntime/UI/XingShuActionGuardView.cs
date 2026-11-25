@@ -32,6 +32,8 @@ namespace XingShuRuntime.UI
         private int _lastObservedReconnectCount = -1;
         private string _lastObservedInterceptTime = "";
         private long _lastObservedRoomId = -1L;
+        private int _lastObservedBadgeState = -1;
+        private bool _lastObservedGlassActive;
         private bool _suppressCallbacks;
 
         internal GameObject Root => _root;
@@ -182,27 +184,31 @@ namespace XingShuRuntime.UI
                 }
             }
 
-            if (_statusBadgeText != null)
+            int badgeState = !enabled ? 0 : (!isBattle ? 1 : (hookRegistered ? 3 : 2));
+            bool glassActive = XingShuGlassSkin.IsActive;
+            if (_statusBadgeText != null && (badgeState != _lastObservedBadgeState || glassActive != _lastObservedGlassActive))
             {
+                _lastObservedBadgeState = badgeState;
+                _lastObservedGlassActive = glassActive;
                 _lastObservedBattle = isBattle;
                 _lastObservedHook = hookRegistered;
                 if (!enabled)
                 {
                     _statusBadgeText.text = "已关闭";
-                    _statusBadgeText.color = XingShuUITheme.BadgeMuted;
-                    if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.12f, 0.16f, 0.22f, 0.85f);
+                    XingShuGlassSkin.ApplyStatusBadge(_statusBadgeBg, _statusBadgeText,
+                        new Color(0.12f, 0.16f, 0.22f, 0.85f), XingShuUITheme.BadgeMuted, XingShuGlassSkin.TextMuted);
                 }
                 else if (!isBattle)
                 {
                     _statusBadgeText.text = "已就绪 · 等待对局";
-                    _statusBadgeText.color = XingShuUITheme.Pink;
-                    if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.25f, 0.20f, 0.08f, 0.85f);
+                    XingShuGlassSkin.ApplyStatusBadge(_statusBadgeBg, _statusBadgeText,
+                        new Color(0.25f, 0.20f, 0.08f, 0.85f), XingShuUITheme.Pink, XingShuGlassSkin.AccentBlue);
                 }
                 else
                 {
                     _statusBadgeText.text = hookRegistered ? "战局中保护生效" : "保护已启用 · 等待挂接";
-                    _statusBadgeText.color = XingShuUITheme.BadgeActive;
-                    if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.08f, 0.22f, 0.16f, 0.85f);
+                    XingShuGlassSkin.ApplyStatusBadge(_statusBadgeBg, _statusBadgeText,
+                        new Color(0.08f, 0.22f, 0.16f, 0.85f), XingShuUITheme.BadgeActive, XingShuGlassSkin.AccentMint);
                 }
             }
 

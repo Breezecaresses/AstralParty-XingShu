@@ -551,37 +551,14 @@ namespace XingShuRuntime.UI
 
         private void RefreshEngineModeVisuals(XingShuSpeedEngineMode mode, bool force = false)
         {
-            Sprite btnSecSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
-            Sprite btnSelSprite = XingShuUIAssetService.GetSprite("button_selected.png");
-
             bool isManaged = (mode == XingShuSpeedEngineMode.ManagedXingShu);
 
             // 1. 更新顶部 Selector 按钮外观
-            if (_imgManagedEngine != null)
-            {
-                _imgManagedEngine.sprite = isManaged ? btnSelSprite : btnSecSprite;
-                _imgManagedEngine.color = XingShuUIAssetService.IsFallbackSprite(_imgManagedEngine.sprite)
-                    ? (isManaged ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
-                    : Color.white;
-            }
-            if (_txtManagedEngine != null)
-            {
-                _txtManagedEngine.color = isManaged ? Color.white : XingShuUITheme.PrimaryText;
-                _txtManagedEngine.fontStyle = FontStyle.Bold;
-            }
+            XingShuGlassSkin.ApplySelectableButton(_imgManagedEngine, _txtManagedEngine, isManaged);
+            if (_txtManagedEngine != null) _txtManagedEngine.fontStyle = FontStyle.Bold;
 
-            if (_imgNativeEngine != null)
-            {
-                _imgNativeEngine.sprite = !isManaged ? btnSelSprite : btnSecSprite;
-                _imgNativeEngine.color = XingShuUIAssetService.IsFallbackSprite(_imgNativeEngine.sprite)
-                    ? (!isManaged ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
-                    : Color.white;
-            }
-            if (_txtNativeEngine != null)
-            {
-                _txtNativeEngine.color = !isManaged ? Color.white : XingShuUITheme.PrimaryText;
-                _txtNativeEngine.fontStyle = FontStyle.Bold;
-            }
+            XingShuGlassSkin.ApplySelectableButton(_imgNativeEngine, _txtNativeEngine, !isManaged);
+            if (_txtNativeEngine != null) _txtNativeEngine.fontStyle = FontStyle.Bold;
 
             // 2. 更新标题与说明文案
             if (_titleText != null)
@@ -693,25 +670,16 @@ namespace XingShuRuntime.UI
 
         private void UpdatePresetButtonVisuals(float currentSpeed)
         {
-            Sprite btnSecSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
-            Sprite btnSelSprite = XingShuUIAssetService.GetSprite("button_selected.png");
-
             for (int i = 0; i < _presetButtons.Count; i++)
             {
                 if (i >= PRESET_VALUES.Length) break;
                 bool isMatching = Mathf.Abs(currentSpeed - PRESET_VALUES[i]) < 0.04f;
-                Sprite activeSprite = isMatching ? btnSelSprite : btnSecSprite;
-                if (i < _presetImages.Count && _presetImages[i] != null)
+                Image img = i < _presetImages.Count ? _presetImages[i] : null;
+                Text txt = i < _presetTexts.Count ? _presetTexts[i] : null;
+                XingShuGlassSkin.ApplySelectableButton(img, txt, isMatching);
+                if (txt != null)
                 {
-                    _presetImages[i].sprite = activeSprite;
-                    _presetImages[i].color = XingShuUIAssetService.IsFallbackSprite(activeSprite)
-                        ? (isMatching ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
-                        : Color.white;
-                }
-                if (i < _presetTexts.Count && _presetTexts[i] != null)
-                {
-                    _presetTexts[i].color = isMatching ? Color.white : XingShuUITheme.PrimaryText;
-                    _presetTexts[i].fontStyle = FontStyle.Bold;
+                    txt.fontStyle = FontStyle.Bold;
                 }
             }
         }

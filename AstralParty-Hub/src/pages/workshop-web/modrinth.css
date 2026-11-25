@@ -4510,3 +4510,210 @@ a.mr-side-chip:hover {
 .mr-dl-cancel-btn:hover {
   background: rgba(248, 113, 113, 0.22);
 }
+
+/* ==========================================================================
+   Web Workshop Plugin SDK Integration Guide (`.mr-guide-*`)
+   ========================================================================== */
+.mr-web-root .mr-guide-page {
+  padding-top: 28px;
+  padding-bottom: 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mr-web-root .mr-guide-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px;
+  border-radius: 16px;
+  border: 1px solid var(--mr-border);
+  background: linear-gradient(145deg, var(--mr-surface) 0%, var(--mr-surface-subtle) 100%);
+}
+
+.mr-web-root .mr-guide-hero-copy {
+  max-width: 760px;
+}
+
+.mr-web-root .mr-guide-hero-copy h1 {
+  margin: 8px 0 6px;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--mr-text);
+  letter-spacing: -0.02em;
+}
+
+.mr-web-root .mr-guide-hero-copy p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--mr-text-secondary);
+}
+
+.mr-web-root .mr-guide-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mr-web-root .mr-guide-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 40, 120, 0.36);
+  background: var(--mr-accent-soft);
+  color: var(--mr-accent-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mr-web-root .mr-guide-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.mr-web-root .mr-guide-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--mr-border);
+  background: var(--mr-surface-subtle);
+  color: var(--mr-text);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.mr-web-root .mr-guide-btn:hover {
+  border-color: var(--mr-border-hover);
+  background: var(--mr-surface-hover);
+}
+
+.mr-web-root .mr-guide-btn.is-primary {
+  border-color: var(--mr-accent);
+  background: var(--mr-accent);
+  color: var(--mr-accent-ink);
+}
+
+.mr-web-root .mr-guide-btn.is-primary:hover {
+  background: var(--mr-accent-hover);
+}
+
+.mr-web-root .mr-guide-card {
+  padding: 20px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--mr-border);
+  background: var(--mr-surface);
+}
+
+.mr-web-root .mr-guide-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.mr-web-root .mr-guide-card-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mr-web-root .mr-guide-card-title h2 {
+  margin: 0;
+  font-size: 16.5px;
+  font-weight: 760;
+  color: var(--mr-text);
+}
+
+.mr-web-root .mr-guide-card-title p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--mr-text-secondary);
+}
+
+.mr-web-root .mr-guide-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--mr-accent-soft);
+  color: var(--mr-accent-text);
+  flex-shrink: 0;
+}
+
+.mr-web-root .mr-guide-tag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--mr-border);
+  background: var(--mr-surface-subtle);
+  color: var(--mr-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mr-web-root .mr-guide-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.mr-web-root .mr-guide-feature-item {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--mr-border);
+  background: var(--mr-surface-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mr-web-root .mr-guide-feature-item strong {
+  font-size: 14px;
+  font-weight: 720;
+  color: var(--mr-text);
+}
+
+.mr-web-root .mr-guide-feature-item p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mr-text-secondary);
+}
+
+.mr-web-root .mr-guide-code {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--mr-border);
+  background: var(--mr-bg-deep);
+  color: #e6edf7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.mr-web-root .mr-guide-footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--mr-text-secondary);
+}

@@ -36,11 +36,39 @@ internal static class PlayerCombatStatusPolicy
         out int permanentNetMove,
         out int tempAddMove)
     {
+        ResolveMoveSpeedBreakdown(
+            extraAddMove,
+            extraMinusMove,
+            hasServerAddMoveUpdate,
+            additionAttrsMoveSum,
+            appendMovePoint1,
+            appendMovePoint2,
+            buffTempAddMove,
+            baselinePermanentAdd,
+            0,
+            out permanentNetMove,
+            out tempAddMove);
+    }
+
+    internal static void ResolveMoveSpeedBreakdown(
+        int extraAddMove,
+        int extraMinusMove,
+        bool hasServerAddMoveUpdate,
+        int additionAttrsMoveSum,
+        int appendMovePoint1,
+        int appendMovePoint2,
+        int buffTempAddMove,
+        int baselinePermanentAdd,
+        int pveStarUpgradeMove,
+        out int permanentNetMove,
+        out int tempAddMove)
+    {
         int fallbackAdd = Math.Max(0, additionAttrsMoveSum + appendMovePoint1 + appendMovePoint2);
         bool useServer = hasServerAddMoveUpdate || extraAddMove != 0 || extraMinusMove != 0;
         int rawAdd = Math.Max(0, useServer ? extraAddMove : fallbackAdd);
         int rawMinus = Math.Max(0, extraMinusMove);
         int basePerm = Math.Max(0, baselinePermanentAdd);
+        int starPerm = Math.Max(0, pveStarUpgradeMove);
         int tempBuff = Math.Max(0, buffTempAddMove);
 
         if (tempBuff > 0)
@@ -48,26 +76,81 @@ internal static class PlayerCombatStatusPolicy
             if (rawAdd >= basePerm + tempBuff)
             {
                 // Server ExtraAddMovePoint already absorbed the buff bonus (+ any unparsed server temp add).
-                permanentNetMove = basePerm - rawMinus;
+                permanentNetMove = (basePerm - rawMinus) + starPerm;
                 tempAddMove = rawAdd - basePerm;
             }
             else if (basePerm == 0 && rawAdd >= tempBuff)
             {
                 // No separate baseline recorded, yet server ExtraAddMovePoint already carries >= tempBuff.
                 tempAddMove = tempBuff;
-                permanentNetMove = (rawAdd - tempBuff) - rawMinus;
+                permanentNetMove = ((rawAdd - tempBuff) - rawMinus) + starPerm;
             }
             else
             {
                 // Active skill / card buff is present locally while server ExtraAddMovePoint has not synced yet.
                 tempAddMove = tempBuff;
-                permanentNetMove = rawAdd - rawMinus;
+                permanentNetMove = (rawAdd - rawMinus) + starPerm;
             }
             return;
         }
 
         tempAddMove = 0;
-        permanentNetMove = rawAdd - rawMinus;
+        permanentNetMove = (rawAdd - rawMinus) + starPerm;
+    }
+
+    internal static string FormatAtkDefTokens(int baseAtk, int curAtk, int baseDef, int curDef)
+    {
+        string atkCol = curAtk > baseAtk ? "#82D8FF" : (curAtk < baseAtk ? "#FF8DA1" : "#FF9E7D");
+        string defCol = curDef > baseDef ? "#82D8FF" : (curDef < baseDef ? "#FF8DA1" : "#9EC8FF");
+        return "攻[color=" + atkCol + "]" + curAtk + "[/color] 防[color=" + defCol + "]" + curDef + "[/color]";
+    }
+
+    internal static bool TryParsePveStarMoveBonus(string desc, int currentStar, out int requiredStar, out int moveDelta)
+    {
+        requiredStar = 0;
+        moveDelta = 0;
+        if (string.IsNullOrEmpty(desc) || currentStar <= 0) return false;
+
+        string clean = StripMarkup(desc);
+        if (string.IsNullOrEmpty(clean) || clean.Contains("下次移动")) return false;
+
+        int reachIdx = clean.IndexOf("达到", StringComparison.Ordinal);
+        if (reachIdx < 0) return false;
+        int starNumStart = reachIdx + 2;
+        while (starNumStart < clean.Length && clean[starNumStart] == ' ') starNumStart++;
+        int starNumEnd = starNumStart;
+        while (starNumEnd < clean.Length && clean[starNumEnd] >= '0' && clean[starNumEnd] <= '9') starNumEnd++;
+        if (starNumEnd <= starNumStart) return false;
+
+        int parsedStar;
+        if (!int.TryParse(clean.Substring(starNumStart, starNumEnd - starNumStart), out parsedStar) || parsedStar <= 0)
+        {
+            return false;
+        }
+        int postNum = starNumEnd;
+        while (postNum < clean.Length && clean[postNum] == ' ') postNum++;
+        if (postNum >= clean.Length || clean[postNum] != '星')
+        {
+            return false;
+        }
+
+        requiredStar = parsedStar;
+        if (currentStar < requiredStar)
+        {
+            return false;
+        }
+
+        int parsedMove;
+        bool perStack;
+        if (TryParseKeywordPlusInt(clean, "移动速度+", out parsedMove, out perStack)
+            || TryParseKeywordPlusInt(clean, "移动点数+", out parsedMove, out perStack)
+            || TryParseKeywordPlusInt(clean, "移速+", out parsedMove, out perStack)
+            || TryParseKeywordPlusInt(clean, "移动力+", out parsedMove, out perStack))
+        {
+            moveDelta = ClampSpeedDelta(parsedMove);
+            return moveDelta > 0;
+        }
+        return false;
     }
 
     internal static bool TryExtractBuffTempMoveDelta(

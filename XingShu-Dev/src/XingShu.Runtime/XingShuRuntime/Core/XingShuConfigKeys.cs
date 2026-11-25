@@ -230,6 +230,14 @@ internal static class XingShuConfigKeys
 
 	internal const bool MonsterTargetEnabledDefault = true;
 
+	internal const string MonsterActionRollMoveEnabled = "XINGSHU_MONSTER_ROLL_MOVE_ENABLED_V1";
+
+	internal const bool MonsterActionRollMoveEnabledDefault = true;
+
+	internal const string MonsterActionPathMarkersEnabled = "XINGSHU_MONSTER_PATH_MARKERS_ENABLED_V1";
+
+	internal const bool MonsterActionPathMarkersEnabledDefault = true;
+
 	internal const string MonsterArrowBoostEnabled = "XINGSHU_MONSTER_ARROW_BOOST_ENABLED_V1";
 
 	internal const bool MonsterArrowBoostEnabledDefault = true;
@@ -559,7 +567,26 @@ internal static class XingShuConfigKeys
 	internal const string PlayerStarBuffsEnabledIds = "XINGSHU_STAR_BUFFS_ENABLED_IDS";
 	internal const string PlayerStarBuffsEnabledIdsDefault = "";
 
-	// 功能中心界面风格 (0=原版游戏风, 1=毛玻璃圆角通透框架)
+	// 功能中心界面风格 (0=原版 UI 皮肤, 1=毛玻璃圆角通透框架)
 	internal const string UiCenterStyle = "XINGSHU_UI_CENTER_STYLE";
 	internal const int UiCenterStyleDefault = 0;
+
+	// 毛玻璃 UI 自定义配色与透明度
+	internal const string UiGlassThemePreset = "XINGSHU_UI_GLASS_PRESET";
+	internal const int UiGlassThemePresetDefault = 0;
+
+	internal const string UiGlassCustomHue = "XINGSHU_UI_GLASS_HUE";
+	internal const float UiGlassCustomHueMin = 0f;
+	internal const float UiGlassCustomHueMax = 360f;
+	internal const float UiGlassCustomHueDefault = 212f;
+
+	internal const string UiGlassShellAlpha = "XINGSHU_UI_GLASS_SHELL_ALPHA";
+	internal const float UiGlassShellAlphaMin = 0.45f;
+	internal const float UiGlassShellAlphaMax = 0.96f;
+	internal const float UiGlassShellAlphaDefault = 0.86f;
+
+	internal const string UiGlassCardAlpha = "XINGSHU_UI_GLASS_CARD_ALPHA";
+	internal const float UiGlassCardAlphaMin = 0.35f;
+	internal const float UiGlassCardAlphaMax = 0.95f;
+	internal const float UiGlassCardAlphaDefault = 0.78f;
 }

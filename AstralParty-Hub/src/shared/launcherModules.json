@@ -1,23 +1,18 @@
 [
   {"id":"hand-monitor","name":"手牌监视","description":"局内手牌入口与已授权合作局队友同步","types":["HandCardDisplayManager","HandCardDock"]},
   {"id":"battle-stats","name":"对局统计","description":"局内统计挂件与对局数据","types":["BattleStatsOverlay"]},
-  {"id":"avatar-praise","name":"头像点赞","description":"选择点赞、取消选择与图标大小设置","types":["XingShuAutoPraise"]},
-  {"id":"quick-thanks","name":"快捷致谢","description":"局内原生感谢快捷项","types":["XingShuAutoThanks"]},
-  {"id":"star-coin-shop","name":"每日星币商店","description":"每日星币货架助手，仍需在游戏中开启","types":["DailyStarCoinShop"]},
-  {"id":"defense-hint","name":"防御点数提示","description":"本人防御与闪避参考","types":["DefensePointHint"]},
+  {"id":"auto-social","name":"自动化社交","description":"整合局内快捷致谢、头像自动点赞、每日星币商店与结算自动截图","types":["XingShuAutoThanks","XingShuAutoPraise","DailyStarCoinShop","SettlementScreenshot"]},
+  {"id":"defense-hint","name":"防御与卡牌点数提示","description":"本人防御/闪避所需点数参考，以及战斗卡牌打出后点数与加成明细","types":["DefensePointHint","BattleCardPointHint"]},
   {"id":"knockback-preview","name":"击飞预测","description":"局内击飞概率参考","types":["MonsterKillProbability"]},
-  {"id":"monster-targeting","name":"怪物索敌","description":"地图上的怪物索敌推演提示","types":["MonsterTargetRuntime"]},
-  {"id":"monster-cooldown","name":"怪物冷却","description":"怪物技能冷却与状态提示","types":["MonsterCooldownRuntime"]},
+  {"id":"monster-action","name":"怪物行动可视","description":"地图上实时显示怪物10格索敌推演、投掷点数、移动路径选择与主动技能冷却","types":["MonsterTargetRuntime","MonsterCooldownRuntime"]},
   {"id":"free-camera","name":"自由镜头","description":"镜头移动、缩放与地图查看","types":["MapCameraGUI"]},
   {"id":"game-speed","name":"游戏变速","description":"独立的游戏内变速设置","types":["GameSpeedControllerGUI"]},
   {"id":"thinking-time","name":"思考时间","description":"局内本地计时显示调整","types":["ThinkingTime"]},
   {"id":"action-guard","name":"战局守护","description":"本地战局状态监视与重连设置","types":["AutoResetActionTimeGUI"]},
   {"id":"replay-player","name":"局内录像","description":"游戏内回放播放面板","types":["ReplayPlayerGUI"]},
   {"id":"static-portraits","name":"立绘替换","description":"独立的立绘与动态资源显示设置","types":["StaticPortraitGUI"]},
-  {"id":"settlement-capture","name":"结算截图","description":"专用的结算截图入口","types":["SettlementScreenshot"]},
   {"id":"select-map-name","name":"选人地图提示","description":"在选人界面右侧显示当前地图名称","types":["SelectRoleMapNameHint"]},
-  {"id":"battle-card-points","name":"战斗卡牌点数","description":"战斗卡牌打出后显示点数与加成明细","types":["BattleCardPointHint"]},
   {"id":"megath-damage","name":"梅加斯伤害计算","description":"游玩梅加斯时显示主动技能理论最大伤害面板（可拖动调节位置）","types":["MegathSkillDamageHint"]},
-  {"id":"player-combat-hud","name":"角色状态头顶显示","description":"在棋盘玩家角色上方显示技能冷却、血量、基础攻防与额外移速（可调节位置）","types":["PlayerCombatStatusHud"]},
-  {"id":"player-star-buffs","name":"角色星级Buff显示","description":"在左侧角色星级区域左右显示疾行、角色专属、攻防增益与减益等 Buff，支持分类与单项自由开关及位置缩放调节","types":["PlayerStarBuffHud"]}
+  {"id":"player-combat-hud","name":"角色状态头顶显示","description":"在棋盘玩家角色上方显示技能冷却、血量、基础攻防与最终移速（可调节位置）","types":["PlayerCombatStatusHud"]},
+  {"id":"player-star-buffs","name":"角色Buff显示","description":"在左侧角色头像⭐区域显示疾行、角色专属、攻防增益与减益等 Buff，支持分类与单项自由开关及位置缩放调节","types":["PlayerStarBuffHud"]}
 ]

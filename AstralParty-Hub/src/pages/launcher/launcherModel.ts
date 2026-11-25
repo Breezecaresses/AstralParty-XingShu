@@ -20,6 +20,8 @@ export interface ConflictInspectItem {
   category: string;
   relativePath: string;
   sha256: string;
+  fullPath?: string;
+  reason?: string;
 }
 
 export interface ConflictInspectReport {

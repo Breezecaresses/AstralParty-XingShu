@@ -74,10 +74,46 @@ namespace XingShuRuntime.UI
             }
         }
 
+        internal static bool IsGlassActive => Instance != null ? Instance._activeBuiltStyle == 1 : CenterStyle == 1;
+
+        internal static void ApplyGlassAppearanceLive()
+        {
+            XingShuGlassSkin.RefreshPaletteFromConfig();
+            if (Instance == null || Instance._activeBuiltStyle != 1) return;
+            if (Instance._glassBackdropImage != null) Instance._glassBackdropImage.color = XingShuGlassSkin.BackdropDim;
+            if (Instance._glassShellImage != null) Instance._glassShellImage.sprite = XingShuGlassSkin.ShellSprite;
+            if (Instance._glassRailImage != null) Instance._glassRailImage.sprite = XingShuGlassSkin.RailSprite;
+            if (Instance._glassHeaderImage != null)
+            {
+                Instance._glassHeaderImage.sprite = XingShuGlassSkin.GetRoundedPanelSprite(12, XingShuGlassSkin.HeaderFill, XingShuGlassSkin.DividerLine, 1f);
+            }
+            Sprite btnSprite = XingShuGlassSkin.ButtonSprite;
+            if (Instance._glassBottomBackImg != null) Instance._glassBottomBackImg.sprite = btnSprite;
+            if (Instance._glassOrigBtnImg != null) Instance._glassOrigBtnImg.sprite = btnSprite;
+            if (Instance._glassSizeBtnImg != null) Instance._glassSizeBtnImg.sprite = btnSprite;
+            if (Instance._glassCloseBtnImg != null) Instance._glassCloseBtnImg.sprite = btnSprite;
+            if (Instance._glassVerText != null) Instance._glassVerText.color = XingShuGlassSkin.AccentBlue;
+            if (Instance._glassBadgeText != null) Instance._glassBadgeText.color = XingShuGlassSkin.AccentMint;
+            XingShuGlassSkin.InvalidateRestyleCache();
+            Instance.SelectTab(Instance._currentTabIndex);
+            if (Instance._contentArea != null)
+            {
+                foreach (Transform page in Instance._contentArea.transform)
+                {
+                    if (page != null && page.gameObject.activeSelf && page.gameObject != Instance._comingSoonView)
+                    {
+                        XingShuGlassSkin.RestylePageForGlass(page.gameObject);
+                    }
+                }
+            }
+        }
+
         private bool _isOpen;
         private int _activeBuiltStyle;
         private Canvas _canvas;
+        private CanvasScaler _canvasScaler;
         private CanvasGroup _canvasGroup;
+        private RectTransform _logicalRootRt;
         private RectTransform _mainFrameRt;
         private RectTransform _leftRailRt;
         private RectTransform _returnWrapRt;
@@ -87,13 +123,21 @@ namespace XingShuRuntime.UI
         private int _hotkeyRevision = -1;
         private float _preferredScale = 1f;
         private GameObject _contentArea;
+        private Image _glassBackdropImage;
+        private Image _glassShellImage;
+        private Image _glassRailImage;
+        private Image _glassHeaderImage;
+        private Image _glassBottomBackImg;
+        private Image _glassOrigBtnImg;
+        private Image _glassSizeBtnImg;
+        private Image _glassCloseBtnImg;
+        private Text _glassVerText;
+        private Text _glassBadgeText;
         private XingShuGameSpeedView _gameSpeedView;
         private XingShuHandCardView _handCardView;
         private XingShuKnockbackView _knockbackView;
-        private XingShuMonsterTargetView _monsterTargetView;
-        private XingShuMonsterCooldownView _monsterCooldownView;
-        private XingShuDefenseHintView _defenseHintView;
-        private XingShuBattleCardHintView _battleCardHintView;
+        private XingShuMonsterActionView _monsterActionView;
+        private XingShuCombatPointsView _combatPointsView;
         private XingShuMegathDamageView _megathDamageView;
         private XingShuPlayerCombatHudView _playerCombatHudView;
         private XingShuPlayerStarBuffView _playerStarBuffView;
@@ -101,10 +145,7 @@ namespace XingShuRuntime.UI
         private XingShuReplayView _replayView;
         private XingShuFreeCameraView _freeCameraView;
         private XingShuActionGuardView _actionGuardView;
-        private XingShuQuickThanksView _quickThanksView;
-        private XingShuAvatarPraiseView _avatarPraiseView;
-        private XingShuStarCoinShopView _starCoinShopView;
-        private XingShuSettlementShotView _settlementShotView;
+        private XingShuAutoSocialView _autoSocialView;
         private XingShuSelectRoleMapView _selectRoleMapView;
         private XingShuBattleStatsView _battleStatsView;
         private XingShuAdvancedSettingsView _advancedSettingsView;
@@ -138,23 +179,18 @@ namespace XingShuRuntime.UI
             0,  // 游戏变速
             1,  // 手牌监视
             2,  // 击飞预测
-            11, // 怪物索敌
-            12, // 怪物冷却
-            13, // 防御提示
-            14, // 卡牌点数
+            11, // 怪物行动可视 (合并索敌/投点选路/冷却)
+            13, // 防御与卡牌点数 (合并防御提示/卡牌点数)
             15, // 梅加斯伤害
             16, // 角色状态
-            17, // 星级Buff
+            17, // 角色Buff显示
             6,  // 战局守护
-            18, // 快捷致谢
-            19, // 头像点赞
-            20, // 星币商店
-            21, // 结算截图
+            18, // 自动化社交 (合并快捷致谢/头像点赞/星币商店/结算截图)
             22, // 选人地图
             7,  // 对局数据
             5,  // 自由镜头
             4,  // 录像回放
-            10, // 大厅背景
+            10, // 大厅背景 (仅手机端展示)
             3,  // 模组加载 (仅手机端展示)
             8,  // 高级设置
             9   // 快捷键
@@ -162,29 +198,29 @@ namespace XingShuRuntime.UI
 
         private static readonly string[] TAB_NAMES = new string[]
         {
-            "游戏变速",   // 0
-            "手牌监视",   // 1
-            "击飞预测",   // 2
-            "模组加载",   // 3
-            "录像回放",   // 4
-            "自由镜头",   // 5
-            "战局守护",   // 6
-            "对局数据",   // 7
-            "高级设置",   // 8
-            "快捷键",     // 9
-            "大厅背景",   // 10
-            "怪物索敌",   // 11
-            "怪物冷却",   // 12
-            "防御提示",   // 13
-            "卡牌点数",   // 14
-            "梅加斯伤害", // 15
-            "角色状态",   // 16
-            "星级Buff",   // 17
-            "快捷致谢",   // 18
-            "头像点赞",   // 19
-            "星币商店",   // 20
-            "结算截图",   // 21
-            "选人地图"    // 22
+            "游戏变速",       // 0
+            "手牌监视",       // 1
+            "击飞预测",       // 2
+            "模组加载",       // 3
+            "录像回放",       // 4
+            "自由镜头",       // 5
+            "战局守护",       // 6
+            "对局数据",       // 7
+            "高级设置",       // 8
+            "快捷键",         // 9
+            "大厅背景",       // 10
+            "怪物行动可视",   // 11
+            "",               // 12 (已并入 11)
+            "防御与卡牌点数", // 13
+            "",               // 14 (已并入 13)
+            "梅加斯伤害",     // 15
+            "角色状态",       // 16
+            "角色Buff显示",   // 17
+            "自动化社交",     // 18
+            "",               // 19 (已并入 18)
+            "",               // 20 (已并入 18)
+            "",               // 21 (已并入 18)
+            "选人地图"        // 22
         };
 
         internal static void Install(GameObject host)
@@ -241,6 +277,9 @@ namespace XingShuRuntime.UI
             _tabEntries.Clear();
             _tabViews.Clear();
             _externalPagesByTabId.Clear();
+            XingShuGlassSkin.InvalidateRestyleCache();
+            _canvasScaler = null;
+            _logicalRootRt = null;
             _leftRailRt = null;
             _returnWrapRt = null;
             _mainFrameRt = null;
@@ -301,10 +340,19 @@ namespace XingShuRuntime.UI
                 }
 
                 // 页面数据同步 (无变更 0 GC / 0 UI 写入)
-                if (_tabViews.TryGetValue(_currentTabIndex, out var activeView) && activeView.Sync != null)
+                if (_tabViews.TryGetValue(_currentTabIndex, out var activeView))
                 {
-                    activeView.Sync();
+                    if (activeView.Sync != null) activeView.Sync();
                 }
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (!_isOpen || _activeBuiltStyle != 1) return;
+            if (_tabViews.TryGetValue(_currentTabIndex, out var activeView) && activeView.Root != null)
+            {
+                XingShuGlassSkin.RestylePageForGlassFast(activeView.Root);
             }
         }
 
@@ -688,7 +736,7 @@ namespace XingShuRuntime.UI
 
             if (open)
             {
-                XingShuUITheme.RefreshFonts(_canvas != null ? _canvas.gameObject : null);
+                XingShuUITheme.RefreshFonts(_canvas != null ? _canvas.gameObject : null, _activeBuiltStyle == 1);
                 XingShuCentralInputManager.EnsureEventSystemAvailable("XingShu.UICenter");
                 SelectTab(_currentTabIndex);
                 FitPanelToScreen();
@@ -729,18 +777,23 @@ namespace XingShuRuntime.UI
             _canvas = canvasGo.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             _canvas.sortingOrder = 31000;
+            _canvas.pixelPerfect = false;
 
-            CanvasScaler scaler = canvasGo.AddComponent<CanvasScaler>();
+            float ss = ComputeCanvasSupersample(Screen.height);
+            CanvasScaler scaler = _canvasScaler = canvasGo.AddComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.referenceResolution = new Vector2(1920f / ss, 1080f / ss);
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 1.0f;
 
             canvasGo.AddComponent<GraphicRaycaster>();
             _canvasGroup = canvasGo.AddComponent<CanvasGroup>();
 
+            GameObject logicalRoot = XingShuUIFactory.CreateUIObject("LogicalRoot_1080p", canvasGo);
+            _logicalRootRt = Place(logicalRoot, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(1920f, 1080f));
+
             // 2. 轻量遮罩，点击空白处收起
-            GameObject backdropGo = XingShuUIFactory.CreateUIObject("Backdrop", canvasGo);
+            GameObject backdropGo = XingShuUIFactory.CreateUIObject("Backdrop", logicalRoot);
             RectTransform backdropRt = backdropGo.GetComponent<RectTransform>();
             backdropRt.anchorMin = Vector2.zero;
             backdropRt.anchorMax = Vector2.one;
@@ -757,11 +810,11 @@ namespace XingShuRuntime.UI
             backdropBtn.onClick.AddListener(Close);
 
             // 2B. 贴左独立导航组 (返回按钮 + 白底星点导航栏，与游戏 Setting 界面比例 1:1 对齐)
-            GameObject leftRailGo = XingShuUIFactory.CreateUIObject("LeftRailGroup", canvasGo);
+            GameObject leftRailGo = XingShuUIFactory.CreateUIObject("LeftRailGroup", logicalRoot);
             _leftRailRt = Place(leftRailGo, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), Vector2.zero, new Vector2(328f, 0f));
 
             // 3. 居中偏右的深色主设置框架（尺寸与位置对齐原版游戏 Setting 界面，右侧预留悬浮球通道）
-            GameObject mainFrame = XingShuUIFactory.CreateUIObject("MainFrame", canvasGo);
+            GameObject mainFrame = XingShuUIFactory.CreateUIObject("MainFrame", logicalRoot);
             _mainFrameRt = mainFrame.GetComponent<RectTransform>();
             _mainFrameRt.anchorMin = new Vector2(0.5f, 0.5f);
             _mainFrameRt.anchorMax = new Vector2(0.5f, 0.5f);
@@ -842,13 +895,31 @@ namespace XingShuRuntime.UI
             }
         }
 
+        public static float ComputeCanvasSupersample(int screenHeight)
+        {
+            if (screenHeight <= 1200) return 2.0f;
+            if (screenHeight <= 1800) return 1.5f;
+            return 1.0f;
+        }
+
         private void FitPanelToScreen()
         {
             if (_mainFrameRt == null || Screen.width <= 0 || Screen.height <= 0) return;
             float panelScale = PanelScale;
+            float ss = ComputeCanvasSupersample(Screen.height);
             float canvasScale = Mathf.Max(0.1f, Screen.height / 1080f);
             float screenW = Screen.width / canvasScale;
             float screenH = 1080f;
+
+            if (_canvasScaler != null)
+            {
+                _canvasScaler.referenceResolution = new Vector2(1920f / ss, 1080f / ss);
+            }
+            if (_logicalRootRt != null)
+            {
+                _logicalRootRt.sizeDelta = new Vector2(screenW, screenH);
+                _logicalRootRt.localScale = Vector3.one / ss;
+            }
 
             if (_activeBuiltStyle == 1)
             {
@@ -962,12 +1033,12 @@ namespace XingShuRuntime.UI
             hitArea.raycastTarget = true;
             _dragHandle = titleBar.AddComponent<XingShuUIDragHandle>();
             _dragHandle.targetRect = _mainFrameRt;
-            _dragHandle.parentRect = _canvas.transform as RectTransform;
+            _dragHandle.parentRect = _logicalRootRt ?? (_canvas.transform as RectTransform);
 
             Image chip = XingShuUIFactory.CreateNativeTitleTag(titleBar, "PageTitleChip", TAB_NAMES[0], out _pageTitle, 25);
             Place(chip.gameObject, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), new Vector2(0f, 0f), new Vector2(256f, -6f));
 
-            Text brand = XingShuUIFactory.CreateText(titleBar, "Brand", "星枢 · 原生功能中心", 18, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Text brand = XingShuUIFactory.CreateText(titleBar, "Brand", "星枢 · 原版 UI 皮肤", 18, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
             Place(brand.gameObject, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), new Vector2(276f, 0f), new Vector2(240f, 0f));
             brand.raycastTarget = false;
             XingShuUIFactory.AddOutline(brand.gameObject, new Color(0.08f, 0.08f, 0.12f, 0.9f), new Vector2(1.4f, -1.4f));
@@ -1009,7 +1080,7 @@ namespace XingShuRuntime.UI
             upRt.offsetMax = Vector2.zero;
             uidPrefix.raycastTarget = false;
 
-            Text uidVer = XingShuUIFactory.CreateText(uidGo, "UidVersion", "v0.1.7", 18, Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
+            Text uidVer = XingShuUIFactory.CreateText(uidGo, "UidVersion", "v0.2.0", 18, Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
             RectTransform uvRt = uidVer.rectTransform;
             uvRt.anchorMin = new Vector2(0.33f, 0f);
             uvRt.anchorMax = new Vector2(0.95f, 1f);
@@ -1130,14 +1201,10 @@ namespace XingShuRuntime.UI
                 () => _handCardView?.UpdateSync());
             RegisterTabView(2, TabAvailable(2) ? (_knockbackView = new XingShuKnockbackView(_contentArea.transform)).Root : null,
                 () => _knockbackView?.UpdateSync());
-            RegisterTabView(11, TabAvailable(11) ? (_monsterTargetView = new XingShuMonsterTargetView(_contentArea.transform)).Root : null,
-                () => _monsterTargetView?.UpdateSync());
-            RegisterTabView(12, TabAvailable(12) ? (_monsterCooldownView = new XingShuMonsterCooldownView(_contentArea.transform)).Root : null,
-                () => _monsterCooldownView?.UpdateSync());
-            RegisterTabView(13, TabAvailable(13) ? (_defenseHintView = new XingShuDefenseHintView(_contentArea.transform)).Root : null,
-                () => _defenseHintView?.UpdateSync());
-            RegisterTabView(14, TabAvailable(14) ? (_battleCardHintView = new XingShuBattleCardHintView(_contentArea.transform)).Root : null,
-                () => _battleCardHintView?.UpdateSync());
+            RegisterTabView(11, TabAvailable(11) ? (_monsterActionView = new XingShuMonsterActionView(_contentArea.transform)).Root : null,
+                () => _monsterActionView?.UpdateSync());
+            RegisterTabView(13, TabAvailable(13) ? (_combatPointsView = new XingShuCombatPointsView(_contentArea.transform)).Root : null,
+                () => _combatPointsView?.UpdateSync());
             RegisterTabView(15, TabAvailable(15) ? (_megathDamageView = new XingShuMegathDamageView(_contentArea.transform)).Root : null,
                 () => _megathDamageView?.UpdateSync());
             RegisterTabView(16, TabAvailable(16) ? (_playerCombatHudView = new XingShuPlayerCombatHudView(_contentArea.transform)).Root : null,
@@ -1146,14 +1213,8 @@ namespace XingShuRuntime.UI
                 () => _playerStarBuffView?.UpdateSync());
             RegisterTabView(6, TabAvailable(6) ? (_actionGuardView = new XingShuActionGuardView(_contentArea.transform)).Root : null,
                 () => _actionGuardView?.UpdateSync());
-            RegisterTabView(18, TabAvailable(18) ? (_quickThanksView = new XingShuQuickThanksView(_contentArea.transform)).Root : null,
-                () => _quickThanksView?.UpdateSync());
-            RegisterTabView(19, TabAvailable(19) ? (_avatarPraiseView = new XingShuAvatarPraiseView(_contentArea.transform)).Root : null,
-                () => _avatarPraiseView?.UpdateSync());
-            RegisterTabView(20, TabAvailable(20) ? (_starCoinShopView = new XingShuStarCoinShopView(_contentArea.transform)).Root : null,
-                () => _starCoinShopView?.UpdateSync());
-            RegisterTabView(21, TabAvailable(21) ? (_settlementShotView = new XingShuSettlementShotView(_contentArea.transform)).Root : null,
-                () => _settlementShotView?.UpdateSync());
+            RegisterTabView(18, TabAvailable(18) ? (_autoSocialView = new XingShuAutoSocialView(_contentArea.transform)).Root : null,
+                () => _autoSocialView?.UpdateSync());
             RegisterTabView(22, TabAvailable(22) ? (_selectRoleMapView = new XingShuSelectRoleMapView(_contentArea.transform)).Root : null,
                 () => _selectRoleMapView?.UpdateSync());
             RegisterTabView(7, TabAvailable(7) ? (_battleStatsView = new XingShuBattleStatsView(_contentArea.transform)).Root : null,
@@ -1245,18 +1306,18 @@ namespace XingShuRuntime.UI
                 case 5: return LauncherModules.CanLoad("MapCameraGUI");
                 case 6: return LauncherModules.CanLoad("AutoResetActionTimeGUI");
                 case 7: return LauncherModules.CanLoad("BattleStatsOverlay");
-                case 10: return true;
-                case 11: return LauncherModules.CanLoad("MonsterTargetRuntime");
-                case 12: return LauncherModules.CanLoad("MonsterCooldownRuntime");
-                case 13: return LauncherModules.CanLoad("DefensePointHint");
-                case 14: return LauncherModules.CanLoad("BattleCardPointHint");
+                case 10: return XingShuMobileUIHelper.IsMobile;
+                case 11: return LauncherModules.CanLoad("MonsterTargetRuntime") || LauncherModules.CanLoad("MonsterCooldownRuntime");
+                case 12: return false;
+                case 13: return LauncherModules.CanLoad("DefensePointHint") || LauncherModules.CanLoad("BattleCardPointHint");
+                case 14: return false;
                 case 15: return LauncherModules.CanLoad("MegathSkillDamageHint");
                 case 16: return LauncherModules.CanLoad("PlayerCombatStatusHud");
                 case 17: return LauncherModules.CanLoad("PlayerStarBuffHud");
-                case 18: return LauncherModules.CanLoad("XingShuAutoThanks");
-                case 19: return LauncherModules.CanLoad("XingShuAutoPraise");
-                case 20: return LauncherModules.CanLoad("DailyStarCoinShop");
-                case 21: return LauncherModules.CanLoad("SettlementScreenshot");
+                case 18: return LauncherModules.CanLoad("XingShuAutoThanks") || LauncherModules.CanLoad("XingShuAutoPraise") || LauncherModules.CanLoad("DailyStarCoinShop") || LauncherModules.CanLoad("SettlementScreenshot");
+                case 19:
+                case 20:
+                case 21: return false;
                 case 22: return LauncherModules.CanLoad("SelectRoleMapNameHint");
                 default: return true;
             }
@@ -1341,9 +1402,19 @@ namespace XingShuRuntime.UI
                 }
                 if (entry.Label != null)
                 {
-                    entry.Label.color = glass ? (isSelected ? XingShuGlassSkin.TextPrimary : XingShuGlassSkin.TextSecondary) : Color.white;
-                    entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 20 : (glass ? 16 : 18);
-                    entry.Label.fontStyle = (glass && !isSelected) ? FontStyle.Normal : FontStyle.Bold;
+                    if (glass)
+                    {
+                        entry.Label.color = isSelected ? XingShuGlassSkin.TextPrimary : XingShuGlassSkin.TextSecondary;
+                        entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 20 : 16;
+                        entry.Label.font = XingShuUITheme.GetFontForText(entry.Label.text);
+                        entry.Label.fontStyle = isSelected ? FontStyle.Bold : FontStyle.Normal;
+                    }
+                    else
+                    {
+                        entry.Label.color = Color.white;
+                        entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 20 : 18;
+                        entry.Label.fontStyle = FontStyle.Bold;
+                    }
                 }
             }
 
@@ -1355,9 +1426,10 @@ namespace XingShuRuntime.UI
                     kv.Value.Root.SetActive(active);
                 }
             }
-            if (_tabViews.TryGetValue(index, out var currentView) && currentView.Sync != null)
+            if (_tabViews.TryGetValue(index, out var currentView))
             {
-                currentView.Sync();
+                if (currentView.Sync != null) currentView.Sync();
+                if (glass && currentView.Root != null) XingShuGlassSkin.RestylePageForGlass(currentView.Root);
             }
 
             if (_comingSoonView != null)
@@ -1379,28 +1451,34 @@ namespace XingShuRuntime.UI
             _canvas = canvasGo.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             _canvas.sortingOrder = 31000;
+            _canvas.pixelPerfect = false;
 
-            CanvasScaler scaler = canvasGo.AddComponent<CanvasScaler>();
+            float ss = ComputeCanvasSupersample(Screen.height);
+            CanvasScaler scaler = _canvasScaler = canvasGo.AddComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.referenceResolution = new Vector2(1920f / ss, 1080f / ss);
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 1.0f;
 
             canvasGo.AddComponent<GraphicRaycaster>();
             _canvasGroup = canvasGo.AddComponent<CanvasGroup>();
 
-            GameObject backdropGo = XingShuUIFactory.CreateUIObject("Backdrop", canvasGo);
+            GameObject logicalRoot = XingShuUIFactory.CreateUIObject("LogicalRoot_1080p", canvasGo);
+            _logicalRootRt = Place(logicalRoot, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(1920f, 1080f));
+
+            GameObject backdropGo = XingShuUIFactory.CreateUIObject("Backdrop", logicalRoot);
             RectTransform backdropRt = backdropGo.GetComponent<RectTransform>();
             backdropRt.anchorMin = Vector2.zero; backdropRt.anchorMax = Vector2.one;
             backdropRt.offsetMin = Vector2.zero; backdropRt.offsetMax = Vector2.zero;
-            Image backdropImg = backdropGo.AddComponent<Image>();
+            XingShuGlassSkin.RefreshPaletteFromConfig();
+            Image backdropImg = _glassBackdropImage = backdropGo.AddComponent<Image>();
             backdropImg.sprite = XingShuUIAssetService.WhiteSprite;
             backdropImg.color = XingShuGlassSkin.BackdropDim;
             Button backdropBtn = backdropGo.AddComponent<Button>();
             backdropBtn.transition = Selectable.Transition.None;
             backdropBtn.onClick.AddListener(Close);
 
-            GameObject mainFrame = XingShuUIFactory.CreateUIObject("MainFrame_Glass", canvasGo);
+            GameObject mainFrame = XingShuUIFactory.CreateUIObject("MainFrame_Glass", logicalRoot);
             _mainFrameRt = mainFrame.GetComponent<RectTransform>();
             _mainFrameRt.anchorMin = new Vector2(0.5f, 0.5f);
             _mainFrameRt.anchorMax = new Vector2(0.5f, 0.5f);
@@ -1420,7 +1498,7 @@ namespace XingShuRuntime.UI
             _preferredScale = userScale;
             FitPanelToScreen();
 
-            Image shellImg = mainFrame.AddComponent<Image>();
+            Image shellImg = _glassShellImage = mainFrame.AddComponent<Image>();
             shellImg.sprite = XingShuGlassSkin.ShellSprite;
             shellImg.type = Image.Type.Sliced;
             shellImg.color = Color.white;
@@ -1430,14 +1508,14 @@ namespace XingShuRuntime.UI
             // Left translucent sidebar column inside unified shell
             GameObject leftCol = XingShuUIFactory.CreateUIObject("GlassSidebarColumn", mainFrame);
             Place(leftCol, Vector2.zero, Vector2.up, Vector2.zero, new Vector2(12f, 12f), new Vector2(256f, -24f));
-            Image railImg = leftCol.AddComponent<Image>();
+            Image railImg = _glassRailImage = leftCol.AddComponent<Image>();
             railImg.sprite = XingShuGlassSkin.RailSprite;
             railImg.type = Image.Type.Sliced;
             railImg.color = Color.white;
 
             Text brandTitle = XingShuUIFactory.CreateText(leftCol, "GlassBrand", "星枢 · 毛玻璃框架", 17, XingShuGlassSkin.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
             Place(brandTitle.gameObject, Vector2.up, Vector2.one, Vector2.up, new Vector2(16f, -14f), new Vector2(-32f, 26f));
-            Text brandVer = XingShuUIFactory.CreateText(leftCol, "GlassVer", XingShu.Runtime.XingShuRuntimeHost.RuntimeVersion + " · v2", 11, XingShuGlassSkin.AccentBlue, TextAnchor.MiddleLeft);
+            Text brandVer = _glassVerText = XingShuUIFactory.CreateText(leftCol, "GlassVer", XingShu.Runtime.XingShuRuntimeHost.RuntimeVersion + " · v2", 11, XingShuGlassSkin.AccentBlue, TextAnchor.MiddleLeft);
             Place(brandVer.gameObject, Vector2.up, Vector2.one, Vector2.up, new Vector2(16f, -40f), new Vector2(-32f, 18f));
 
             GameObject sideScrollWrap = XingShuUIFactory.CreateUIObject("GlassSidebarScrollWrap", leftCol);
@@ -1477,8 +1555,9 @@ namespace XingShuRuntime.UI
                 AddGlassSidebarTab(sidebar, extId, ext.Title, _currentTabIndex == extId);
             }
 
-            Button bottomBackBtn = XingShuUIFactory.CreateButton(leftCol, "ReturnOriginalQuick", "切回原版游戏风 UI",
+            Button bottomBackBtn = XingShuUIFactory.CreateButton(leftCol, "ReturnOriginalQuick", "原版 UI 皮肤",
                 XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextSecondary, () => SetCenterStyle(0), 12);
+            _glassBottomBackImg = bottomBackBtn.GetComponent<Image>();
             Place(bottomBackBtn.gameObject, Vector2.zero, Vector2.right, Vector2.zero, new Vector2(12f, 12f), new Vector2(-24f, 36f));
 
             // Right Main Panel Area
@@ -1489,7 +1568,7 @@ namespace XingShuRuntime.UI
 
             GameObject titleBar = XingShuUIFactory.CreateUIObject("GlassHeader", rightArea);
             Place(titleBar, Vector2.up, Vector2.one, Vector2.up, new Vector2(0f, 0f), new Vector2(0f, 58f));
-            Image headerBg = titleBar.AddComponent<Image>();
+            Image headerBg = _glassHeaderImage = titleBar.AddComponent<Image>();
             headerBg.sprite = XingShuGlassSkin.GetRoundedPanelSprite(12, XingShuGlassSkin.HeaderFill, XingShuGlassSkin.DividerLine, 1f);
             headerBg.type = Image.Type.Sliced;
             headerBg.color = Color.white;
@@ -1497,31 +1576,34 @@ namespace XingShuRuntime.UI
 
             _dragHandle = titleBar.AddComponent<XingShuUIDragHandle>();
             _dragHandle.targetRect = _mainFrameRt;
-            _dragHandle.parentRect = _canvas.transform as RectTransform;
+            _dragHandle.parentRect = _logicalRootRt ?? (_canvas.transform as RectTransform);
 
             Text title = _pageTitle = XingShuUIFactory.CreateText(titleBar, "GlassPageTitle", ResolveTabTitle(_currentTabIndex), 20, XingShuGlassSkin.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
             Place(title.gameObject, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), new Vector2(18f, 0f), new Vector2(360f, 36f));
             title.raycastTarget = false;
 
-            Text badgeText = XingShuUIFactory.CreateText(titleBar, "GlassBadge", "通透毛玻璃", 11, XingShuGlassSkin.AccentMint, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Text badgeText = _glassBadgeText = XingShuUIFactory.CreateText(titleBar, "GlassBadge", "通透毛玻璃", 11, XingShuGlassSkin.AccentMint, TextAnchor.MiddleLeft, FontStyle.Bold);
             Place(badgeText.gameObject, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), new Vector2(200f, 0f), new Vector2(96f, 24f));
             badgeText.raycastTarget = false;
 
             Text hotkey = _hotkeyHint = XingShuUIFactory.CreateText(titleBar, "Hotkey", XingShuMobileUIHelper.IsMobile ? "拖动顶部移动" : XingShuHotkeys.Display(XingShuShortcut.Center) + " 打开 / 收起", 12, XingShuGlassSkin.TextMuted, TextAnchor.MiddleRight);
-            Place(hotkey.gameObject, Vector2.right, Vector2.one, new Vector2(1f, 0.5f), new Vector2(-248f, 0f), new Vector2(180f, 28f));
+            Place(hotkey.gameObject, Vector2.right, Vector2.one, new Vector2(1f, 0.5f), new Vector2(-268f, 0f), new Vector2(180f, 28f));
             hotkey.raycastTarget = false;
 
-            Button origBtn = XingShuUIFactory.CreateButton(titleBar, "SwitchOrigBtn", "原版 UI",
+            Button origBtn = XingShuUIFactory.CreateButton(titleBar, "SwitchOrigBtn", "原版 UI 皮肤",
                 XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextPrimary, () => SetCenterStyle(0), 12);
-            RectTransform origRt = Place(origBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-132f, 0f), new Vector2(88f, 32f));
+            _glassOrigBtnImg = origBtn.GetComponent<Image>();
+            RectTransform origRt = Place(origBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-132f, 0f), new Vector2(108f, 32f));
 
             Button sizeBtn = XingShuUIFactory.CreateButton(titleBar, "SizeCycleBtn", PanelScale >= 0.985f ? "标准" : $"{Mathf.RoundToInt(PanelScale * 100f)}%",
                 XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextPrimary, CyclePanelSize, 12);
+            _glassSizeBtnImg = sizeBtn.GetComponent<Image>();
             _sizeCycleLabel = sizeBtn.GetComponentInChildren<Text>();
             RectTransform sizeRt = Place(sizeBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-50f, 0f), new Vector2(72f, 32f));
 
             Button closeBtn = XingShuUIFactory.CreateButton(titleBar, "Close", "×",
                 XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextPrimary, Close, 20);
+            _glassCloseBtnImg = closeBtn.GetComponent<Image>();
             RectTransform closeRt = Place(closeBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-10f, 0f), new Vector2(34f, 32f));
 
             _dragHandle.SetExcludedRects(closeRt, sizeRt, origRt);
@@ -1543,6 +1625,7 @@ namespace XingShuRuntime.UI
                 }
                 XingShuGlassSkin.RestylePageForGlass(page.gameObject);
             }
+            XingShuUITheme.RefreshFonts(canvasGo, glassMode: true);
         }
 
         private void AddGlassSidebarDivider(GameObject sidebar, string label)

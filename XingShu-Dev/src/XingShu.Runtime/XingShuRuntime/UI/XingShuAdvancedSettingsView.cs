@@ -37,9 +37,20 @@ namespace XingShuRuntime.UI
         private Text _resetDefaultsBtnText;
         private float _resetConfirmUntil;
 
-        // Card Style: 功能中心外观风格 (原版游戏风 / 毛玻璃 v2)
+        // Card Style: 功能中心皮肤与毛玻璃自定义外观 (原版 UI 皮肤 / 毛玻璃 UI)
         private Toggle _glassStyleToggle;
         private int _lastObservedStyle = -1;
+        private Button[] _glassPresetBtns;
+        private Slider _glassHueSlider;
+        private Text _glassHueValueText;
+        private Slider _glassShellAlphaSlider;
+        private Text _glassShellAlphaValueText;
+        private Slider _glassCardAlphaSlider;
+        private Text _glassCardAlphaValueText;
+        private int _lastObservedGlassPreset = -1;
+        private float _lastObservedGlassHue = -1f;
+        private float _lastObservedShellAlpha = -1f;
+        private float _lastObservedCardAlpha = -1f;
 
         // 内部更新防重入与有界轮询缓存
         private bool _suppressCallbacks;
@@ -383,26 +394,181 @@ namespace XingShuRuntime.UI
 
         private void BuildStyleCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "Card_CenterStyle", 84f);
+            GameObject cardGo = CreateCardContainer(parent, "Card_CenterStyle", 316f);
 
-            Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "功能中心界面风格 (v2 框架)", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "功能中心界面皮肤与毛玻璃外观", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
             RectTransform ctRt = cardTitle.rectTransform;
             ctRt.anchorMin = new Vector2(0f, 1f); ctRt.anchorMax = new Vector2(0f, 1f); ctRt.pivot = new Vector2(0f, 1f);
             ctRt.anchoredPosition = new Vector2(24f, -14f); ctRt.sizeDelta = new Vector2(360f, 22f);
 
-            Text subtitle = XingShuUIFactory.CreateText(cardGo, "Subtitle", "开启后切换为毛玻璃圆角通透 UI 并显示外部优化 Mod 扩展框架；关闭即保留原版游戏风", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            Text subtitle = XingShuUIFactory.CreateText(cardGo, "Subtitle", "关闭为「原版 UI 皮肤」，开启切换为「毛玻璃 UI」并可调节主题色调与透明度", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
             RectTransform stRt = subtitle.rectTransform;
             stRt.anchorMin = new Vector2(0f, 1f); stRt.anchorMax = new Vector2(1f, 1f); stRt.pivot = new Vector2(0f, 1f);
-            stRt.anchoredPosition = new Vector2(24f, -42f); stRt.sizeDelta = new Vector2(-240f, 22f);
+            stRt.anchoredPosition = new Vector2(24f, -40f); stRt.sizeDelta = new Vector2(-240f, 22f);
 
-            _glassStyleToggle = XingShuUIFactory.CreateToggle(cardGo, "GlassStyleToggle", "毛玻璃框架", XingShuUICenter.CenterStyle == 1, val =>
+            _glassStyleToggle = XingShuUIFactory.CreateToggle(cardGo, "GlassStyleToggle", "毛玻璃 UI", XingShuUICenter.CenterStyle == 1, val =>
             {
                 if (_suppressCallbacks) return;
                 XingShuUICenter.SetCenterStyle(val ? 1 : 0);
             });
             RectTransform tRt = _glassStyleToggle.GetComponent<RectTransform>();
-            tRt.anchorMin = new Vector2(1f, 0.5f); tRt.anchorMax = new Vector2(1f, 0.5f); tRt.pivot = new Vector2(1f, 0.5f);
-            tRt.anchoredPosition = new Vector2(-24f, 0f); tRt.sizeDelta = new Vector2(180f, 32f);
+            tRt.anchorMin = new Vector2(1f, 1f); tRt.anchorMax = new Vector2(1f, 1f); tRt.pivot = new Vector2(1f, 1f);
+            tRt.anchoredPosition = new Vector2(-24f, -16f); tRt.sizeDelta = new Vector2(180f, 32f);
+
+            // 配色预设按钮行
+            Text presetLabel = XingShuUIFactory.CreateText(cardGo, "GlassPresetLabel", "毛玻璃配色预设", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            RectTransform plRt = presetLabel.rectTransform;
+            plRt.anchorMin = new Vector2(0f, 1f); plRt.anchorMax = new Vector2(0f, 1f); plRt.pivot = new Vector2(0f, 1f);
+            plRt.anchoredPosition = new Vector2(24f, -72f); plRt.sizeDelta = new Vector2(160f, 20f);
+
+            _glassPresetBtns = new Button[XingShuGlassSkin.GlassPresetNames.Length];
+            for (int i = 0; i < XingShuGlassSkin.GlassPresetNames.Length; i++)
+            {
+                int idx = i;
+                Button btn = XingShuViewCardHelper.CreateActionButton(
+                    cardGo,
+                    "GlassPresetBtn_" + idx,
+                    XingShuGlassSkin.GlassPresetNames[idx],
+                    () => OnGlassPresetClicked(idx),
+                    92f,
+                    28f,
+                    12);
+                RectTransform bRt = btn.GetComponent<RectTransform>();
+                bRt.anchorMin = new Vector2(0f, 1f); bRt.anchorMax = new Vector2(0f, 1f); bRt.pivot = new Vector2(0f, 1f);
+                bRt.anchoredPosition = new Vector2(24f + i * 98f, -96f);
+                bRt.sizeDelta = new Vector2(92f, 28f);
+                _glassPresetBtns[idx] = btn;
+            }
+
+            // 自定义色相
+            Text hueLabel = XingShuUIFactory.CreateText(cardGo, "GlassHueLabel", "自定义色调色相 (0°–360°)", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            RectTransform hlRt = hueLabel.rectTransform;
+            hlRt.anchorMin = new Vector2(0f, 1f); hlRt.anchorMax = new Vector2(0f, 1f); hlRt.pivot = new Vector2(0f, 1f);
+            hlRt.anchoredPosition = new Vector2(24f, -134f); hlRt.sizeDelta = new Vector2(220f, 20f);
+
+            float initHue = XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassCustomHue, XingShuConfigKeys.UiGlassCustomHueDefault);
+            _glassHueValueText = XingShuUIFactory.CreateText(cardGo, "GlassHueValue", $"{Mathf.RoundToInt(initHue)}°", 13, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            RectTransform hvRt = _glassHueValueText.rectTransform;
+            hvRt.anchorMin = new Vector2(1f, 1f); hvRt.anchorMax = new Vector2(1f, 1f); hvRt.pivot = new Vector2(1f, 1f);
+            hvRt.anchoredPosition = new Vector2(-24f, -134f); hvRt.sizeDelta = new Vector2(80f, 20f);
+
+            _glassHueSlider = XingShuUIFactory.CreateSlider(cardGo, "GlassHueSlider",
+                XingShuConfigKeys.UiGlassCustomHueMin, XingShuConfigKeys.UiGlassCustomHueMax, initHue, OnGlassHueChanged);
+            RectTransform hsRt = _glassHueSlider.GetComponent<RectTransform>();
+            hsRt.anchorMin = new Vector2(0f, 1f); hsRt.anchorMax = new Vector2(1f, 1f); hsRt.pivot = new Vector2(0.5f, 1f);
+            hsRt.anchoredPosition = new Vector2(0f, -156f); hsRt.sizeDelta = new Vector2(-48f, 22f);
+
+            // 主面板透明度
+            Text shellAlphaLabel = XingShuUIFactory.CreateText(cardGo, "GlassShellAlphaLabel", "主面板背景透明度 (45%–96%)", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            RectTransform salRt = shellAlphaLabel.rectTransform;
+            salRt.anchorMin = new Vector2(0f, 1f); salRt.anchorMax = new Vector2(0f, 1f); salRt.pivot = new Vector2(0f, 1f);
+            salRt.anchoredPosition = new Vector2(24f, -188f); salRt.sizeDelta = new Vector2(240f, 20f);
+
+            float initShellA = XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassShellAlpha, XingShuConfigKeys.UiGlassShellAlphaDefault);
+            _glassShellAlphaValueText = XingShuUIFactory.CreateText(cardGo, "GlassShellAlphaValue", $"{Mathf.RoundToInt(initShellA * 100f)}%", 13, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            RectTransform savRt = _glassShellAlphaValueText.rectTransform;
+            savRt.anchorMin = new Vector2(1f, 1f); savRt.anchorMax = new Vector2(1f, 1f); savRt.pivot = new Vector2(1f, 1f);
+            savRt.anchoredPosition = new Vector2(-24f, -188f); savRt.sizeDelta = new Vector2(80f, 20f);
+
+            _glassShellAlphaSlider = XingShuUIFactory.CreateSlider(cardGo, "GlassShellAlphaSlider",
+                XingShuConfigKeys.UiGlassShellAlphaMin, XingShuConfigKeys.UiGlassShellAlphaMax, initShellA, OnGlassShellAlphaChanged);
+            RectTransform sasRt = _glassShellAlphaSlider.GetComponent<RectTransform>();
+            sasRt.anchorMin = new Vector2(0f, 1f); sasRt.anchorMax = new Vector2(1f, 1f); sasRt.pivot = new Vector2(0.5f, 1f);
+            sasRt.anchoredPosition = new Vector2(0f, -210f); sasRt.sizeDelta = new Vector2(-48f, 22f);
+
+            // 功能卡片透明度
+            Text cardAlphaLabel = XingShuUIFactory.CreateText(cardGo, "GlassCardAlphaLabel", "功能卡片透明度 (35%–95%)", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
+            RectTransform calRt = cardAlphaLabel.rectTransform;
+            calRt.anchorMin = new Vector2(0f, 1f); calRt.anchorMax = new Vector2(0f, 1f); calRt.pivot = new Vector2(0f, 1f);
+            calRt.anchoredPosition = new Vector2(24f, -242f); calRt.sizeDelta = new Vector2(240f, 20f);
+
+            float initCardA = XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassCardAlpha, XingShuConfigKeys.UiGlassCardAlphaDefault);
+            _glassCardAlphaValueText = XingShuUIFactory.CreateText(cardGo, "GlassCardAlphaValue", $"{Mathf.RoundToInt(initCardA * 100f)}%", 13, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+            RectTransform cavRt = _glassCardAlphaValueText.rectTransform;
+            cavRt.anchorMin = new Vector2(1f, 1f); cavRt.anchorMax = new Vector2(1f, 1f); cavRt.pivot = new Vector2(1f, 1f);
+            cavRt.anchoredPosition = new Vector2(-24f, -242f); cavRt.sizeDelta = new Vector2(80f, 20f);
+
+            _glassCardAlphaSlider = XingShuUIFactory.CreateSlider(cardGo, "GlassCardAlphaSlider",
+                XingShuConfigKeys.UiGlassCardAlphaMin, XingShuConfigKeys.UiGlassCardAlphaMax, initCardA, OnGlassCardAlphaChanged);
+            RectTransform casRt = _glassCardAlphaSlider.GetComponent<RectTransform>();
+            casRt.anchorMin = new Vector2(0f, 1f); casRt.anchorMax = new Vector2(1f, 1f); casRt.pivot = new Vector2(0.5f, 1f);
+            casRt.anchoredPosition = new Vector2(0f, -264f); casRt.sizeDelta = new Vector2(-48f, 22f);
+        }
+
+        private void OnGlassPresetClicked(int preset)
+        {
+            if (_suppressCallbacks) return;
+            XingShuConfigService.SetInt(XingShuConfigKeys.UiGlassThemePreset, preset);
+            XingShuConfigService.Save();
+            _lastObservedGlassPreset = -1;
+            UpdateGlassPresetButtonVisuals(preset);
+            XingShuUICenter.ApplyGlassAppearanceLive();
+        }
+
+        private void OnGlassHueChanged(float val)
+        {
+            float rounded = Mathf.Round(val);
+            if (_glassHueValueText != null) _glassHueValueText.text = $"{Mathf.RoundToInt(rounded)}°";
+            if (_suppressCallbacks) return;
+            XingShuConfigService.SetInt(XingShuConfigKeys.UiGlassThemePreset, 5);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.UiGlassCustomHue, rounded);
+            XingShuConfigService.Save();
+            _lastObservedGlassPreset = 5;
+            _lastObservedGlassHue = rounded;
+            UpdateGlassPresetButtonVisuals(5);
+            XingShuUICenter.ApplyGlassAppearanceLive();
+        }
+
+        private void OnGlassShellAlphaChanged(float val)
+        {
+            float clamped = XingShuMobileUIHelper.FiniteClamp(val, XingShuConfigKeys.UiGlassShellAlphaMin, XingShuConfigKeys.UiGlassShellAlphaMax, XingShuConfigKeys.UiGlassShellAlphaDefault);
+            if (_glassShellAlphaValueText != null) _glassShellAlphaValueText.text = $"{Mathf.RoundToInt(clamped * 100f)}%";
+            if (_suppressCallbacks) return;
+            XingShuConfigService.SetFloat(XingShuConfigKeys.UiGlassShellAlpha, clamped);
+            XingShuConfigService.Save();
+            _lastObservedShellAlpha = clamped;
+            XingShuUICenter.ApplyGlassAppearanceLive();
+        }
+
+        private void OnGlassCardAlphaChanged(float val)
+        {
+            float clamped = XingShuMobileUIHelper.FiniteClamp(val, XingShuConfigKeys.UiGlassCardAlphaMin, XingShuConfigKeys.UiGlassCardAlphaMax, XingShuConfigKeys.UiGlassCardAlphaDefault);
+            if (_glassCardAlphaValueText != null) _glassCardAlphaValueText.text = $"{Mathf.RoundToInt(clamped * 100f)}%";
+            if (_suppressCallbacks) return;
+            XingShuConfigService.SetFloat(XingShuConfigKeys.UiGlassCardAlpha, clamped);
+            XingShuConfigService.Save();
+            _lastObservedCardAlpha = clamped;
+            XingShuUICenter.ApplyGlassAppearanceLive();
+        }
+
+        private void UpdateGlassPresetButtonVisuals(int activePreset)
+        {
+            if (_glassPresetBtns == null) return;
+            for (int i = 0; i < _glassPresetBtns.Length; i++)
+            {
+                Button b = _glassPresetBtns[i];
+                if (b == null) continue;
+                Image img = b.GetComponent<Image>();
+                Text txt = b.GetComponentInChildren<Text>();
+                bool sel = i == activePreset;
+                if (XingShuUICenter.CenterStyle == 1)
+                {
+                    Sprite targetSprite = sel ? XingShuGlassSkin.ButtonAccentSprite : XingShuGlassSkin.ButtonSprite;
+                    if (img != null && img.sprite != targetSprite) img.sprite = targetSprite;
+                    if (txt != null) txt.color = XingShuGlassSkin.TextPrimary;
+                }
+                else
+                {
+                    if (img != null)
+                    {
+                        img.color = sel ? new Color(0.24f, 0.52f, 0.92f, 1f) : new Color(0.95f, 0.96f, 0.99f, 1f);
+                    }
+                    if (txt != null)
+                    {
+                        txt.color = sel ? Color.white : XingShuUITheme.PrimaryText;
+                    }
+                }
+            }
         }
 
         private void BuildResetDefaultsCard(GameObject parent)
@@ -451,6 +617,40 @@ namespace XingShuRuntime.UI
                 {
                     _lastObservedStyle = curStyle;
                     if (_glassStyleToggle != null) XingShuUIFactory.SetToggleRowStateWithoutNotify(_glassStyleToggle, curStyle == 1);
+                }
+
+                int glassPreset = XingShuConfigService.GetInt(XingShuConfigKeys.UiGlassThemePreset, XingShuConfigKeys.UiGlassThemePresetDefault);
+                if (_lastObservedGlassPreset != glassPreset)
+                {
+                    _lastObservedGlassPreset = glassPreset;
+                    UpdateGlassPresetButtonVisuals(glassPreset);
+                }
+                float glassHue = XingShuMobileUIHelper.FiniteClamp(
+                    XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassCustomHue, XingShuConfigKeys.UiGlassCustomHueDefault),
+                    XingShuConfigKeys.UiGlassCustomHueMin, XingShuConfigKeys.UiGlassCustomHueMax, XingShuConfigKeys.UiGlassCustomHueDefault);
+                if (!Mathf.Approximately(_lastObservedGlassHue, glassHue))
+                {
+                    _lastObservedGlassHue = glassHue;
+                    _glassHueSlider?.SetValueWithoutNotify(glassHue);
+                    if (_glassHueValueText != null) _glassHueValueText.text = $"{Mathf.RoundToInt(glassHue)}°";
+                }
+                float shellAlpha = XingShuMobileUIHelper.FiniteClamp(
+                    XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassShellAlpha, XingShuConfigKeys.UiGlassShellAlphaDefault),
+                    XingShuConfigKeys.UiGlassShellAlphaMin, XingShuConfigKeys.UiGlassShellAlphaMax, XingShuConfigKeys.UiGlassShellAlphaDefault);
+                if (!Mathf.Approximately(_lastObservedShellAlpha, shellAlpha))
+                {
+                    _lastObservedShellAlpha = shellAlpha;
+                    _glassShellAlphaSlider?.SetValueWithoutNotify(shellAlpha);
+                    if (_glassShellAlphaValueText != null) _glassShellAlphaValueText.text = $"{Mathf.RoundToInt(shellAlpha * 100f)}%";
+                }
+                float cardAlpha = XingShuMobileUIHelper.FiniteClamp(
+                    XingShuConfigService.GetFloat(XingShuConfigKeys.UiGlassCardAlpha, XingShuConfigKeys.UiGlassCardAlphaDefault),
+                    XingShuConfigKeys.UiGlassCardAlphaMin, XingShuConfigKeys.UiGlassCardAlphaMax, XingShuConfigKeys.UiGlassCardAlphaDefault);
+                if (!Mathf.Approximately(_lastObservedCardAlpha, cardAlpha))
+                {
+                    _lastObservedCardAlpha = cardAlpha;
+                    _glassCardAlphaSlider?.SetValueWithoutNotify(cardAlpha);
+                    if (_glassCardAlphaValueText != null) _glassCardAlphaValueText.text = $"{Mathf.RoundToInt(cardAlpha * 100f)}%";
                 }
 
                 // Card B
@@ -624,7 +824,14 @@ namespace XingShuRuntime.UI
             {
                 bool isConfirming = Time.unscaledTime < _resetConfirmUntil;
                 _resetDefaultsBtnText.text = isConfirming ? "再次点击确认恢复默认" : "恢复本页默认设置";
-                _resetDefaultsBtnText.color = isConfirming ? XingShuUITheme.NumericAccent : XingShuUITheme.PrimaryText;
+                if (XingShuGlassSkin.IsActive)
+                {
+                    _resetDefaultsBtnText.color = isConfirming ? XingShuGlassSkin.AccentBlue : XingShuGlassSkin.TextPrimary;
+                }
+                else
+                {
+                    _resetDefaultsBtnText.color = isConfirming ? XingShuUITheme.NumericAccent : XingShuUITheme.PrimaryText;
+                }
             }
         }
 
@@ -659,10 +866,17 @@ namespace XingShuRuntime.UI
             XingShuConfigService.SetFloat(XingShuConfigKeys.MobileUserScale, defUserScale);
             XingShuMobileUIHelper.UserScaleMultiplier = defUserScale;
 
+            // Glassmorphism customization defaults
+            XingShuConfigService.SetInt(XingShuConfigKeys.UiGlassThemePreset, XingShuConfigKeys.UiGlassThemePresetDefault);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.UiGlassCustomHue, XingShuConfigKeys.UiGlassCustomHueDefault);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.UiGlassShellAlpha, XingShuConfigKeys.UiGlassShellAlphaDefault);
+            XingShuConfigService.SetFloat(XingShuConfigKeys.UiGlassCardAlpha, XingShuConfigKeys.UiGlassCardAlphaDefault);
+
             // Single batch save
             XingShuConfigService.Save();
 
             // Immediately apply to active runtimes
+            XingShuUICenter.ApplyGlassAppearanceLive();
             AssistBallGUI.RefreshFromConfig();
             XingShuUICenter.ApplyUserScale(defUserScale);
 

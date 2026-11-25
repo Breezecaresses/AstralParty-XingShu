@@ -53,6 +53,10 @@ namespace XingShuRuntime.UI
             txt.fontStyle = style;
             txt.horizontalOverflow = horizontalWrap;
             txt.verticalOverflow = verticalWrap;
+            if (XingShuGlassSkin.IsActive || fontSize <= 14)
+            {
+                XingShuUITheme.ApplyCrispFont(txt, true);
+            }
             return txt;
         }
 
@@ -76,20 +80,33 @@ namespace XingShuRuntime.UI
 
         internal static Button CreateButton(GameObject parent, string name, string label, Sprite bgSprite, Color bgColor, Color textColor, Action onClick, int fontSize = 14)
         {
+            bool glassActive = XingShuGlassSkin.IsActive;
+            bool isPrimaryOrSelected = bgSprite != null && !string.IsNullOrEmpty(bgSprite.name)
+                && (bgSprite.name.Contains("button_primary") || bgSprite.name.Contains("button_selected"));
+
             GameObject go = CreateUIObject(name, parent);
             Image img = go.AddComponent<Image>();
-            img.sprite = bgSprite ?? XingShuUIAssetService.WhiteSprite;
-            img.color = bgColor;
-            img.type = (bgSprite != null && bgSprite.border != Vector4.zero) ? Image.Type.Sliced : Image.Type.Simple;
-            if (bgSprite != null && !string.IsNullOrEmpty(bgSprite.name))
+            if (glassActive && (bgSprite == null || bgSprite.name.Contains("button_")))
             {
-                if (bgSprite.name.Contains("button_primary"))
+                img.sprite = isPrimaryOrSelected ? XingShuGlassSkin.ButtonAccentSprite : XingShuGlassSkin.ButtonSprite;
+                img.type = Image.Type.Sliced;
+                img.color = Color.white;
+            }
+            else
+            {
+                img.sprite = bgSprite ?? XingShuUIAssetService.WhiteSprite;
+                img.color = bgColor;
+                img.type = (bgSprite != null && bgSprite.border != Vector4.zero) ? Image.Type.Sliced : Image.Type.Simple;
+                if (bgSprite != null && !string.IsNullOrEmpty(bgSprite.name))
                 {
-                    XingShuNativeGameUI.Bind(img, XingShuNativeSprite.BtnLarge, Image.Type.Sliced, false, Color.white);
-                }
-                else if (bgSprite.name.Contains("button_selected"))
-                {
-                    XingShuNativeGameUI.Bind(img, XingShuNativeSprite.BtnSmallOk, Image.Type.Sliced, false, Color.white);
+                    if (bgSprite.name.Contains("button_primary"))
+                    {
+                        XingShuNativeGameUI.Bind(img, XingShuNativeSprite.BtnLarge, Image.Type.Sliced, false, Color.white);
+                    }
+                    else if (bgSprite.name.Contains("button_selected"))
+                    {
+                        XingShuNativeGameUI.Bind(img, XingShuNativeSprite.BtnSmallOk, Image.Type.Sliced, false, Color.white);
+                    }
                 }
             }
 
@@ -98,8 +115,8 @@ namespace XingShuRuntime.UI
             btn.navigation = new Navigation { mode = Navigation.Mode.None };
             ColorBlock cb = btn.colors;
             cb.normalColor = Color.white;
-            cb.highlightedColor = new Color(1f, 0.93f, 0.97f, 1f);
-            cb.pressedColor = new Color(0.88f, 0.78f, 0.83f, 1f);
+            cb.highlightedColor = glassActive ? new Color(1.06f, 1.06f, 1.10f, 1f) : new Color(1f, 0.93f, 0.97f, 1f);
+            cb.pressedColor = glassActive ? new Color(0.86f, 0.90f, 0.96f, 1f) : new Color(0.88f, 0.78f, 0.83f, 1f);
             cb.disabledColor = new Color(0.72f, 0.72f, 0.72f, 0.5f);
             cb.fadeDuration = 0.08f;
             btn.colors = cb;
@@ -111,8 +128,9 @@ namespace XingShuRuntime.UI
 
             if (!string.IsNullOrEmpty(label))
             {
-                bool isPinkAccent = bgSprite != null && (bgSprite.name.Contains("button_primary") || bgSprite.name.Contains("button_selected"));
-                Color labelColor = isPinkAccent ? Color.white : textColor;
+                Color labelColor = glassActive
+                    ? (isPrimaryOrSelected ? XingShuGlassSkin.TextPrimary : textColor)
+                    : (isPrimaryOrSelected ? Color.white : textColor);
                 Text txt = CreateText(go, "Text", label, fontSize, labelColor, TextAnchor.MiddleCenter, FontStyle.Bold, HorizontalWrapMode.Overflow, VerticalWrapMode.Truncate);
                 RectTransform txtRt = txt.rectTransform;
                 txtRt.anchorMin = Vector2.zero;

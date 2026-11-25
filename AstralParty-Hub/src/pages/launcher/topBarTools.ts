@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Blocks,
   BookOpen,
   Coins,
   Eye,
@@ -9,6 +10,8 @@ import {
   History,
   Layers,
   MapPin,
+  Paintbrush,
+  Puzzle,
   Radio,
   ShieldCheck,
   UserRound,
@@ -16,7 +19,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export const MAX_PINNED_TOP_TOOLS = 6;
+export const MAX_PINNED_TOP_TOOLS = 3;
 const STORAGE_KEY = 'xingshu.launcher.pinnedTools.v1';
 const CHANGE_EVENT = 'xingshu:pinned-tools-changed';
 
@@ -204,6 +207,18 @@ export const PINNABLE_TOOLS: readonly PinnableToolDef[] = [
     detailZh: '查看并恢复文件备份',
     detailEn: 'Review and restore file backups',
   },
+  {
+    key: 'plugin-guide',
+    to: '/tools/plugin-guide',
+    group: 'launcher',
+    Icon: Puzzle,
+    shortZh: '接入',
+    shortEn: 'SDK',
+    zh: '外部 Mod 接入指南',
+    en: 'Plugin SDK Guide',
+    detailZh: '社区优化 Mod 挂载星枢功能中心开发说明与示例',
+    detailEn: 'Developer guide and examples for registering external mods',
+  },
 ];
 
 const VALID_KEYS = new Set(PINNABLE_TOOLS.map((t) => t.key));
@@ -341,5 +356,186 @@ export function usePinnedTopTools(): {
     togglePin,
     movePin,
     clearPins,
+  };
+}
+
+export const MAX_HOME_SHORTCUTS = 6;
+export const DEFAULT_HOME_SHORTCUT_KEYS: readonly string[] = ['mods', 'diagnostics', 'transactions'];
+const HOME_SHORTCUT_STORAGE_KEY = 'xingshu.launcher.homeShortcuts.v1';
+const HOME_SHORTCUT_CHANGE_EVENT = 'xingshu:home-shortcuts-changed';
+
+export interface HomeShortcutDef {
+  key: string;
+  to: string;
+  Icon: LucideIcon;
+  zh: string;
+  en: string;
+  detailZh: string;
+  detailEn: string;
+}
+
+export const HOME_SHORTCUTS: readonly HomeShortcutDef[] = [
+  {
+    key: 'mods',
+    to: '/extensions/launcher',
+    Icon: Blocks,
+    zh: '模组管理',
+    en: 'Mod Manager',
+    detailZh: '启停局内工具与功能扩展',
+    detailEn: 'Manage in-game tools & mods',
+  },
+  {
+    key: 'customize',
+    to: '/customize',
+    Icon: Paintbrush,
+    zh: '自定义工作台',
+    en: 'Customize Studio',
+    detailZh: '配置游戏主页背景、资源包与字体调试',
+    detailEn: 'Lobby background, packs & UI tuning',
+  },
+  ...PINNABLE_TOOLS.map((t) => ({
+    key: t.key,
+    to: t.to,
+    Icon: t.Icon,
+    zh: t.zh,
+    en: t.en,
+    detailZh: t.detailZh,
+    detailEn: t.detailEn,
+  })),
+];
+
+const VALID_HOME_SHORTCUT_KEYS = new Set(HOME_SHORTCUTS.map((s) => s.key));
+
+export function findHomeShortcutByKey(key: string): HomeShortcutDef | undefined {
+  return HOME_SHORTCUTS.find((s) => s.key === key);
+}
+
+function normalizeHomeShortcutKeys(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_HOME_SHORTCUT_KEYS];
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'string' || !VALID_HOME_SHORTCUT_KEYS.has(item) || seen.has(item)) continue;
+    seen.add(item);
+    next.push(item);
+    if (next.length >= MAX_HOME_SHORTCUTS) break;
+  }
+  return next.length > 0 ? next : [...DEFAULT_HOME_SHORTCUT_KEYS];
+}
+
+export function getHomeShortcutKeys(): string[] {
+  try {
+    if (typeof localStorage === 'undefined') return [...DEFAULT_HOME_SHORTCUT_KEYS];
+    const saved = localStorage.getItem(HOME_SHORTCUT_STORAGE_KEY);
+    if (!saved) return [...DEFAULT_HOME_SHORTCUT_KEYS];
+    return normalizeHomeShortcutKeys(JSON.parse(saved));
+  } catch {
+    return [...DEFAULT_HOME_SHORTCUT_KEYS];
+  }
+}
+
+export function saveHomeShortcutKeys(keys: string[]): string[] {
+  const next = normalizeHomeShortcutKeys(keys);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(HOME_SHORTCUT_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // Ignore storage quota errors.
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(HOME_SHORTCUT_CHANGE_EVENT, { detail: next }));
+  }
+  return next;
+}
+
+export function useHomeQuickShortcuts(): {
+  shortcutKeys: string[];
+  shortcuts: HomeShortcutDef[];
+  maxCount: number;
+  hasKey: (key: string) => boolean;
+  toggleKey: (key: string) => { changed: boolean; limitReached: boolean; minReached: boolean };
+  moveKey: (key: string, delta: -1 | 1) => void;
+  resetDefaults: () => void;
+} {
+  const [shortcutKeys, setShortcutKeys] = useState<string[]>(getHomeShortcutKeys);
+
+  useEffect(() => {
+    const onCustom = (event: Event) => {
+      const detail = (event as CustomEvent<string[] | undefined>).detail;
+      setShortcutKeys(detail ? normalizeHomeShortcutKeys(detail) : getHomeShortcutKeys());
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === HOME_SHORTCUT_STORAGE_KEY) {
+        setShortcutKeys(getHomeShortcutKeys());
+      }
+    };
+    window.addEventListener(HOME_SHORTCUT_CHANGE_EVENT, onCustom);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(HOME_SHORTCUT_CHANGE_EVENT, onCustom);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  const shortcuts = useMemo(
+    () =>
+      shortcutKeys
+        .map((k) => findHomeShortcutByKey(k))
+        .filter((s): s is HomeShortcutDef => Boolean(s)),
+    [shortcutKeys],
+  );
+
+  const hasKey = useCallback((key: string) => shortcutKeys.includes(key), [shortcutKeys]);
+
+  const toggleKey = useCallback(
+    (key: string) => {
+      if (!VALID_HOME_SHORTCUT_KEYS.has(key)) {
+        return { changed: false, limitReached: false, minReached: false };
+      }
+      if (shortcutKeys.includes(key)) {
+        if (shortcutKeys.length <= 1) {
+          return { changed: false, limitReached: false, minReached: true };
+        }
+        const next = saveHomeShortcutKeys(shortcutKeys.filter((k) => k !== key));
+        setShortcutKeys(next);
+        return { changed: true, limitReached: false, minReached: false };
+      }
+      if (shortcutKeys.length >= MAX_HOME_SHORTCUTS) {
+        return { changed: false, limitReached: true, minReached: false };
+      }
+      const next = saveHomeShortcutKeys([...shortcutKeys, key]);
+      setShortcutKeys(next);
+      return { changed: true, limitReached: false, minReached: false };
+    },
+    [shortcutKeys],
+  );
+
+  const moveKey = useCallback(
+    (key: string, delta: -1 | 1) => {
+      const idx = shortcutKeys.indexOf(key);
+      if (idx < 0) return;
+      const target = idx + delta;
+      if (target < 0 || target >= shortcutKeys.length) return;
+      const copy = [...shortcutKeys];
+      const [item] = copy.splice(idx, 1);
+      copy.splice(target, 0, item);
+      setShortcutKeys(saveHomeShortcutKeys(copy));
+    },
+    [shortcutKeys],
+  );
+
+  const resetDefaults = useCallback(() => {
+    setShortcutKeys(saveHomeShortcutKeys([...DEFAULT_HOME_SHORTCUT_KEYS]));
+  }, []);
+
+  return {
+    shortcutKeys,
+    shortcuts,
+    maxCount: MAX_HOME_SHORTCUTS,
+    hasKey,
+    toggleKey,
+    moveKey,
+    resetDefaults,
   };
 }

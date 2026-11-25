@@ -107,7 +107,7 @@ assert.ok(invite.includes('#9123456'));
 assert.ok(invite.includes('森秋幻境'));
 assert.ok(!invite.includes('0收益'));
 
-// 6. Verify RoomLobbyPage.tsx and LauncherNav.tsx contain no leftover mock/preview placeholders and expose top-level 开房 tab.
+// 6. Verify RoomLobbyPage.tsx, topBarTools.ts and LauncherNav.tsx contain no leftover mock/preview placeholders and match the new nav + tools layout.
 const roomPageSrc = fs.readFileSync(path.resolve('src/pages/room/RoomLobbyPage.tsx'), 'utf8');
 assert.ok(!roomPageSrc.includes('模板预览'), 'RoomLobbyPage must not show preview mock banner');
 assert.ok(!roomPageSrc.includes('0收益'), 'RoomLobbyPage must not show self-hosted 0-yield copy');
@@ -117,6 +117,8 @@ assert.ok(roomPageSrc.includes('in_game_room_modify'), 'RoomLobbyPage must invok
 assert.ok(roomPageSrc.includes('in_game_room_start'), 'RoomLobbyPage must invoke real in_game_room_start');
 
 const navSrc = fs.readFileSync(path.resolve('src/pages/launcher/LauncherNav.tsx'), 'utf8');
-assert.ok(navSrc.includes("key: 'room', to: '/room'"), 'LauncherNav must include top-level /room tab');
+assert.ok(navSrc.includes("key: 'customize', to: '/customize'"), 'LauncherNav must include top-level /customize tab');
+const topBarToolsSrc = fs.readFileSync(path.resolve('src/pages/launcher/topBarTools.ts'), 'utf8');
+assert.ok(topBarToolsSrc.includes("key: 'room'") && topBarToolsSrc.includes("to: '/room'"), 'topBarTools must include /room under Tools');
 
 console.log('room_official_catalog tests passed.');

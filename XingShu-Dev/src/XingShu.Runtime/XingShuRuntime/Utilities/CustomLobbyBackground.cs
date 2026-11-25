@@ -7,6 +7,7 @@ using UI;
 using UnityEngine;
 using UnityEngine.Video;
 using XingShuRuntime.Core;
+using XingShuRuntime.Features;
 using XingShuRuntime.UI;
 
 namespace XingShuRuntime.Utilities
@@ -49,7 +50,7 @@ namespace XingShuRuntime.Utilities
         // Media catalog state
         private readonly List<string> _mediaFiles = new List<string>();
         private int _currentIndex = -1;
-        private float _lastScanTime = -99f;
+        private double _lastScanTime = -99.0;
         private bool _defaultFolderCreated;
 
         // Status readout for UI
@@ -71,25 +72,28 @@ namespace XingShuRuntime.Utilities
 
         // Runtime playback / suppression state
         private bool _videoPreparing;
-        private float _videoPrepareStartedAt;
+        private double _videoPrepareStartedAt;
         private bool _videoStarted;
-        private float _videoStartedAt;
+        private double _videoStartedAt;
         private bool _pausedForAway;
         private bool _wasHomeVisible;
         private bool _suppressedHomeCri;
         private bool _suppressedSubCri;
         private bool _criOverrideApplied;
         private bool _vanillaBgmSuppressed;
-        private float _lastSidecarCheckTime = -99f;
+        private double _lastSidecarCheckTime = -99.0;
         private DateTime _lastSidecarWriteUtc = DateTime.MinValue;
         private bool _suppressSidecarWrite;
         private CriSwitchPhase _criPhase = CriSwitchPhase.Idle;
         private string _pendingCriPath = "";
         private LobbyBgMediaKind _pendingCriKind = LobbyBgMediaKind.Unknown;
-        private float _pendingCriStartedAt;
+        private double _pendingCriStartedAt;
         private string _activeVideoFullPath = "";
-        private float _lastAudioDriftCheckAt = -99f;
+        private double _lastAudioDriftCheckAt = -99.0;
         private bool _initialAudioAligned;
+        private bool _videoUsesUnscaledClock;
+        private float _lastAppliedNativeScale = -1f;
+        private float _lastAppliedUnityTimeScale = -1f;
 #if !XINGSHU_ANDROID_PREVIEW
         private readonly WindowsLobbyAudioPlayer _companionAudio = new WindowsLobbyAudioPlayer();
 #else
@@ -113,6 +117,7 @@ namespace XingShuRuntime.Utilities
         private static MethodInfo _criCtrlSetAssetMethod;
         private static PropertyInfo _vpIsLoopingProp;
         private static PropertyInfo _vpAudioModeProp;
+        private static PropertyInfo _vpTimeUpdateModeProp;
         private static Type _criCtrlType;
         private static Type _criUsmAssetType;
 
@@ -521,8 +526,8 @@ namespace XingShuRuntime.Utilities
             try
             {
                 _companionAudio.TickMainThread();
-                float now = Time.unscaledTime;
-                if (now - _lastSidecarCheckTime >= 2.0f)
+                double now = ThinkingClock.RealSeconds();
+                if (now - _lastSidecarCheckTime >= 2.0)
                 {
                     _lastSidecarCheckTime = now;
                     TryLoadSidecarIfNewer(force: false, out _);
@@ -535,6 +540,14 @@ namespace XingShuRuntime.Utilities
                     {
                         ScanFilesInternal(applyIfChanged: _enabled && _mediaFiles.Count == 0);
                     }
+                }
+
+                float curNativeScale = ReadNativeClockScale();
+                float curUnityScale = Time.timeScale;
+                if (Math.Abs(curNativeScale - _lastAppliedNativeScale) > 0.01f ||
+                    Math.Abs(curUnityScale - _lastAppliedUnityTimeScale) > 0.01f)
+                {
+                    ApplyVideoPlaybackSettings();
                 }
 
                 HomePanel home = FindHomePanel();
@@ -1077,7 +1090,7 @@ namespace XingShuRuntime.Utilities
                 _videoStarted = false;
                 _initialAudioAligned = false;
                 _pausedForAway = false;
-                _videoPrepareStartedAt = Time.unscaledTime;
+                _videoPrepareStartedAt = ThinkingClock.RealSeconds();
                 ActiveMediaKind = LobbyBgMediaKind.Video;
                 ActiveMediaLabel = $"{fileName} (准备视频中…)";
                 StatusMsg = $"正在加载视频: {fileName}…";
@@ -1140,8 +1153,8 @@ namespace XingShuRuntime.Utilities
                     ApplyVideoPlaybackSettings();
                     _videoStarted = true;
                     _initialAudioAligned = false;
-                    _videoStartedAt = Time.unscaledTime;
-                    _lastAudioDriftCheckAt = Time.unscaledTime;
+                    _videoStartedAt = ThinkingClock.RealSeconds();
+                    _lastAudioDriftCheckAt = ThinkingClock.RealSeconds();
                     _companionAudio.StartFile(_activeVideoFullPath, _muted, _volume, _speed, _pausedForAway, 0.0);
 
                     ReleaseActiveNTexture();
@@ -1157,7 +1170,7 @@ namespace XingShuRuntime.Utilities
                     return;
                 }
 
-                if (Time.unscaledTime - _videoPrepareStartedAt > VideoPrepareTimeoutSeconds)
+                if (ThinkingClock.RealSeconds() - _videoPrepareStartedAt > VideoPrepareTimeoutSeconds)
                 {
                     string fn = CurrentFileName;
                     _videoPreparing = false;
@@ -1192,14 +1205,14 @@ namespace XingShuRuntime.Utilities
                     catch
                     {
                     }
-                    bool reachedEnd = (len > 0.05 && cur >= len - 0.15) || (Time.unscaledTime - _videoStartedAt > 0.35f);
+                    bool reachedEnd = (len > 0.05 && cur >= len - 0.15) || (ThinkingClock.RealSeconds() - _videoStartedAt > 0.35);
                     if (reachedEnd)
                     {
                         try
                         {
                             _videoPlayer.time = 0.0;
                             _videoPlayer.Play();
-                            _videoStartedAt = Time.unscaledTime;
+                            _videoStartedAt = ThinkingClock.RealSeconds();
                             _companionAudio.RequestSeek(0.0);
                         }
                         catch
@@ -1212,7 +1225,7 @@ namespace XingShuRuntime.Utilities
                     if (!_initialAudioAligned)
                     {
                         _initialAudioAligned = true;
-                        _lastAudioDriftCheckAt = Time.unscaledTime;
+                        _lastAudioDriftCheckAt = ThinkingClock.RealSeconds();
                         try
                         {
                             double vt = _videoPlayer.time;
@@ -1226,9 +1239,9 @@ namespace XingShuRuntime.Utilities
                         {
                         }
                     }
-                    else if (Time.unscaledTime - _lastAudioDriftCheckAt >= 3.0f)
+                    else if (ThinkingClock.RealSeconds() - _lastAudioDriftCheckAt >= 3.0)
                     {
-                        _lastAudioDriftCheckAt = Time.unscaledTime;
+                        _lastAudioDriftCheckAt = ThinkingClock.RealSeconds();
                         try
                         {
                             double vt = _videoPlayer.time;
@@ -1267,9 +1280,9 @@ namespace XingShuRuntime.Utilities
                     try { vt = _videoPlayer.time; } catch { }
                     _videoPlayer.Play();
                     ApplyVideoPlaybackSettings();
-                    _videoStartedAt = Time.unscaledTime;
+                    _videoStartedAt = ThinkingClock.RealSeconds();
                     _initialAudioAligned = true;
-                    _lastAudioDriftCheckAt = Time.unscaledTime;
+                    _lastAudioDriftCheckAt = ThinkingClock.RealSeconds();
                     _companionAudio.RequestSeek(vt);
                     _companionAudio.SetPaused(false);
                 }
@@ -1299,21 +1312,51 @@ namespace XingShuRuntime.Utilities
                     }
                     _vpAudioModeProp.SetValue(_videoPlayer, noneMode, null);
                 }
+
+                _videoUsesUnscaledClock = false;
+                if (_vpTimeUpdateModeProp != null)
+                {
+                    try
+                    {
+                        object unscaledMode = Enum.Parse(_vpTimeUpdateModeProp.PropertyType, "UnscaledGameTime", false);
+                        _vpTimeUpdateModeProp.SetValue(_videoPlayer, unscaledMode, null);
+                        _videoUsesUnscaledClock = true;
+                    }
+                    catch
+                    {
+                    }
+                }
             }
             catch
             {
             }
         }
 
+        private static float ReadNativeClockScale()
+        {
+            float s = XingShuSpeedEngineCoordinator.ActiveNativeClockScale;
+            return s > 0.01f ? s : 1.0f;
+        }
+
         private void ApplyVideoPlaybackSettings()
         {
             _companionAudio.SetAudioParams(_muted, _volume, _speed);
+
+            float nativeScale = ReadNativeClockScale();
+            float unityScale = Time.timeScale;
+            _lastAppliedNativeScale = nativeScale;
+            _lastAppliedUnityTimeScale = unityScale;
+
+            float compensatedVideoSpeed = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(
+                _speed, nativeScale, unityScale, _videoUsesUnscaledClock);
+            float compensatedCriSpeed = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(
+                _speed, nativeScale, unityScale, true);
 
             if (_videoPlayer != null)
             {
                 try
                 {
-                    _videoPlayer.playbackSpeed = _speed;
+                    _videoPlayer.playbackSpeed = compensatedVideoSpeed;
                 }
                 catch
                 {
@@ -1340,7 +1383,7 @@ namespace XingShuRuntime.Utilities
                         : null;
                     if (graph != null && !graph.isDisposed && TryGetCriControllerAndPlayer(graph, out _, out object player) && player != null)
                     {
-                        _criPlayerSetSpeedMethod?.Invoke(player, new object[] { _speed });
+                        _criPlayerSetSpeedMethod?.Invoke(player, new object[] { compensatedCriSpeed });
                         _criPlayerSetVolumeMethod?.Invoke(player, new object[] { _muted ? 0f : _volume });
                     }
                 }
@@ -1407,7 +1450,7 @@ namespace XingShuRuntime.Utilities
         {
             _pendingCriPath = fullPath;
             _pendingCriKind = kind;
-            _pendingCriStartedAt = Time.unscaledTime;
+            _pendingCriStartedAt = ThinkingClock.RealSeconds();
             _criPhase = CriSwitchPhase.WaitingStop;
             ActiveMediaKind = kind;
             ActiveMediaLabel = $"{fileName} ({CustomLobbyBgPolicy.KindLabel(kind)})";
@@ -1445,7 +1488,7 @@ namespace XingShuRuntime.Utilities
 
             if (!TryGetCriControllerAndPlayer(graph, out Component ctrl, out object player) || ctrl == null || player == null)
             {
-                if (Time.unscaledTime - _pendingCriStartedAt > 5.0f)
+                if (ThinkingClock.RealSeconds() - _pendingCriStartedAt > 5.0)
                 {
                     _criPhase = CriSwitchPhase.Idle;
                     StatusMsg = "未找到大厅 CriWare 播放器组件，请改用 .mp4 或 .png 素材";
@@ -1463,7 +1506,7 @@ namespace XingShuRuntime.Utilities
             catch
             {
             }
-            if (statusInt != 0 && (Time.unscaledTime - _pendingCriStartedAt) < 1.5f)
+            if (statusInt != 0 && (ThinkingClock.RealSeconds() - _pendingCriStartedAt) < 1.5)
             {
                 return;
             }
@@ -1474,6 +1517,7 @@ namespace XingShuRuntime.Utilities
 
             try
             {
+                float criSpeed = CustomLobbyBgPolicy.ComputeCompensatedPlaybackSpeed(_speed, ReadNativeClockScale(), Time.timeScale, true);
                 if (_pendingCriKind == LobbyBgMediaKind.CriUsm)
                 {
                     if (!InvokeCriSetFile(player, path))
@@ -1482,7 +1526,7 @@ namespace XingShuRuntime.Utilities
                         return;
                     }
                     _criPlayerLoopMethod?.Invoke(player, new object[] { true });
-                    _criPlayerSetSpeedMethod?.Invoke(player, new object[] { _speed });
+                    _criPlayerSetSpeedMethod?.Invoke(player, new object[] { criSpeed });
                     _criPlayerSetVolumeMethod?.Invoke(player, new object[] { _muted ? 0f : _volume });
                     _criPlayerPauseMethod?.Invoke(player, new object[] { false });
                     _criPlayerStartMethod?.Invoke(player, null);
@@ -1521,7 +1565,7 @@ namespace XingShuRuntime.Utilities
                     }
                     _criCtrlSetAssetMethod.Invoke(ctrl, new object[] { Path.GetFileNameWithoutExtension(fn), usmAsset });
                     _criPlayerLoopMethod?.Invoke(player, new object[] { true });
-                    _criPlayerSetSpeedMethod?.Invoke(player, new object[] { _speed });
+                    _criPlayerSetSpeedMethod?.Invoke(player, new object[] { criSpeed });
                     _criPlayerSetVolumeMethod?.Invoke(player, new object[] { _muted ? 0f : _volume });
                     _criPlayerPauseMethod?.Invoke(player, new object[] { false });
                     _criPlayerStartMethod?.Invoke(player, null);
@@ -1935,6 +1979,7 @@ namespace XingShuRuntime.Utilities
             Type vpType = typeof(VideoPlayer);
             _vpIsLoopingProp = vpType.GetProperty("isLooping", anyInst);
             _vpAudioModeProp = vpType.GetProperty("audioOutputMode", anyInst);
+            _vpTimeUpdateModeProp = vpType.GetProperty("timeUpdateMode", anyInst);
 
             // CriWare runtime reflection (avoids hard compile dependency on CriMw DLLs)
             try

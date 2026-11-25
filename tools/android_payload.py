@@ -53,6 +53,7 @@ def previous_hashes(manifest, additional_manifests=()):
     if manifest['originalSha256'] == '10da88362ca670dacdafd9f994b62711f1503bff9c6c26a0aa958e165ab5dc5a':
         found.add('fac55f465672d693fe34315601e25e3dbc1f621bc0b97903c1790e63eb3398b0')
         found.add('a4c53f8afd9e8d3cd2ffb49b7b714d466af0f5b8fe677ffdb647fbdd6d3158a7')
+        found.add('c37ffa714290df9ffecd8bcaa1fee1644eede5535a952b317f4321fbe14a5ede')
         found.add('6636dc60b85ebda6096bdc1a52922e455598574a20ca69f537c459d306e657d5')
         found.add('80ffa6b0cfb025ddbfa8d16b76770e3998140d266ba9b0650089746c64bf7d92')
         found.add('bae736483576fcb7d27039cf80c494faf2b919523e7a208ae32f8f35de6f4744')
@@ -72,6 +73,9 @@ def previous_hashes(manifest, additional_manifests=()):
         found.add('c04efa402477666df079eb4fbd0248f673678b6af992fc65351746d711bdaa2d')
         found.add('dfce27a771d72189aa7e4dae01696a65ece45af7b0b7139686462a5c915edf19')
         found.add('b3f9c38bd267d13119f23c18923690bdb1396707cd681f8b167bf3dbbcaa7e52')
+        found.add('d1cd08bead8d68b0747af241917660c826e4c9579fc69c18430499ad173f7a96')
+        found.add('3e0b55fbed60b94ca811fb93d1609bfd78c270071890efa5f9de11e4f5dc631e')
+        found.add('e4b585139c467f313447eb9320080a84f41992622baf17a7eab9a0d7920e1087')
     releases = publish_directory(ROOT)
     manifests = set(releases.glob('XingShu_Android_*/candidate.json'))
     manifests.update(releases.glob('XingShu_*/Android/candidate.json'))

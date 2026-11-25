@@ -15,6 +15,7 @@ import {
   FolderOpen,
   Gamepad2,
   History,
+  Images,
   Info,
   Layers,
   MapPin,
@@ -29,6 +30,7 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
+  SmilePlus,
   Upload,
   UserRound,
   Users,
@@ -37,6 +39,7 @@ import {
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { EmoteReactionBar } from '../../components/platform/EmoteReactionBar';
+import { PlatformUserAvatar } from '../../components/platform/PlatformUserAvatar';
 import { useTranslation } from '../../i18n';
 import { api, type DroppedModRecord, type WorkshopLocalItemState } from '../../shared/api/tauri';
 import officialModules from '../../shared/launcherModules.json';
@@ -49,7 +52,6 @@ import {
   formatModBytes,
   installKindLabel,
   modPlatformSummaryBadge,
-  sanitizeWorkshopPlatforms,
   workshopAssetUrl,
   type WorkshopCategory,
   type WorkshopModItem,
@@ -75,6 +77,17 @@ import {
   usePinnedTopTools,
 } from './topBarTools';
 import './launcher.css';
+
+const RETIRED_BUILTIN_OFFICIAL_SLUGS = new Set([
+  'custom-lobby-bg',
+  'monster-targeting',
+  'monster-cooldown',
+  'battle-card-points',
+  'quick-thanks',
+  'avatar-praise',
+  'star-coin-shop',
+  'settlement-capture',
+]);
 
 type ToolEntry = {
   to: string;
@@ -148,6 +161,7 @@ const toolGroups: ToolGroup[] = [
       { to: '/diagnostics', Icon: ShieldCheck, zh: '组件诊断', en: 'Component diagnostics', detail: '核对游戏、启动组件和连接', english: 'Check game installation and runtime' },
       { to: '/maintenance/transactions?from=tools', Icon: History, zh: '安装记录', en: 'Install history', detail: '查看模组安装与还原记录', english: 'Review mod installation and rollback' },
       { to: '/maintenance/backups?from=tools', Icon: FolderOpen, zh: '备份与还原', en: 'Backups', detail: '查看并恢复文件备份', english: 'Review and restore file backups' },
+      { to: '/tools/plugin-guide', Icon: Puzzle, zh: '外部 Mod 接入指南', en: 'Plugin SDK Guide', detail: '说明如何将外部优化 Mod / 插件挂载至功能中心 v2', english: 'How external mods integrate with XingShu Center v2' },
     ],
   },
 ];
@@ -229,8 +243,8 @@ export function LauncherTools() {
                                   ? '取消固定到顶部栏位'
                                   : 'Unpin from top bar'
                                 : zh
-                                  ? '固定到顶部栏位（最多 6 个）'
-                                  : 'Pin to top bar (max 6)'
+                                  ? `固定到顶部栏位（最多 ${MAX_PINNED_TOP_TOOLS} 个）`
+                                  : `Pin to top bar (max ${MAX_PINNED_TOP_TOOLS})`
                             }
                             onClick={(e) => {
                               e.preventDefault();
@@ -605,15 +619,16 @@ export function LauncherMods() {
     const linkedDrops = new Set(Object.values(states).map((state) => state.linkedDropId).filter(Boolean));
     const mergedWorkshopIds = new Set<string>();
 
-    const baseModules: ModRow[] = localReady && catalog?.modules?.length
+    const rawBaseModules: ModRow[] = localReady && catalog?.modules?.length
       ? catalog.modules
       : officialModules.map((mod) => ({ ...mod, installed: false, managed: false, available: false }));
+    const baseModules = rawBaseModules.filter((m) => !RETIRED_BUILTIN_OFFICIAL_SLUGS.has(m.id));
     const seenSlugs = new Set(baseModules.map((m) => m.id));
     const modules: ModRow[] = [...baseModules];
     for (const wsItem of wsMap.values()) {
       if (!wsItem.id.startsWith('xingshu.launcher.')) continue;
       const slug = wsItem.id.slice('xingshu.launcher.'.length);
-      if (!slug || seenSlugs.has(slug)) continue;
+      if (!slug || seenSlugs.has(slug) || RETIRED_BUILTIN_OFFICIAL_SLUGS.has(slug)) continue;
       seenSlugs.add(slug);
       modules.push({
         id: slug,
@@ -675,6 +690,7 @@ export function LauncherMods() {
 
     for (const id of new Set([...wsMap.keys(), ...Object.keys(states)])) {
       if (mergedWorkshopIds.has(id) || id.startsWith('xingshu.launcher.')) continue;
+      if (RETIRED_BUILTIN_OFFICIAL_SLUGS.has(normalizeModuleSlug(id))) continue;
       const ws = wsMap.get(id);
       const localState = states[id];
       const phase = localState?.phase;
@@ -1245,6 +1261,50 @@ export function LauncherMods() {
     setCategoryFilter(cat);
   };
 
+  const handleReactionUpdated = (
+    targetId: string,
+    next: {
+      reactions: NonNullable<WorkshopModItem['reactions']>;
+      reactionTotal: number;
+      viewerEmoteId: string | null;
+    },
+  ) => {
+    setDetailFull((prev) =>
+      prev && prev.id === targetId
+        ? {
+            ...prev,
+            reactions: next.reactions,
+            reactionTotal: next.reactionTotal,
+            viewerState: {
+              following: prev.viewerState?.following ?? false,
+              bookmarked: prev.viewerState?.bookmarked ?? false,
+              isOwner: prev.viewerState?.isOwner ?? false,
+              viewerEmoteId: next.viewerEmoteId,
+            },
+          }
+        : prev,
+    );
+    setWorkshopItems((prev) =>
+      prev.map((w) =>
+        w.id === targetId
+          ? {
+              ...w,
+              reactions: next.reactions,
+              reactionTotal: next.reactionTotal,
+              viewerState: w.viewerState
+                ? { ...w.viewerState, viewerEmoteId: next.viewerEmoteId }
+                : {
+                    following: false,
+                    bookmarked: false,
+                    isOwner: false,
+                    viewerEmoteId: next.viewerEmoteId,
+                  },
+            }
+          : w,
+      ),
+    );
+  };
+
   const renderModBadge = (item: UnifiedModItem, size: 'sm' | 'md' | 'lg' = 'md') => {
     const px = size === 'sm' ? 40 : size === 'lg' ? 64 : 48;
     const iconPx = size === 'sm' ? 19 : size === 'lg' ? 28 : 22;
@@ -1749,8 +1809,30 @@ export function LauncherMods() {
                     <ul className="pcl-core-conflict-list">
                       {conflictReport.items.map((item, idx) => (
                         <li key={`${item.category}-${item.relativePath}-${idx}`}>
-                          <span className="pcl-core-conflict-plugin">{item.pluginName}</span>
-                          <code>{item.relativePath}</code>
+                          <div className="pcl-core-conflict-row">
+                            <span className="pcl-core-conflict-plugin">{item.pluginName}</span>
+                            <code title={item.fullPath || item.relativePath}>{item.relativePath}</code>
+                            <button
+                              type="button"
+                              className="pcl-btn-mini pcl-core-conflict-open-btn"
+                              title={item.fullPath || item.relativePath}
+                              onClick={() => {
+                                void invoke('launcher_reveal_conflict_item', {
+                                  installationId,
+                                  relativePath: item.relativePath,
+                                }).catch((issue) => setNotice({ kind: 'error', text: errorMessage(issue) }));
+                              }}
+                            >
+                              <FolderOpen size={12} />
+                              <span>{zh ? '打开位置' : 'Open location'}</span>
+                            </button>
+                          </div>
+                          {item.fullPath && (
+                            <div className="pcl-core-conflict-path">{item.fullPath}</div>
+                          )}
+                          {item.reason && (
+                            <div className="pcl-core-conflict-reason">{item.reason}</div>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -2141,84 +2223,165 @@ export function LauncherMods() {
                 </div>
               ) : (
                 <div className="pcl-mod-rows">
-                  {filteredDiscoverItems.map((item, idx) => (
-                    <article
-                      key={item.key}
-                      className={`pcl-mod-row is-discover ${item.installed ? 'is-installed' : ''}`}
-                      style={{ '--stagger-index': Math.min(idx, 12) } as React.CSSProperties}
-                    >
-                      {renderModBadge(item, 'md')}
-                      <div className="pcl-mod-row-body">
-                        <div className="pcl-mod-row-title">
-                          <strong>{item.name}</strong>
-                          <span className="pcl-mod-author">{item.author}</span>
-                          {item.enabled && <span className="pcl-mod-chip is-on">{zh ? '已开启' : 'Enabled'}</span>}
-                          {item.installed && !item.enabled && (
-                            <span className="pcl-mod-chip is-off">{item.disabled ? (zh ? '已关闭' : 'Disabled') : (zh ? '操作未完成' : 'Needs recovery')}</span>
-                          )}
-                          {!item.installed && item.downloaded && (
-                            <span className="pcl-mod-chip">{zh ? '已下载' : 'Downloaded'}</span>
-                          )}
-                          {item.sourceKind === 'official' && !item.installed && !item.downloaded && (
-                            <span className="pcl-mod-chip">{zh ? '未安装' : 'Not installed'}</span>
-                          )}
-                          {modPlatformSummaryBadge(item, zh) && (
-                            <span className="pcl-mod-chip is-multi pcl-tabular">
-                              {modPlatformSummaryBadge(item, zh)}
+                  {filteredDiscoverItems.map((item, idx) => {
+                    const ws = item.workshopItem;
+                    const reactionTotal = ws?.reactionTotal
+                      ?? ws?.reactions?.reduce((sum, entry) => sum + entry.count, 0)
+                      ?? 0;
+                    const authorColor = ws?.authorAvatarColor
+                      || (ws?.authorIsOfficial || item.sourceKind === 'official' ? '#2f7cf6' : '#f02878');
+                    const onCardClick = (e: React.MouseEvent<HTMLElement>) => {
+                      const target = e.target as HTMLElement | null;
+                      if (target?.closest('a, button, input, select, textarea, [role="dialog"], .mr-emote-bar')) {
+                        return;
+                      }
+                      setDetailKey(item.key);
+                    };
+                    const onCardKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+                      const target = e.target as HTMLElement | null;
+                      if (target?.closest('a, button, input, select, textarea, [role="dialog"], .mr-emote-bar')) {
+                        return;
+                      }
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setDetailKey(item.key);
+                      }
+                    };
+
+                    return (
+                      <article
+                        key={item.key}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`${item.name} — ${zh ? '点击进入详情与下载' : 'Open mod details'}`}
+                        className={`pcl-mod-row is-discover ${item.installed ? 'is-installed' : ''}`}
+                        style={{ '--stagger-index': Math.min(idx, 12) } as React.CSSProperties}
+                        onClick={onCardClick}
+                        onKeyDown={onCardKeyDown}
+                      >
+                        {renderModBadge(item, 'md')}
+                        <div className="pcl-mod-row-body">
+                          <div className="pcl-mod-row-title">
+                            <strong>{item.name}</strong>
+                            <span className="pcl-mod-author-chip">
+                              <PlatformUserAvatar
+                                name={item.author}
+                                avatarUrl={ws?.authorAvatarUrl}
+                                avatarColor={authorColor}
+                                size={16}
+                                fontSize={9}
+                              />
+                              <span>by {item.author}</span>
                             </span>
-                          )}
-                        </div>
-                        <div className="pcl-mod-row-tags">
-                          <span className="pcl-mod-cat-pill">{item.categoryLabel}</span>
-                          {item.tags.slice(0, 3).map((tag) => (
-                            <span key={tag} className="pcl-mod-tag-pill">
-                              {tag}
+                            <span className={`pcl-mod-kind-pill ${item.installKind === 'xspkg' ? 'is-xspkg' : ''}`}>
+                              {installKindLabel(item.installKind)}
                             </span>
-                          ))}
-                        </div>
-                        <p className="pcl-mod-row-desc">{item.description}</p>
-                        <div className="pcl-mod-row-meta">
-                          <span>{installKindLabel(item.installKind)}</span>
-                          {item.version && <span>v{item.version}</span>}
-                          {item.sizeBytes > 0 && <span className="pcl-tabular">{formatModBytes(item.sizeBytes)}</span>}
-                          <span>{sanitizeWorkshopPlatforms(item.platforms).slice(0, 3).join(' / ')}</span>
-                        </div>
-                        {activeProgressFor(item) && (
-                          <div className="pcl-mod-inline-progress">
-                            <div className="pcl-mod-inline-progress-head pcl-tabular">
-                              <span>{activeProgressFor(item)!.detail}</span>
-                              <span>
-                                {activeProgressFor(item)!.totalBytes > 0
-                                  ? `${formatModBytes(activeProgressFor(item)!.downloadedBytes)} / ${formatModBytes(activeProgressFor(item)!.totalBytes)} · `
-                                  : ''}
-                                {activeProgressFor(item)!.percent}%
-                              </span>
-                            </div>
-                            <div
-                              className="pcl-progress-track"
-                              role="progressbar"
-                              aria-valuemin={0}
-                              aria-valuemax={100}
-                              aria-valuenow={activeProgressFor(item)!.percent}
-                            >
-                              <div className="pcl-progress-fill" style={{ width: `${activeProgressFor(item)!.percent}%` }} />
-                            </div>
                           </div>
-                        )}
-                      </div>
-                      <div className="pcl-mod-row-actions">
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => setDetailKey(item.key)}
-                        >
-                          <Info size={13} />
-                          <span>{zh ? '详情' : 'Info'}</span>
-                        </button>
-                        {renderActionButton(item)}
-                      </div>
-                    </article>
-                  ))}
+                          <p className="pcl-mod-row-desc">{item.description}</p>
+                          <div className="pcl-mod-row-tags">
+                            <span className="pcl-mod-tag-pill pcl-mod-cat-pill">{item.categoryLabel}</span>
+                            {modPlatformSummaryBadge(item, zh) && (
+                              <span className="pcl-mod-chip is-multi pcl-tabular">
+                                {modPlatformSummaryBadge(item, zh)}
+                              </span>
+                            )}
+                            {item.tags.slice(0, 3).map((tag) => (
+                              <span key={tag} className="pcl-mod-tag-pill">
+                                {tag}
+                              </span>
+                            ))}
+                            {item.version && <span className="pcl-mod-tag-pill pcl-tabular">v{item.version}</span>}
+                          </div>
+                          {activeProgressFor(item) && (
+                            <div className="pcl-mod-inline-progress">
+                              <div className="pcl-mod-inline-progress-head pcl-tabular">
+                                <span>{activeProgressFor(item)!.detail}</span>
+                                <span>
+                                  {activeProgressFor(item)!.totalBytes > 0
+                                    ? `${formatModBytes(activeProgressFor(item)!.downloadedBytes)} / ${formatModBytes(activeProgressFor(item)!.totalBytes)} · `
+                                    : ''}
+                                  {activeProgressFor(item)!.percent}%
+                                </span>
+                              </div>
+                              <div
+                                className="pcl-progress-track"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={activeProgressFor(item)!.percent}
+                              >
+                                <div className="pcl-progress-fill" style={{ width: `${activeProgressFor(item)!.percent}%` }} />
+                              </div>
+                            </div>
+                          )}
+                          {ws && (
+                            <div className="pcl-mod-row-reactions" onClick={(e) => e.stopPropagation()}>
+                              <EmoteReactionBar
+                                modId={ws.id}
+                                reactions={ws.reactions}
+                                reactionTotal={ws.reactionTotal}
+                                viewerEmoteId={ws.viewerState?.viewerEmoteId}
+                                mode="card"
+                                onUpdated={(next) => handleReactionUpdated(ws.id, next)}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <div className="pcl-mod-row-aside">
+                          {item.installed ? (
+                            <span className={`pcl-mod-installed-pill ${item.enabled ? 'is-on' : 'is-off'}`}>
+                              <CheckCircle2 size={13} />
+                              <span>
+                                {item.enabled
+                                  ? zh
+                                    ? '已安装'
+                                    : 'Installed'
+                                  : item.disabled
+                                    ? zh
+                                      ? '已安装 · 已关闭'
+                                      : 'Installed · Off'
+                                    : zh
+                                      ? '已安装'
+                                      : 'Installed'}
+                              </span>
+                            </span>
+                          ) : item.downloaded ? (
+                            <span className="pcl-mod-installed-pill is-dl">
+                              <CheckCircle2 size={13} />
+                              <span>{zh ? '已下载' : 'Downloaded'}</span>
+                            </span>
+                          ) : null}
+                          {ws && (
+                            <div className="pcl-mod-row-metrics pcl-tabular">
+                              <span title={zh ? '下载次数' : 'Downloads'}>
+                                <Download size={13} />
+                                {ws.downloads ?? 0}
+                              </span>
+                              <span title={zh ? '表情回应数' : 'Sticker reactions'}>
+                                <SmilePlus size={13} />
+                                {reactionTotal}
+                              </span>
+                              {(ws.galleryCount ?? 0) > 0 && (
+                                <span title={zh ? '展示图数量' : 'Gallery images'}>
+                                  <Images size={13} />
+                                  {ws.galleryCount}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <div className="pcl-mod-row-submetrics pcl-tabular">
+                            {item.sizeBytes > 0 && <span>{formatModBytes(item.sizeBytes)}</span>}
+                            {item.sha256 && (
+                              <span title={`SHA-256: ${item.sha256}`}>
+                                <ShieldCheck size={12} color="var(--accent-text)" />
+                              </span>
+                            )}
+                            {item.version && <span>v{item.version}</span>}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -2289,48 +2452,6 @@ export function LauncherMods() {
         const modalRoot = typeof document !== 'undefined'
           ? (document.querySelector('.launcher-frame') as HTMLElement | null) ?? document.body
           : null;
-        const handleReactionUpdated = (next: {
-          reactions: NonNullable<WorkshopModItem['reactions']>;
-          reactionTotal: number;
-          viewerEmoteId: string | null;
-        }) => {
-          if (!detailWs) return;
-          const targetId = detailWs.id;
-          setDetailFull((prev) =>
-            prev && prev.id === targetId
-              ? {
-                  ...prev,
-                  reactions: next.reactions,
-                  reactionTotal: next.reactionTotal,
-                  viewerState: {
-                    following: prev.viewerState?.following ?? false,
-                    bookmarked: prev.viewerState?.bookmarked ?? false,
-                    isOwner: prev.viewerState?.isOwner ?? false,
-                    viewerEmoteId: next.viewerEmoteId,
-                  },
-                }
-              : prev,
-          );
-          setWorkshopItems((prev) =>
-            prev.map((w) =>
-              w.id === targetId
-                ? {
-                    ...w,
-                    reactions: next.reactions,
-                    reactionTotal: next.reactionTotal,
-                    viewerState: w.viewerState
-                      ? { ...w.viewerState, viewerEmoteId: next.viewerEmoteId }
-                      : {
-                          following: false,
-                          bookmarked: false,
-                          isOwner: false,
-                          viewerEmoteId: next.viewerEmoteId,
-                        },
-                  }
-                : w,
-            ),
-          );
-        };
 
         if (!modalRoot) return null;
 
@@ -2410,7 +2531,7 @@ export function LauncherMods() {
                       reactionTotal={activeReactionTotal}
                       viewerEmoteId={detailWs.viewerState?.viewerEmoteId}
                       mode="detail"
-                      onUpdated={handleReactionUpdated}
+                      onUpdated={(next) => handleReactionUpdated(detailWs.id, next)}
                     />
                   </section>
                 )}

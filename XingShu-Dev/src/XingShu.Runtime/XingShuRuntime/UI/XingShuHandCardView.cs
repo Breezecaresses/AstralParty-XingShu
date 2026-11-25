@@ -1024,52 +1024,34 @@ namespace XingShuRuntime.UI
 
         private void UpdateScalePresetHighlight(float currentScale)
         {
-            Sprite normalSp = XingShuUIAssetService.GetSprite("button_secondary.png");
-            Sprite selSp = XingShuUIAssetService.GetSprite("button_selected.png");
-
             for (int i = 0; i < _scalePresetButtons.Count; i++)
             {
                 if (i >= SCALE_PRESETS.Length) break;
                 bool isSelected = Mathf.Abs(SCALE_PRESETS[i] - currentScale) < 0.05f;
-
-                if (i < _scalePresetImages.Count && _scalePresetImages[i] != null)
+                Image img = i < _scalePresetImages.Count ? _scalePresetImages[i] : null;
+                Text txt = i < _scalePresetTexts.Count ? _scalePresetTexts[i] : null;
+                XingShuGlassSkin.ApplySelectableButton(img, txt, isSelected);
+                if (txt != null && !XingShuGlassSkin.IsActive)
                 {
-                    _scalePresetImages[i].sprite = isSelected ? selSp : normalSp;
-                    _scalePresetImages[i].color = XingShuUIAssetService.IsFallbackSprite(_scalePresetImages[i].sprite)
-                        ? (isSelected ? XingShuUITheme.ButtonSelectedBase : XingShuUITheme.ButtonSecondaryBase)
-                        : Color.white;
-                }
-
-                if (i < _scalePresetTexts.Count && _scalePresetTexts[i] != null)
-                {
-                    _scalePresetTexts[i].color = isSelected ? XingShuUITheme.PrimaryText : XingShuUITheme.SecondaryText;
-                    _scalePresetTexts[i].fontStyle = isSelected ? FontStyle.Bold : FontStyle.Normal;
+                    txt.color = isSelected ? XingShuUITheme.PrimaryText : XingShuUITheme.SecondaryText;
+                    txt.fontStyle = isSelected ? FontStyle.Bold : FontStyle.Normal;
                 }
             }
         }
 
         private void UpdateBtnSizePresetHighlight(float currentSize)
         {
-            Sprite normalSp = XingShuUIAssetService.GetSprite("button_secondary.png");
-            Sprite selSp = XingShuUIAssetService.GetSprite("button_selected.png");
-
             for (int i = 0; i < _btnSizePresetButtons.Count; i++)
             {
                 if (i >= BTN_SIZE_PRESETS.Length) break;
                 bool isSelected = Mathf.Abs(BTN_SIZE_PRESETS[i] - currentSize) < 1.0f;
-
-                if (i < _btnSizePresetImages.Count && _btnSizePresetImages[i] != null)
+                Image img = i < _btnSizePresetImages.Count ? _btnSizePresetImages[i] : null;
+                Text txt = i < _btnSizePresetTexts.Count ? _btnSizePresetTexts[i] : null;
+                XingShuGlassSkin.ApplySelectableButton(img, txt, isSelected);
+                if (txt != null && !XingShuGlassSkin.IsActive)
                 {
-                    _btnSizePresetImages[i].sprite = isSelected ? selSp : normalSp;
-                    _btnSizePresetImages[i].color = XingShuUIAssetService.IsFallbackSprite(_btnSizePresetImages[i].sprite)
-                        ? (isSelected ? XingShuUITheme.ButtonSelectedBase : XingShuUITheme.ButtonSecondaryBase)
-                        : Color.white;
-                }
-
-                if (i < _btnSizePresetTexts.Count && _btnSizePresetTexts[i] != null)
-                {
-                    _btnSizePresetTexts[i].color = isSelected ? XingShuUITheme.PrimaryText : XingShuUITheme.SecondaryText;
-                    _btnSizePresetTexts[i].fontStyle = isSelected ? FontStyle.Bold : FontStyle.Normal;
+                    txt.color = isSelected ? XingShuUITheme.PrimaryText : XingShuUITheme.SecondaryText;
+                    txt.fontStyle = isSelected ? FontStyle.Bold : FontStyle.Normal;
                 }
             }
         }

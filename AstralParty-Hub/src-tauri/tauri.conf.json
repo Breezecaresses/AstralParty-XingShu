@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "XingShu Hub",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "identifier": "com.xingshu.hub",
   "build": {
     "beforeDevCommand": "npm run dev -- --mode launcher",
@@ -42,7 +42,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://game-art.localhost https://astralparty-xingshu.lanxichaxu.cn; media-src 'self' blob: https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/catalog/video/; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'none'; connect-src 'self' ipc: http://ipc.localhost http://game-art.localhost ws://127.0.0.1:28848 https://124.221.176.134 https://astralparty-xingshu.lanxichaxu.cn"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://game-art.localhost http://lobby-media.localhost https://astralparty-xingshu.lanxichaxu.cn; media-src 'self' blob: http://lobby-media.localhost https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/catalog/video/; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'none'; connect-src 'self' ipc: http://ipc.localhost http://game-art.localhost http://lobby-media.localhost ws://127.0.0.1:28848 https://124.221.176.134 https://astralparty-xingshu.lanxichaxu.cn"
     }
   },
   "bundle": {

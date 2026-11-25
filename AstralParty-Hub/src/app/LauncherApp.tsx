@@ -83,6 +83,7 @@ const router = isModulePanel ? null : createBrowserRouter([{
       },
     },
     { path: 'tools', element: <LauncherTools /> },
+    { path: 'tools/plugin-guide', lazy: async () => ({ Component: (await import('../pages/tools/PluginSdkGuidePage')).PluginSdkGuidePage }) },
     { path: 'player/replay', lazy: async () => ({ Component: (await import('../pages/player/ReplayAnalyzerPage')).ReplayAnalyzerPage }) },
     { path: 'player/profile', lazy: async () => ({ Component: (await import('../pages/player/ProfilePage')).ProfilePage }) },
     { path: 'player/matches', lazy: async () => ({ Component: (await import('../pages/player/MatchesPage')).MatchesPage }) },

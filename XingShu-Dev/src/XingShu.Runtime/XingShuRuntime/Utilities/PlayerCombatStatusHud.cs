@@ -770,6 +770,8 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
             _baselinePermanentAdd[pid] = baselinePerm;
         }
 
+        int pveUpgradeMove = ComputePveStarUpgradeMoveBonus(p);
+
         PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(
             extraAdd,
             extraMinus,
@@ -779,10 +781,64 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
             p.player.Hero.AppendMovePoint2,
             buffTempAdd,
             baselinePerm,
+            pveUpgradeMove,
             out int permanentNet,
             out int tempAdd);
 
         return PlayerCombatStatusPolicy.FormatMoveSpeedToken(permanentNet, tempAdd);
+    }
+
+    private static int ComputePveStarUpgradeMoveBonus(BattlePlayerData p)
+    {
+        if (p?.player?.Hero == null) return 0;
+        var roomInfo = GameLogicManager.inst?.room?.curRoomInfo;
+        if (roomInfo == null || !roomInfo.IsPVE()) return 0;
+
+        int heroId = p.player.Hero.HeroId;
+        int star = p.Property?.level != null ? p.Property.level.Value : p.player.Hero.Lv;
+        int pveLv = p.player.PVEHeroLV;
+        if (p.player.Hero.PveHeroStrengthen != null && p.player.Hero.PveHeroStrengthen.Level > pveLv)
+        {
+            pveLv = p.player.Hero.PveHeroStrengthen.Level;
+        }
+        if (heroId <= 0 || star <= 0 || pveLv <= 0) return 0;
+
+        int total = 0;
+        try
+        {
+            var enhDict = StaticConfigure.PVENurturance?.EnhancementDict;
+            if (enhDict == null || !enhDict.TryGetValue(heroId, out var enh) || enh?.PVENurturanceEnhancementConfigureItems == null)
+            {
+                return 0;
+            }
+            var strDict = StaticConfigure.STRPVENurturance?.LocalDict;
+            var items = enh.PVENurturanceEnhancementConfigureItems;
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                if (item == null || item.Lv <= 0 || item.Lv > pveLv) continue;
+                string desc = null;
+                if (strDict != null && strDict.TryGetValue(item.DescriptionID, out var strCfg) && strCfg != null)
+                {
+                    desc = strCfg.Simplified;
+                }
+                if (string.IsNullOrEmpty(desc) && item.DescriptionID > 0)
+                {
+                    try { desc = item.DescriptionID.GetLocal(UIStringType.PVENurturance); } catch { }
+                }
+                if (!string.IsNullOrEmpty(desc)
+                    && PlayerCombatStatusPolicy.TryParsePveStarMoveBonus(desc, star, out _, out int delta)
+                    && delta > 0)
+                {
+                    total += delta;
+                }
+            }
+        }
+        catch
+        {
+            return total;
+        }
+        return total;
     }
 
     private static int CollectBuffTempMoveBonus(BattlePlayerData p)
@@ -874,14 +930,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         int baseDef = hero.Defense;
         int curAtk = p.Property?.ATK != null ? p.Property.ATK.Value : baseAtk;
         int curDef = p.Property?.DEF != null ? p.Property.DEF.Value : baseDef;
-
-        string atkText = curAtk != baseAtk
-            ? $"攻[color=#FF9E7D]{baseAtk}[/color][color=#82D8FF]({curAtk})[/color]"
-            : $"攻[color=#FF9E7D]{baseAtk}[/color]";
-        string defText = curDef != baseDef
-            ? $"防[color=#82D8FF]{baseDef}[/color][color=#82D8FF]({curDef})[/color]"
-            : $"防[color=#82D8FF]{baseDef}[/color]";
-        return atkText + " " + defText;
+        return PlayerCombatStatusPolicy.FormatAtkDefTokens(baseAtk, curAtk, baseDef, curDef);
     }
 
     private static Color ResolveSlotAccentColor(BattlePlayerData p)

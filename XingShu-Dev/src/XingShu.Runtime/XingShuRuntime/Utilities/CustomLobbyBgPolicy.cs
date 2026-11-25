@@ -688,6 +688,33 @@ namespace XingShuRuntime.Utilities
             return anyMatched;
         }
 
+        public static float ComputeCompensatedPlaybackSpeed(
+            float userSpeed,
+            float nativeClockScale,
+            float unityTimeScale,
+            bool videoUsesUnscaledClock)
+        {
+            float safeUser = ClampSpeed(userSpeed);
+            float denom = (!float.IsNaN(nativeClockScale) && !float.IsInfinity(nativeClockScale) && nativeClockScale > 0.01f)
+                ? nativeClockScale
+                : 1.0f;
+            if (!videoUsesUnscaledClock)
+            {
+                float safeUnity = (!float.IsNaN(unityTimeScale) && !float.IsInfinity(unityTimeScale) && unityTimeScale > 0.01f)
+                    ? unityTimeScale
+                    : 1.0f;
+                denom *= safeUnity;
+            }
+            if (float.IsNaN(denom) || float.IsInfinity(denom) || denom <= 0.01f)
+            {
+                denom = 1.0f;
+            }
+            float compensated = safeUser / denom;
+            if (compensated < 0.05f) return 0.05f;
+            if (compensated > 4.0f) return 4.0f;
+            return compensated;
+        }
+
         private static string EscapeJsonString(string value)
         {
             if (string.IsNullOrEmpty(value)) return "";

@@ -33,6 +33,8 @@ namespace XingShuRuntime.UI
         private bool _lastObservedRequested;
         private bool _lastObservedEnabled;
         private string _lastObservedStatusText = "";
+        private int _lastObservedBadgeState = -1;
+        private bool _lastObservedGlassActive;
         private float _lastObservedZoom = -1f;
         private float _lastObservedScrollSpeed = -1f;
         private string _lastObservedProjection = "";
@@ -310,30 +312,34 @@ namespace XingShuRuntime.UI
             }
 
             // 2. 同步状态徽章与详情
-            if (requestedChanged || enabledChanged || statusChanged)
+            int badgeState = !requested ? 0 : (!enabled ? 1 : 2);
+            bool glassActive = XingShuGlassSkin.IsActive;
+            if (requestedChanged || enabledChanged || statusChanged || badgeState != _lastObservedBadgeState || glassActive != _lastObservedGlassActive)
             {
                 _lastObservedEnabled = enabled;
                 _lastObservedStatusText = statusDesc;
+                _lastObservedBadgeState = badgeState;
+                _lastObservedGlassActive = glassActive;
 
                 if (_statusBadgeText != null)
                 {
                     if (!requested)
                     {
                         _statusBadgeText.text = "已关闭";
-                        _statusBadgeText.color = XingShuUITheme.BadgeMuted;
-                        if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.12f, 0.16f, 0.22f, 0.85f);
+                        XingShuGlassSkin.ApplyStatusBadge(_statusBadgeBg, _statusBadgeText,
+                            new Color(0.12f, 0.16f, 0.22f, 0.85f), XingShuUITheme.BadgeMuted, XingShuGlassSkin.TextMuted);
                     }
                     else if (!enabled)
                     {
                         _statusBadgeText.text = "已开启 · 等待进入对局";
-                        _statusBadgeText.color = XingShuUITheme.Pink;
-                        if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.25f, 0.20f, 0.08f, 0.85f);
+                        XingShuGlassSkin.ApplyStatusBadge(_statusBadgeBg, _statusBadgeText,
+                            new Color(0.25f, 0.20f, 0.08f, 0.85f), XingShuUITheme.Pink, XingShuGlassSkin.AccentBlue);
                     }
                     else
                     {
                         _statusBadgeText.text = "运行中";
-                        _statusBadgeText.color = XingShuUITheme.BadgeActive;
-                        if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.08f, 0.22f, 0.16f, 0.85f);
+                        XingShuGlassSkin.ApplyStatusBadge(_statusBadgeBg, _statusBadgeText,
+                            new Color(0.08f, 0.22f, 0.16f, 0.85f), XingShuUITheme.BadgeActive, XingShuGlassSkin.AccentMint);
                     }
                 }
 

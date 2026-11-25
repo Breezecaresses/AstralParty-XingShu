@@ -20,6 +20,17 @@ namespace XingShuRuntime.Core
         }
 
 #if XINGSHU_MODULAR_LAUNCHER
+        private static readonly string[][] LegacyModuleAliases =
+        {
+            new[] { "monster-targeting", "monster-action" },
+            new[] { "monster-cooldown", "monster-action" },
+            new[] { "battle-card-points", "defense-hint" },
+            new[] { "quick-thanks", "auto-social" },
+            new[] { "avatar-praise", "auto-social" },
+            new[] { "star-coin-shop", "auto-social" },
+            new[] { "settlement-capture", "auto-social" },
+        };
+
         private static HashSet<string> _optionalTypes;
         private static HashSet<string> _enabledTypes;
 
@@ -35,7 +46,7 @@ namespace XingShuRuntime.Core
             var directory = Path.Combine(gameRoot ?? "", "xingshu/plugins");
             foreach (string[] module in LauncherModuleCatalog.Modules)
             {
-                bool active = Installed(directory, module[0]);
+                bool active = IsModuleOrLegacyInstalled(directory, module[0]);
                 for (int index = 1; index < module.Length; index++)
                 {
                     optional.Add(module[index]);
@@ -44,6 +55,20 @@ namespace XingShuRuntime.Core
             }
             _enabledTypes = enabled;
             _optionalTypes = optional;
+        }
+
+        private static bool IsModuleOrLegacyInstalled(string directory, string canonicalId)
+        {
+            if (Installed(directory, canonicalId)) return true;
+            foreach (string[] pair in LegacyModuleAliases)
+            {
+                if (pair.Length >= 2 && string.Equals(pair[1], canonicalId, StringComparison.Ordinal) &&
+                    Installed(directory, pair[0]))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static bool Installed(string directory, string id)
