@@ -36,6 +36,8 @@ pub mod launcher;
 #[cfg(feature = "web-ui")]
 pub mod in_game_room;
 #[cfg(feature = "web-ui")]
+pub mod customize;
+#[cfg(feature = "web-ui")]
 mod remote_content;
 #[cfg(feature = "web-ui")]
 mod mod_resources;
@@ -459,6 +461,18 @@ pub fn run() {
             module_panel::module_panel_toggle,
             module_panel::module_panel_open_main,
             module_panel::module_panel_manage,
+            customize::customize_pick_files,
+            customize::customize_get_lobby_bg_state,
+            customize::customize_save_lobby_bg_config,
+            customize::customize_import_lobby_bg_media,
+            customize::customize_delete_lobby_bg_media,
+            customize::customize_open_lobby_bg_dir,
+            customize::customize_list_system_fonts,
+            customize::customize_get_tuning_state,
+            customize::customize_save_tuning_state,
+            customize::customize_get_launcher_bg,
+            customize::customize_save_launcher_bg,
+            customize::customize_clear_launcher_bg,
         ];
         move |invoke| {
             let label = invoke.message.webview_ref().label();

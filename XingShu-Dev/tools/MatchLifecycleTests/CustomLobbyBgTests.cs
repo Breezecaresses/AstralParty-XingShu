@@ -335,6 +335,35 @@ namespace XingShu.Tests
             Assert(Math.Abs(pGuard - 0.0) < 0.001, "NaN/negative guard");
         }
 
+        private static void TestSidecarConfigJsonRoundtrip()
+        {
+            var src = new CustomLobbyBgPolicy.LobbyBgSidecarConfig
+            {
+                Enabled = true,
+                SelectedFile = "my_bg\"01\\test.mp4",
+                SyncSubPanels = false,
+                RandomOnLobby = true,
+                FillMode = LobbyBgFillMode.Contain,
+                Brightness = 0.725f,
+                Speed = 1.25f,
+                Muted = false,
+                Volume = 0.65f,
+                MuteVanillaBgm = true,
+                UpdatedAt = 1795612000123L,
+            };
+            string json = CustomLobbyBgPolicy.SerializeSidecarJson(src);
+            CustomLobbyBgPolicy.LobbyBgSidecarConfig parsed;
+            Assert(CustomLobbyBgPolicy.TryParseSidecarJson(json, out parsed), "parse sidecar json");
+            Assert(parsed.Enabled == true && parsed.SelectedFile == src.SelectedFile, "sidecar enabled/file");
+            Assert(parsed.SyncSubPanels == false && parsed.RandomOnLobby == true, "sidecar booleans");
+            Assert(parsed.FillMode == LobbyBgFillMode.Contain, "sidecar fill mode");
+            Assert(Math.Abs(parsed.Brightness - 0.725f) < 0.001f && Math.Abs(parsed.Speed - 1.25f) < 0.001f, "sidecar floats");
+            Assert(!parsed.Muted && Math.Abs(parsed.Volume - 0.65f) < 0.001f && parsed.MuteVanillaBgm, "sidecar audio");
+            Assert(parsed.UpdatedAt == 1795612000123L, "sidecar updatedAt");
+
+            Assert(!CustomLobbyBgPolicy.TryParseSidecarJson("{}", out parsed), "empty object rejected");
+        }
+
         public static int Main()
         {
             TestClassifyAndKindLabel();
@@ -347,6 +376,7 @@ namespace XingShu.Tests
             TestWindowsAudioProtocol();
             TestWindowsShortcutAndVbsBuilders();
             TestPlaybackPositionExtrapolation();
+            TestSidecarConfigJsonRoundtrip();
             Console.WriteLine("CustomLobbyBgTests PASS");
             return 0;
         }

@@ -11,7 +11,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isLauncherPreview, isTauriRuntime } from '../../shared/runtime';
 import { LauncherNav } from '../../pages/launcher/LauncherNav';
 import { LauncherStartupSplash } from '../../pages/launcher/LauncherStartupSplash';
-import { PCL_THEMES, REPLAY_STARTUP_EVENT, useLauncherTheme } from '../../pages/launcher/launcherTheme';
+import { PCL_THEMES, REPLAY_STARTUP_EVENT, useLauncherAppearance, useLauncherTheme } from '../../pages/launcher/launcherTheme';
 import { ModrinthWorkshopLayout } from '../../pages/workshop-web/ModrinthWorkshopLayout';
 import { PlatformGlobalModals } from '../../components/platform/PlatformGlobalModals';
 import '../../pages/launcher/launcher-shell.css';
@@ -59,6 +59,7 @@ export const DesktopLayout: React.FC = () => {
   pathnameRef.current = pathname;
 
   const { theme, startupAnimEnabled } = useLauncherTheme();
+  const { imageUrl: customBgUrl, blur: customBgBlur, opacity: customBgOpacity } = useLauncherAppearance();
   const activeThemePreset = PCL_THEMES.find((item) => item.id === theme) ?? PCL_THEMES[0];
   const isFlushLauncherPage = pathname === '/dashboard' || pathname === '/extensions/launcher';
 
@@ -280,11 +281,30 @@ export const DesktopLayout: React.FC = () => {
       ? 'warning'
       : 'degraded';
 
+  const launcherBgStyle = customBgUrl
+    ? ({
+        '--xs-bg-blur': `${Math.round(customBgBlur * 0.28)}px`,
+        '--xs-bg-surface-alpha': (customBgOpacity / 100).toFixed(2),
+      } as React.CSSProperties)
+    : undefined;
+
   return (
     <div
-      className={`desktop-app-frame launcher-frame launcher-stage-${startupStage}${isFlushLauncherPage ? ' launcher-is-home' : ''}`}
+      className={`desktop-app-frame launcher-frame launcher-stage-${startupStage}${isFlushLauncherPage ? ' launcher-is-home' : ''}${customBgUrl ? ' has-custom-bg' : ''}`}
       data-pcl-theme={theme}
+      data-pcl-scheme={activeThemePreset.id === 'obsidian' ? 'dark' : 'light'}
+      style={launcherBgStyle}
     >
+      {customBgUrl && (
+        <div
+          className="launcher-bg-layer"
+          aria-hidden="true"
+          style={{
+            backgroundImage: `url("${customBgUrl}")`,
+            filter: customBgBlur > 0 ? `blur(${Math.round(customBgBlur * 0.24)}px)` : undefined,
+          }}
+        />
+      )}
       <div className="launcher-window-stage">
         <LauncherNav />
         <div className="app-container">

@@ -80,6 +80,9 @@ namespace XingShuRuntime.Utilities
         private bool _suppressedSubCri;
         private bool _criOverrideApplied;
         private bool _vanillaBgmSuppressed;
+        private float _lastSidecarCheckTime = -99f;
+        private DateTime _lastSidecarWriteUtc = DateTime.MinValue;
+        private bool _suppressSidecarWrite;
         private CriSwitchPhase _criPhase = CriSwitchPhase.Idle;
         private string _pendingCriPath = "";
         private LobbyBgMediaKind _pendingCriKind = LobbyBgMediaKind.Unknown;
@@ -132,6 +135,7 @@ namespace XingShuRuntime.Utilities
             InitReflection();
             LoadConfig();
             EnsureDefaultFolderOnce();
+            TryLoadSidecarIfNewer(force: true, out _);
             ScanFilesInternal(applyIfChanged: false);
             if (_enabled && _mediaFiles.Count > 0)
             {
@@ -182,6 +186,7 @@ namespace XingShuRuntime.Utilities
                 _enabled = value;
                 XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgEnabled, value);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 if (!value)
                 {
                     RestoreVanillaLobbyBgm();
@@ -205,6 +210,7 @@ namespace XingShuRuntime.Utilities
                 _syncSubPanels = value;
                 XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgSyncSubPanels, value);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 if (!value)
                 {
                     RestoreSubPanelVanilla();
@@ -222,6 +228,7 @@ namespace XingShuRuntime.Utilities
                 _randomOnLobby = value;
                 XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgRandomOnLobby, value);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
             }
         }
 
@@ -248,6 +255,7 @@ namespace XingShuRuntime.Utilities
                 _fillMode = value;
                 XingShuConfigService.SetInt(XingShuConfigKeys.CustomLobbyBgFillMode, (int)value);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 ApplyOverlayVisualStyle();
             }
         }
@@ -262,6 +270,7 @@ namespace XingShuRuntime.Utilities
                 _brightness = clamped;
                 XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgBrightness, clamped);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 ApplyOverlayVisualStyle();
             }
         }
@@ -276,6 +285,7 @@ namespace XingShuRuntime.Utilities
                 _speed = clamped;
                 XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, clamped);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 ApplyVideoPlaybackSettings();
             }
         }
@@ -289,6 +299,7 @@ namespace XingShuRuntime.Utilities
                 _muted = value;
                 XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuted, value);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 ApplyVideoPlaybackSettings();
             }
         }
@@ -303,6 +314,7 @@ namespace XingShuRuntime.Utilities
                 _volume = clamped;
                 XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgVolume, clamped);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 ApplyVideoPlaybackSettings();
             }
         }
@@ -318,6 +330,7 @@ namespace XingShuRuntime.Utilities
                 _muteVanillaBgm = value;
                 XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, value);
                 XingShuConfigService.Save();
+                SyncSidecarToDisk();
                 if (!value)
                 {
                     RestoreVanillaLobbyBgm();
@@ -490,9 +503,10 @@ namespace XingShuRuntime.Utilities
             XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, _speed);
             XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuted, _muted);
             XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgVolume, _volume);
-            XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, _muteVanillaBgm);
-            XingShuConfigService.Save();
-            RestoreVanillaLobbyBgm();
+                XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, _muteVanillaBgm);
+                XingShuConfigService.Save();
+                SyncSidecarToDisk();
+                RestoreVanillaLobbyBgm();
             ApplyOverlayVisualStyle();
             ApplyVideoPlaybackSettings();
             StatusMsg = "已恢复画面与音量默认参数";
@@ -508,6 +522,11 @@ namespace XingShuRuntime.Utilities
             {
                 _companionAudio.TickMainThread();
                 float now = Time.unscaledTime;
+                if (now - _lastSidecarCheckTime >= 2.0f)
+                {
+                    _lastSidecarCheckTime = now;
+                    TryLoadSidecarIfNewer(force: false, out _);
+                }
                 if (now - _lastScanTime >= AutoRescanInterval)
                 {
                     _lastScanTime = now;
@@ -652,6 +671,124 @@ namespace XingShuRuntime.Utilities
             _selectedFile = fileName;
             XingShuConfigService.SetString(XingShuConfigKeys.CustomLobbyBgSelectedFile, fileName);
             XingShuConfigService.Save();
+            SyncSidecarToDisk();
+        }
+
+        private string GetSidecarPath()
+        {
+            string dir = ResolveMediaDirectory();
+            return string.IsNullOrEmpty(dir) ? "" : Path.Combine(dir, CustomLobbyBgPolicy.SidecarFileName);
+        }
+
+        private void SyncSidecarToDisk()
+        {
+            if (_suppressSidecarWrite) return;
+            try
+            {
+                string dir = ResolveMediaDirectory();
+                if (string.IsNullOrEmpty(dir)) return;
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, CustomLobbyBgPolicy.SidecarFileName);
+                var sc = new CustomLobbyBgPolicy.LobbyBgSidecarConfig
+                {
+                    Enabled = _enabled,
+                    SelectedFile = _selectedFile ?? "",
+                    SyncSubPanels = _syncSubPanels,
+                    RandomOnLobby = _randomOnLobby,
+                    FillMode = _fillMode,
+                    Brightness = _brightness,
+                    Speed = _speed,
+                    Muted = _muted,
+                    Volume = _volume,
+                    MuteVanillaBgm = _muteVanillaBgm,
+                    UpdatedAt = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds,
+                };
+                File.WriteAllText(path, CustomLobbyBgPolicy.SerializeSidecarJson(sc), new System.Text.UTF8Encoding(false));
+                _lastSidecarWriteUtc = File.GetLastWriteTimeUtc(path);
+            }
+            catch
+            {
+            }
+        }
+
+        private bool TryLoadSidecarIfNewer(bool force, out bool changed)
+        {
+            changed = false;
+            try
+            {
+                string path = GetSidecarPath();
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return false;
+                DateTime writeUtc = File.GetLastWriteTimeUtc(path);
+                if (!force && writeUtc <= _lastSidecarWriteUtc) return false;
+
+                string raw = File.ReadAllText(path, System.Text.Encoding.UTF8);
+                if (!CustomLobbyBgPolicy.TryParseSidecarJson(raw, out var sc))
+                {
+                    _lastSidecarWriteUtc = writeUtc;
+                    return false;
+                }
+
+                _lastSidecarWriteUtc = writeUtc;
+                bool fileOrEnableChanged = sc.Enabled != _enabled
+                    || !string.Equals(sc.SelectedFile ?? "", _selectedFile ?? "", StringComparison.OrdinalIgnoreCase);
+
+                _suppressSidecarWrite = true;
+                try
+                {
+                    _enabled = sc.Enabled;
+                    _selectedFile = sc.SelectedFile ?? "";
+                    _syncSubPanels = sc.SyncSubPanels;
+                    _randomOnLobby = sc.RandomOnLobby;
+                    _fillMode = sc.FillMode;
+                    _brightness = CustomLobbyBgPolicy.ClampBrightness(sc.Brightness);
+                    _speed = CustomLobbyBgPolicy.ClampSpeed(sc.Speed);
+                    _muted = sc.Muted;
+                    _volume = CustomLobbyBgPolicy.ClampVolume(sc.Volume);
+                    _muteVanillaBgm = sc.MuteVanillaBgm;
+
+                    XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgEnabled, _enabled);
+                    XingShuConfigService.SetString(XingShuConfigKeys.CustomLobbyBgSelectedFile, _selectedFile);
+                    XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgSyncSubPanels, _syncSubPanels);
+                    XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgRandomOnLobby, _randomOnLobby);
+                    XingShuConfigService.SetInt(XingShuConfigKeys.CustomLobbyBgFillMode, (int)_fillMode);
+                    XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgBrightness, _brightness);
+                    XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgSpeed, _speed);
+                    XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuted, _muted);
+                    XingShuConfigService.SetFloat(XingShuConfigKeys.CustomLobbyBgVolume, _volume);
+                    XingShuConfigService.SetBool(XingShuConfigKeys.CustomLobbyBgMuteVanillaBgm, _muteVanillaBgm);
+                    XingShuConfigService.Save();
+                }
+                finally
+                {
+                    _suppressSidecarWrite = false;
+                }
+
+                if (!_enabled)
+                {
+                    RestoreVanillaLobbyBgm();
+                    TeardownActiveMedia(restoreVanilla: true);
+                    StatusMsg = "已由启动器设为使用默认大厅背景";
+                }
+                else
+                {
+                    ScanFilesInternal(applyIfChanged: false);
+                    if (fileOrEnableChanged || ActiveMediaKind == LobbyBgMediaKind.Unknown)
+                    {
+                        ApplySelectedOrFirst(forceReload: true);
+                    }
+                    else
+                    {
+                        ApplyOverlayVisualStyle();
+                        ApplyVideoPlaybackSettings();
+                    }
+                }
+                changed = true;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private void ScanFilesInternal(bool applyIfChanged)

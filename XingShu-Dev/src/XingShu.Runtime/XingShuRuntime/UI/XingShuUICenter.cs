@@ -53,7 +53,29 @@ namespace XingShuRuntime.UI
             }
         }
 
+        internal static int CenterStyle
+        {
+            get
+            {
+                int v = XingShuConfigService.GetInt(XingShuConfigKeys.UiCenterStyle, XingShuConfigKeys.UiCenterStyleDefault);
+                return v == 1 ? 1 : 0;
+            }
+        }
+
+        internal static void SetCenterStyle(int style)
+        {
+            int next = style == 1 ? 1 : 0;
+            if (CenterStyle == next) return;
+            XingShuConfigService.SetInt(XingShuConfigKeys.UiCenterStyle, next);
+            XingShuConfigService.Save();
+            if (Instance != null)
+            {
+                Instance.RebuildCenterUi();
+            }
+        }
+
         private bool _isOpen;
+        private int _activeBuiltStyle;
         private Canvas _canvas;
         private CanvasGroup _canvasGroup;
         private RectTransform _mainFrameRt;
@@ -88,6 +110,8 @@ namespace XingShuRuntime.UI
         private XingShuAdvancedSettingsView _advancedSettingsView;
         private XingShuHotkeySettingsView _hotkeySettingsView;
         private XingShuLobbyBgView _lobbyBgView;
+        private XingShuPluginHubView _pluginHubView;
+        private readonly Dictionary<int, IXingShuExternalPage> _externalPagesByTabId = new Dictionary<int, IXingShuExternalPage>();
         private readonly Dictionary<int, (GameObject Root, Action Sync)> _tabViews = new Dictionary<int, (GameObject, Action)>();
         private GameObject _comingSoonView;
         private Text _comingSoonText;
@@ -193,20 +217,52 @@ namespace XingShuRuntime.UI
             }
 
             XingShuNativeGameUI.EnsureLoaded(ApplyNativeBindingsOnReady);
+            XingShuCenterPluginHost.PagesChanged += OnExternalPagesChanged;
             _currentTabIndex = FirstAvailableTab();
             BuildCenterCanvas();
             SetOpenState(false);
             XingShuOverlayInput.Register(this, () => _isOpen, () => new Rect(0f, 0f, Screen.width, Screen.height));
         }
 
+        private void OnExternalPagesChanged()
+        {
+            if (this == null || _activeBuiltStyle != 1) return;
+            RebuildCenterUi();
+        }
+
+        private void RebuildCenterUi()
+        {
+            bool wasOpen = _isOpen;
+            if (_canvas != null)
+            {
+                Destroy(_canvas.gameObject);
+                _canvas = null;
+            }
+            _tabEntries.Clear();
+            _tabViews.Clear();
+            _externalPagesByTabId.Clear();
+            _leftRailRt = null;
+            _returnWrapRt = null;
+            _mainFrameRt = null;
+            _dragHandle = null;
+            _pageTitle = null;
+            _hotkeyHint = null;
+            _sizeCycleLabel = null;
+            _pluginHubView = null;
+
+            BuildCenterCanvas();
+            SetOpenState(wasOpen);
+        }
+
         private void ApplyNativeBindingsOnReady()
         {
-            if (this == null || _canvas == null) return;
+            if (this == null || _canvas == null || _activeBuiltStyle == 1) return;
             SelectTab(_currentTabIndex);
         }
 
         private void OnDestroy()
         {
+            XingShuCenterPluginHost.PagesChanged -= OnExternalPagesChanged;
             if (Instance == this)
             {
                 XingShuHotkeys.CancelCapture();
@@ -656,6 +712,13 @@ namespace XingShuRuntime.UI
 
         private void BuildCenterCanvas()
         {
+            _activeBuiltStyle = CenterStyle;
+            if (_activeBuiltStyle == 1)
+            {
+                BuildGlassCenterCanvas();
+                return;
+            }
+
             // 0. 核心生产资产运行时确定性自检
             XingShuUIAssetService.ValidateCoreAssets();
 
@@ -787,6 +850,24 @@ namespace XingShuRuntime.UI
             float screenW = Screen.width / canvasScale;
             float screenH = 1080f;
 
+            if (_activeBuiltStyle == 1)
+            {
+                float safeL = Mathf.Max(0f, XingShuMobileUIHelper.SafeScreenRect.x / canvasScale);
+                float baseGW = Mathf.Min(1480f, Mathf.Max(920f, screenW - safeL - 88f));
+                float baseGH = Mathf.Min(920f, Mathf.Max(640f, screenH - 72f));
+                _mainFrameRt.sizeDelta = new Vector2(baseGW, baseGH);
+                _mainFrameRt.localScale = Vector3.one * panelScale;
+                if (panelScale >= 0.99f)
+                {
+                    _mainFrameRt.anchoredPosition = Vector2.zero;
+                }
+                else if (_dragHandle != null)
+                {
+                    _dragHandle.ClampPosition();
+                }
+                return;
+            }
+
             float safeLeft = Mathf.Max(0f, XingShuMobileUIHelper.SafeScreenRect.x / canvasScale);
             float railOffset = safeLeft > 90f ? safeLeft * 0.45f : 0f;
             if (_leftRailRt != null)
@@ -892,8 +973,13 @@ namespace XingShuRuntime.UI
             XingShuUIFactory.AddOutline(brand.gameObject, new Color(0.08f, 0.08f, 0.12f, 0.9f), new Vector2(1.4f, -1.4f));
 
             Text hotkey = _hotkeyHint = XingShuUIFactory.CreateText(titleBar, "Hotkey", XingShuMobileUIHelper.IsMobile ? "缩小窗口后可拖动顶部" : XingShuHotkeys.Display(XingShuShortcut.Center) + " 打开 / 收起", 14, new Color(0.86f, 0.85f, 0.92f), TextAnchor.MiddleRight);
-            Place(hotkey.gameObject, Vector2.right, Vector2.one, new Vector2(1f, 0.5f), new Vector2(-150f, 0f), new Vector2(200f, 0f));
+            Place(hotkey.gameObject, Vector2.right, Vector2.one, new Vector2(1f, 0.5f), new Vector2(-264f, 0f), new Vector2(200f, 0f));
             hotkey.raycastTarget = false;
+
+            Button styleSwitchBtn = XingShuUIFactory.CreateButton(titleBar, "StyleSwitchBtn", "毛玻璃 UI",
+                XingShuUIAssetService.GetSprite("button_secondary.png"), new Color(0.88f, 0.94f, 1f, 0.95f), XingShuUITheme.PrimaryText,
+                () => SetCenterStyle(1), 13);
+            RectTransform styleBtnRt = Place(styleSwitchBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-146f, 0f), new Vector2(106f, 34f));
 
             Button sizeCycleBtn = XingShuUIFactory.CreateButton(titleBar, "SizeCycleBtn", PanelScale >= 0.985f ? "标准" : $"{Mathf.RoundToInt(PanelScale * 100f)}%",
                 XingShuUIAssetService.GetSprite("button_secondary.png"), new Color(0.95f, 0.96f, 0.99f, 0.92f), XingShuUITheme.PrimaryText, CyclePanelSize, 14);
@@ -902,7 +988,7 @@ namespace XingShuRuntime.UI
 
             Button close = XingShuUIFactory.CreateButton(titleBar, "Close", "×", XingShuUIAssetService.GetSprite("close_normal.png"), Color.white, Color.white, Close, 28);
             RectTransform closeRt = Place(close.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), Vector2.zero, new Vector2(48f, 48f));
-            _dragHandle.SetExcludedRects(closeRt, sizeBtnRt);
+            _dragHandle.SetExcludedRects(closeRt, sizeBtnRt, styleBtnRt);
             _dragHandle.BindEvents();
 
             // 底部左侧外置原生 UID 胶囊（与深色主框下方外缘对齐：左白底粉字「星枢」，右粉底白字「v0.1.7」）
@@ -1087,6 +1173,34 @@ namespace XingShuRuntime.UI
             _hotkeySettingsView = new XingShuHotkeySettingsView(_contentArea.transform);
             RegisterTabView(9, _hotkeySettingsView.Root, () => _hotkeySettingsView?.UpdateSync());
 
+            if (_activeBuiltStyle == 1)
+            {
+                _pluginHubView = new XingShuPluginHubView(_contentArea.transform, () => SetCenterStyle(0));
+                RegisterTabView(23, _pluginHubView.Root, () => _pluginHubView?.UpdateSync());
+
+                foreach (var kv in _externalPagesByTabId)
+                {
+                    int extTabId = kv.Key;
+                    IXingShuExternalPage page = kv.Value;
+                    GameObject extRoot = XingShuUIFactory.CreateUIObject("Page_Ext_" + page.Id, _contentArea);
+                    RectTransform ert = extRoot.GetComponent<RectTransform>();
+                    ert.anchorMin = Vector2.zero; ert.anchorMax = Vector2.one;
+                    ert.offsetMin = Vector2.zero; ert.offsetMax = Vector2.zero;
+                    try
+                    {
+                        page.BuildContent(extRoot);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning("[XingShuCenterPluginHost] 渲染外部插件页面异常 (" + page.Id + "): " + ex.Message);
+                    }
+                    RegisterTabView(extTabId, extRoot, () =>
+                    {
+                        try { page.OnSync(); } catch { }
+                    });
+                }
+            }
+
             // 占位提示页面 (Coming Soon)
             _comingSoonView = XingShuUIFactory.CreateUIObject("Page_ComingSoon", _contentArea);
             RectTransform csRt = _comingSoonView.GetComponent<RectTransform>();
@@ -1131,7 +1245,7 @@ namespace XingShuRuntime.UI
                 case 5: return LauncherModules.CanLoad("MapCameraGUI");
                 case 6: return LauncherModules.CanLoad("AutoResetActionTimeGUI");
                 case 7: return LauncherModules.CanLoad("BattleStatsOverlay");
-                case 10: return LauncherModules.CanLoad("CustomLobbyBackground");
+                case 10: return true;
                 case 11: return LauncherModules.CanLoad("MonsterTargetRuntime");
                 case 12: return LauncherModules.CanLoad("MonsterCooldownRuntime");
                 case 13: return LauncherModules.CanLoad("DefensePointHint");
@@ -1157,18 +1271,36 @@ namespace XingShuRuntime.UI
             return 8;
         }
 
+        private bool IsTabAvailableCurrentStyle(int index)
+        {
+            if (index == 23) return _activeBuiltStyle == 1;
+            if (_externalPagesByTabId.TryGetValue(index, out IXingShuExternalPage extPage))
+                return _activeBuiltStyle == 1 && extPage != null && extPage.IsAvailable();
+            return TabAvailable(index);
+        }
+
+        private string ResolveTabTitle(int index)
+        {
+            if (index == 23) return "扩展框架";
+            if (_externalPagesByTabId.TryGetValue(index, out IXingShuExternalPage extPage) && extPage != null)
+                return extPage.Title;
+            if (index >= 0 && index < TAB_NAMES.Length) return TAB_NAMES[index];
+            return "星枢";
+        }
+
         private void SelectTab(int index)
         {
-            if (!TabAvailable(index))
+            if (!IsTabAvailableCurrentStyle(index))
             {
                 index = FirstAvailableTab();
             }
             if (index != 9) XingShuHotkeys.CancelCapture();
             _currentTabIndex = index;
-            if (_pageTitle != null) _pageTitle.text = TAB_NAMES[index];
-            Sprite normalTabSprite = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.TabPink) ?? XingShuUIAssetService.GetSprite("sidebar_tab_normal.png");
-            Sprite selectedTabSprite = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.TabGold) ?? XingShuUIAssetService.GetSprite("sidebar_tab_selected.png");
-            Sprite hoverTabSprite = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.TabSelected) ?? XingShuUIAssetService.GetSprite("sidebar_tab_hover.png");
+            if (_pageTitle != null) _pageTitle.text = ResolveTabTitle(index);
+            bool glass = _activeBuiltStyle == 1;
+            Sprite normalTabSprite = glass ? XingShuGlassSkin.TabNormalSprite : (XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.TabPink) ?? XingShuUIAssetService.GetSprite("sidebar_tab_normal.png"));
+            Sprite selectedTabSprite = glass ? XingShuGlassSkin.TabSelectedSprite : (XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.TabGold) ?? XingShuUIAssetService.GetSprite("sidebar_tab_selected.png"));
+            Sprite hoverTabSprite = glass ? XingShuGlassSkin.TabHoverSprite : (XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.TabSelected) ?? XingShuUIAssetService.GetSprite("sidebar_tab_hover.png"));
             Sprite pillNormal = XingShuUIAssetService.GetSprite("button_secondary.png");
             Sprite pillSelected = XingShuUIAssetService.GetSprite("button_selected.png");
 
@@ -1196,7 +1328,9 @@ namespace XingShuRuntime.UI
                 if (entry.Bg != null)
                 {
                     entry.Bg.sprite = isSelected ? selectedTabSprite : normalTabSprite;
-                    entry.Bg.color = XingShuUIAssetService.IsFallbackSprite(entry.Bg.sprite) ? (isSelected ? XingShuUITheme.Yellow : XingShuUITheme.Pink) : Color.white;
+                    entry.Bg.color = glass
+                        ? Color.white
+                        : (XingShuUIAssetService.IsFallbackSprite(entry.Bg.sprite) ? (isSelected ? XingShuUITheme.Yellow : XingShuUITheme.Pink) : Color.white);
                 }
                 if (entry.Button != null)
                 {
@@ -1207,9 +1341,9 @@ namespace XingShuRuntime.UI
                 }
                 if (entry.Label != null)
                 {
-                    entry.Label.color = Color.white;
-                    entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 20 : 18;
-                    entry.Label.fontStyle = FontStyle.Bold;
+                    entry.Label.color = glass ? (isSelected ? XingShuGlassSkin.TextPrimary : XingShuGlassSkin.TextSecondary) : Color.white;
+                    entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 20 : (glass ? 16 : 18);
+                    entry.Label.fontStyle = (glass && !isSelected) ? FontStyle.Normal : FontStyle.Bold;
                 }
             }
 
@@ -1228,13 +1362,234 @@ namespace XingShuRuntime.UI
 
             if (_comingSoonView != null)
             {
-                bool isComingSoon = index < 0 || index >= TAB_NAMES.Length || !_tabViews.ContainsKey(index);
+                bool isComingSoon = !_tabViews.ContainsKey(index);
                 _comingSoonView.SetActive(isComingSoon);
                 if (isComingSoon && _comingSoonText != null)
                 {
-                    _comingSoonText.text = $"「{TAB_NAMES[Mathf.Clamp(index, 0, TAB_NAMES.Length - 1)]}」正在进行原版化适配，将在后续阶段上线\n(当前底层功能正常，可通过快捷键独立运行)";
+                    _comingSoonText.text = $"「{ResolveTabTitle(index)}」正在进行适配，将在后续阶段上线\n(当前底层功能正常，可通过快捷键独立运行)";
                 }
             }
+        }
+
+        private void BuildGlassCenterCanvas()
+        {
+            GameObject canvasGo = new GameObject("XINGSHU_UICenter_Canvas", typeof(RectTransform));
+            canvasGo.transform.SetParent(transform, false);
+
+            _canvas = canvasGo.AddComponent<Canvas>();
+            _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            _canvas.sortingOrder = 31000;
+
+            CanvasScaler scaler = canvasGo.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 1.0f;
+
+            canvasGo.AddComponent<GraphicRaycaster>();
+            _canvasGroup = canvasGo.AddComponent<CanvasGroup>();
+
+            GameObject backdropGo = XingShuUIFactory.CreateUIObject("Backdrop", canvasGo);
+            RectTransform backdropRt = backdropGo.GetComponent<RectTransform>();
+            backdropRt.anchorMin = Vector2.zero; backdropRt.anchorMax = Vector2.one;
+            backdropRt.offsetMin = Vector2.zero; backdropRt.offsetMax = Vector2.zero;
+            Image backdropImg = backdropGo.AddComponent<Image>();
+            backdropImg.sprite = XingShuUIAssetService.WhiteSprite;
+            backdropImg.color = XingShuGlassSkin.BackdropDim;
+            Button backdropBtn = backdropGo.AddComponent<Button>();
+            backdropBtn.transition = Selectable.Transition.None;
+            backdropBtn.onClick.AddListener(Close);
+
+            GameObject mainFrame = XingShuUIFactory.CreateUIObject("MainFrame_Glass", canvasGo);
+            _mainFrameRt = mainFrame.GetComponent<RectTransform>();
+            _mainFrameRt.anchorMin = new Vector2(0.5f, 0.5f);
+            _mainFrameRt.anchorMax = new Vector2(0.5f, 0.5f);
+            _mainFrameRt.pivot = new Vector2(0.5f, 0.5f);
+            _mainFrameRt.anchoredPosition = Vector2.zero;
+            _mainFrameRt.sizeDelta = new Vector2(1480f, 920f);
+
+            float userScale = XingShuConfigService.GetFloat(XingShuConfigKeys.MobileUserScale, XingShuConfigKeys.MobileUserScaleDefault);
+            if (!XingShuMobileUIHelper.IsMobile)
+            {
+                userScale = XingShuMobileUIHelper.FiniteClamp(userScale, XingShuConfigKeys.FunctionCenterDesktopScaleMin, XingShuConfigKeys.FunctionCenterDesktopScaleMax, XingShuConfigKeys.FunctionCenterDesktopScaleDefault);
+            }
+            else
+            {
+                userScale = Mathf.Clamp(userScale, XingShuConfigKeys.MobileUserScaleMin, XingShuConfigKeys.MobileUserScaleMax);
+            }
+            _preferredScale = userScale;
+            FitPanelToScreen();
+
+            Image shellImg = mainFrame.AddComponent<Image>();
+            shellImg.sprite = XingShuGlassSkin.ShellSprite;
+            shellImg.type = Image.Type.Sliced;
+            shellImg.color = Color.white;
+            XingShuUIFactory.AddShadow(mainFrame, new Color(0f, 0f, 0f, 0.42f), new Vector2(0f, -12f));
+            mainFrame.AddComponent<RectMask2D>();
+
+            // Left translucent sidebar column inside unified shell
+            GameObject leftCol = XingShuUIFactory.CreateUIObject("GlassSidebarColumn", mainFrame);
+            Place(leftCol, Vector2.zero, Vector2.up, Vector2.zero, new Vector2(12f, 12f), new Vector2(256f, -24f));
+            Image railImg = leftCol.AddComponent<Image>();
+            railImg.sprite = XingShuGlassSkin.RailSprite;
+            railImg.type = Image.Type.Sliced;
+            railImg.color = Color.white;
+
+            Text brandTitle = XingShuUIFactory.CreateText(leftCol, "GlassBrand", "星枢 · 毛玻璃框架", 17, XingShuGlassSkin.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Place(brandTitle.gameObject, Vector2.up, Vector2.one, Vector2.up, new Vector2(16f, -14f), new Vector2(-32f, 26f));
+            Text brandVer = XingShuUIFactory.CreateText(leftCol, "GlassVer", XingShu.Runtime.XingShuRuntimeHost.RuntimeVersion + " · v2", 11, XingShuGlassSkin.AccentBlue, TextAnchor.MiddleLeft);
+            Place(brandVer.gameObject, Vector2.up, Vector2.one, Vector2.up, new Vector2(16f, -40f), new Vector2(-32f, 18f));
+
+            GameObject sideScrollWrap = XingShuUIFactory.CreateUIObject("GlassSidebarScrollWrap", leftCol);
+            Place(sideScrollWrap, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), new Vector2(0f, -6f), new Vector2(-12f, -120f));
+            ScrollRect sideScroll = XingShuUIFactory.CreateVerticalScrollView(sideScrollWrap, "SidebarScroll", out GameObject sidebar);
+            sideScroll.scrollSensitivity = 36f;
+            Transform sbBar = sideScroll.transform.Find("VerticalScrollbar");
+            if (sbBar != null) sbBar.gameObject.SetActive(false);
+            VerticalLayoutGroup layout = sidebar.GetComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(4, 4, 4, 8);
+            layout.spacing = 6f; layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true; layout.childControlHeight = true;
+            layout.childForceExpandWidth = true; layout.childForceExpandHeight = false;
+
+            _tabEntries.Clear();
+            _externalPagesByTabId.Clear();
+
+            for (int k = 0; k < DISPLAY_TAB_ORDER.Length; k++)
+            {
+                int tabId = DISPLAY_TAB_ORDER[k];
+                if (!TabAvailable(tabId)) continue;
+                if (tabId == 8) AddGlassSidebarDivider(sidebar, "系统设置");
+                AddGlassSidebarTab(sidebar, tabId, TAB_NAMES[tabId], tabId == _currentTabIndex);
+            }
+
+            // Extension Framework + External Plugins section
+            AddGlassSidebarDivider(sidebar, "扩展框架");
+            AddGlassSidebarTab(sidebar, 23, "扩展总览", _currentTabIndex == 23);
+
+            IXingShuExternalPage[] extPages = XingShuCenterPluginHost.GetPagesSnapshot();
+            for (int i = 0; i < extPages.Length; i++)
+            {
+                IXingShuExternalPage ext = extPages[i];
+                if (ext == null || !ext.IsAvailable()) continue;
+                int extId = 1000 + i;
+                _externalPagesByTabId[extId] = ext;
+                AddGlassSidebarTab(sidebar, extId, ext.Title, _currentTabIndex == extId);
+            }
+
+            Button bottomBackBtn = XingShuUIFactory.CreateButton(leftCol, "ReturnOriginalQuick", "切回原版游戏风 UI",
+                XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextSecondary, () => SetCenterStyle(0), 12);
+            Place(bottomBackBtn.gameObject, Vector2.zero, Vector2.right, Vector2.zero, new Vector2(12f, 12f), new Vector2(-24f, 36f));
+
+            // Right Main Panel Area
+            GameObject rightArea = XingShuUIFactory.CreateUIObject("GlassRightArea", mainFrame);
+            RectTransform rightRt = rightArea.GetComponent<RectTransform>();
+            rightRt.anchorMin = Vector2.zero; rightRt.anchorMax = Vector2.one;
+            rightRt.offsetMin = new Vector2(280f, 12f); rightRt.offsetMax = new Vector2(-14f, -12f);
+
+            GameObject titleBar = XingShuUIFactory.CreateUIObject("GlassHeader", rightArea);
+            Place(titleBar, Vector2.up, Vector2.one, Vector2.up, new Vector2(0f, 0f), new Vector2(0f, 58f));
+            Image headerBg = titleBar.AddComponent<Image>();
+            headerBg.sprite = XingShuGlassSkin.GetRoundedPanelSprite(12, XingShuGlassSkin.HeaderFill, XingShuGlassSkin.DividerLine, 1f);
+            headerBg.type = Image.Type.Sliced;
+            headerBg.color = Color.white;
+            headerBg.raycastTarget = true;
+
+            _dragHandle = titleBar.AddComponent<XingShuUIDragHandle>();
+            _dragHandle.targetRect = _mainFrameRt;
+            _dragHandle.parentRect = _canvas.transform as RectTransform;
+
+            Text title = _pageTitle = XingShuUIFactory.CreateText(titleBar, "GlassPageTitle", ResolveTabTitle(_currentTabIndex), 20, XingShuGlassSkin.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Place(title.gameObject, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), new Vector2(18f, 0f), new Vector2(360f, 36f));
+            title.raycastTarget = false;
+
+            Text badgeText = XingShuUIFactory.CreateText(titleBar, "GlassBadge", "通透毛玻璃", 11, XingShuGlassSkin.AccentMint, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Place(badgeText.gameObject, Vector2.zero, Vector2.up, new Vector2(0f, 0.5f), new Vector2(200f, 0f), new Vector2(96f, 24f));
+            badgeText.raycastTarget = false;
+
+            Text hotkey = _hotkeyHint = XingShuUIFactory.CreateText(titleBar, "Hotkey", XingShuMobileUIHelper.IsMobile ? "拖动顶部移动" : XingShuHotkeys.Display(XingShuShortcut.Center) + " 打开 / 收起", 12, XingShuGlassSkin.TextMuted, TextAnchor.MiddleRight);
+            Place(hotkey.gameObject, Vector2.right, Vector2.one, new Vector2(1f, 0.5f), new Vector2(-248f, 0f), new Vector2(180f, 28f));
+            hotkey.raycastTarget = false;
+
+            Button origBtn = XingShuUIFactory.CreateButton(titleBar, "SwitchOrigBtn", "原版 UI",
+                XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextPrimary, () => SetCenterStyle(0), 12);
+            RectTransform origRt = Place(origBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-132f, 0f), new Vector2(88f, 32f));
+
+            Button sizeBtn = XingShuUIFactory.CreateButton(titleBar, "SizeCycleBtn", PanelScale >= 0.985f ? "标准" : $"{Mathf.RoundToInt(PanelScale * 100f)}%",
+                XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextPrimary, CyclePanelSize, 12);
+            _sizeCycleLabel = sizeBtn.GetComponentInChildren<Text>();
+            RectTransform sizeRt = Place(sizeBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-50f, 0f), new Vector2(72f, 32f));
+
+            Button closeBtn = XingShuUIFactory.CreateButton(titleBar, "Close", "×",
+                XingShuGlassSkin.ButtonSprite, Color.white, XingShuGlassSkin.TextPrimary, Close, 20);
+            RectTransform closeRt = Place(closeBtn.gameObject, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-10f, 0f), new Vector2(34f, 32f));
+
+            _dragHandle.SetExcludedRects(closeRt, sizeRt, origRt);
+            _dragHandle.BindEvents();
+
+            // Content Viewport inside right area
+            GameObject glassBodyHost = XingShuUIFactory.CreateUIObject("GlassBodyHost", rightArea);
+            RectTransform gbhRt = glassBodyHost.GetComponent<RectTransform>();
+            gbhRt.anchorMin = Vector2.zero; gbhRt.anchorMax = Vector2.one;
+            gbhRt.offsetMin = new Vector2(-16f, -68f);
+            gbhRt.offsetMax = new Vector2(16f, 12f);
+
+            BuildContentArea(glassBodyHost);
+            foreach (Transform page in _contentArea.transform)
+            {
+                if (XingShuMobileUIHelper.IsMobile && page.gameObject != _comingSoonView)
+                {
+                    XingShuMobilePageLayout.Adapt(page.gameObject);
+                }
+                XingShuGlassSkin.RestylePageForGlass(page.gameObject);
+            }
+        }
+
+        private void AddGlassSidebarDivider(GameObject sidebar, string label)
+        {
+            GameObject sep = XingShuUIFactory.CreateUIObject("GlassSidebarGroup_" + label, sidebar);
+            LayoutElement le = sep.AddComponent<LayoutElement>();
+            le.minHeight = 24f; le.preferredHeight = 24f; le.flexibleHeight = 0f;
+            Text txt = XingShuUIFactory.CreateText(sep, "Label", label, 11, XingShuGlassSkin.TextMuted, TextAnchor.LowerLeft, FontStyle.Bold);
+            txt.rectTransform.anchorMin = Vector2.zero; txt.rectTransform.anchorMax = Vector2.one;
+            txt.rectTransform.offsetMin = new Vector2(10f, 2f); txt.rectTransform.offsetMax = new Vector2(-8f, 0f);
+            txt.raycastTarget = false;
+        }
+
+        private void AddGlassSidebarTab(GameObject sidebar, int tabId, string label, bool selected)
+        {
+            GameObject tab = XingShuUIFactory.CreateUIObject("Tab_" + tabId, sidebar);
+            LayoutElement le = tab.AddComponent<LayoutElement>();
+            le.minHeight = 40f; le.preferredHeight = 40f; le.flexibleHeight = 0f;
+
+            Image image = tab.AddComponent<Image>();
+            image.sprite = selected ? XingShuGlassSkin.TabSelectedSprite : XingShuGlassSkin.TabNormalSprite;
+            image.type = Image.Type.Sliced;
+            image.color = Color.white;
+
+            Image dot = XingShuUIFactory.CreateImage(tab, "Dot", XingShuGlassSkin.GetRoundedPanelSprite(6, selected ? XingShuGlassSkin.AccentMint : XingShuGlassSkin.AccentBlue, Color.clear, 1f), Color.white, Image.Type.Sliced);
+            dot.raycastTarget = false;
+            Place(dot.gameObject, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(12f, 0f), new Vector2(7f, 7f));
+
+            Text text = XingShuUIFactory.CreateText(tab, "Text", label, 16, selected ? XingShuGlassSkin.TextPrimary : XingShuGlassSkin.TextSecondary, TextAnchor.MiddleLeft, selected ? FontStyle.Bold : FontStyle.Normal);
+            text.rectTransform.anchorMin = Vector2.zero; text.rectTransform.anchorMax = Vector2.one;
+            text.rectTransform.offsetMin = new Vector2(28f, 0f); text.rectTransform.offsetMax = new Vector2(-10f, 0f);
+            text.raycastTarget = false;
+
+            Button button = tab.AddComponent<Button>();
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.SpriteSwap;
+            button.spriteState = new SpriteState { highlightedSprite = XingShuGlassSkin.TabHoverSprite, pressedSprite = XingShuGlassSkin.TabSelectedSprite };
+            button.onClick.AddListener(delegate { SelectTab(tabId); });
+
+            _tabEntries.Add(new TabNavEntry
+            {
+                TabId = tabId,
+                Button = button,
+                Bg = image,
+                Label = text,
+                IsPill = false,
+            });
         }
     }
 }

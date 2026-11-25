@@ -1369,3 +1369,289 @@ html.xingshu-splash-window #root {
     pointer-events: auto;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Customizable Top Bar Pinned Shortcuts & Popover
+   -------------------------------------------------------------------------- */
+.pcl-capsule-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.26);
+  flex-shrink: 0;
+}
+
+.pcl-capsule-nav a.is-pinned-tab {
+  min-width: 0;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.pcl-pin-wrap {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+}
+
+.pcl-capsule-pin-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+
+.pcl-capsule-pin-btn:hover,
+.pcl-capsule-pin-btn.is-open {
+  background: rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+}
+
+.pcl-pin-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 240;
+  width: 392px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 13px;
+  border-radius: 14px;
+  background: var(--pcl-card-hover);
+  color: var(--pcl-ink);
+  border: 1px solid var(--pcl-border);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.24), 0 4px 12px rgba(15, 23, 42, 0.1);
+  animation: pcl-popover-in 180ms var(--pcl-ease-out) both;
+}
+
+.pcl-pin-pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pcl-pin-pop-head strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 760;
+}
+
+.pcl-pin-pop-head small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--pcl-muted);
+}
+
+.pcl-pin-counter {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(var(--pcl-3-rgb), 0.12);
+  color: var(--pcl-3);
+  font-size: 11.5px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pcl-pin-active-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--pcl-border);
+  background: rgba(var(--pcl-3-rgb), 0.04);
+}
+
+.pcl-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--pcl-3-rgb), 0.28);
+  background: var(--pcl-card-hover);
+  font-size: 11.5px;
+  font-weight: 660;
+}
+
+.pcl-pin-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--pcl-muted);
+  cursor: pointer;
+}
+
+.pcl-pin-chip button:hover:not(:disabled) {
+  background: rgba(var(--pcl-3-rgb), 0.12);
+  color: var(--pcl-3);
+}
+
+.pcl-pin-chip button.is-remove:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+
+.pcl-pin-chip button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.pcl-pin-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--pcl-border);
+  background: transparent;
+  color: var(--pcl-muted);
+  font-size: 11px;
+  font-weight: 640;
+  cursor: pointer;
+}
+
+.pcl-pin-clear-btn:hover {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.pcl-pin-limit-note {
+  padding: 6px 9px;
+  margin-bottom: 9px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  font-size: 11.5px;
+  font-weight: 640;
+}
+
+.pcl-pin-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pcl-pin-group-title {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 720;
+  color: var(--pcl-muted);
+}
+
+.pcl-pin-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pcl-pin-tool-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--pcl-border);
+  background: var(--pcl-card-bg);
+  color: var(--pcl-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.pcl-pin-tool-btn:hover:not(:disabled) {
+  border-color: rgba(var(--pcl-3-rgb), 0.42);
+  background: rgba(var(--pcl-3-rgb), 0.08);
+}
+
+.pcl-pin-tool-btn.is-pinned {
+  border-color: var(--pcl-3);
+  background: rgba(var(--pcl-3-rgb), 0.12);
+  color: var(--pcl-3);
+  font-weight: 700;
+}
+
+.pcl-pin-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pcl-pin-tool-btn span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcl-pin-check {
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Custom Launcher Wallpaper + Frosted Surfaces
+   -------------------------------------------------------------------------- */
+.launcher-frame.has-custom-bg {
+  position: relative;
+}
+
+.launcher-bg-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  transform: scale(1.04);
+  pointer-events: none;
+}
+
+.launcher-frame.has-custom-bg .app-container {
+  position: relative;
+  z-index: 1;
+  background: rgba(244, 247, 252, calc(1 - var(--xs-bg-surface-alpha, 0.82) * 0.45));
+}
+
+.launcher-frame.has-custom-bg[data-pcl-scheme='dark'] .app-container {
+  background: rgba(16, 20, 28, calc(1 - var(--xs-bg-surface-alpha, 0.82) * 0.45));
+}
+
+.launcher-frame.has-custom-bg .pcl-card,
+.launcher-frame.has-custom-bg .pcl-tool-tile,
+.launcher-frame.has-custom-bg .pcl-launch-sidebar {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.launcher-frame.has-custom-bg:not([data-pcl-scheme='dark']) .pcl-card,
+.launcher-frame.has-custom-bg:not([data-pcl-scheme='dark']) .pcl-launch-sidebar {
+  background: rgba(255, 255, 255, var(--xs-bg-surface-alpha, 0.82));
+}
+
+.launcher-frame.has-custom-bg[data-pcl-scheme='dark'] .pcl-card,
+.launcher-frame.has-custom-bg[data-pcl-scheme='dark'] .pcl-launch-sidebar {
+  background: rgba(28, 34, 46, var(--xs-bg-surface-alpha, 0.82));
+}

@@ -558,4 +558,8 @@ internal static class XingShuConfigKeys
 	internal const string PlayerStarBuffsDisabledIdsDefault = "";
 	internal const string PlayerStarBuffsEnabledIds = "XINGSHU_STAR_BUFFS_ENABLED_IDS";
 	internal const string PlayerStarBuffsEnabledIdsDefault = "";
+
+	// 功能中心界面风格 (0=原版游戏风, 1=毛玻璃圆角通透框架)
+	internal const string UiCenterStyle = "XINGSHU_UI_CENTER_STYLE";
+	internal const int UiCenterStyleDefault = 0;
 }

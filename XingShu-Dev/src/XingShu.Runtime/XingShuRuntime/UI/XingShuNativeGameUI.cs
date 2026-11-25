@@ -514,6 +514,20 @@ namespace XingShuRuntime.UI
             return _cache.TryGetValue(id, out Sprite sp) && sp != null ? sp : null;
         }
 
+        internal static void ClearPendingBindingsUnder(GameObject root)
+        {
+            if (root == null) return;
+            Transform rootTf = root.transform;
+            for (int i = _pendingBindings.Count - 1; i >= 0; i--)
+            {
+                Image target = _pendingBindings[i].Target;
+                if (target != null && target.transform.IsChildOf(rootTf))
+                {
+                    _pendingBindings.RemoveAt(i);
+                }
+            }
+        }
+
         internal static bool TryGetMappedSprite(string assetName, out Sprite sprite)
         {
             sprite = null;

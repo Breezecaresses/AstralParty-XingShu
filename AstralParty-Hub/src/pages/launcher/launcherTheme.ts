@@ -213,3 +213,148 @@ export function useLauncherTheme(): {
     replayStartup,
   };
 }
+
+export interface LauncherBgAppearance {
+  imageUrl: string | null;
+  fileName: string | null;
+  blur: number;
+  opacity: number;
+}
+
+const BG_BLUR_KEY = 'xingshu.launcher.bgBlur';
+const BG_OPACITY_KEY = 'xingshu.launcher.bgOpacity';
+const BG_IMAGE_CACHE_KEY = 'xingshu.launcher.bgImageCache';
+const APPEARANCE_EVENT = 'xingshu:launcher-appearance';
+
+function clampNum(val: number, min: number, max: number, fallback: number): number {
+  return Number.isFinite(val) ? Math.min(max, Math.max(min, Math.round(val))) : fallback;
+}
+
+export function getStoredLauncherBgSettings(): { blur: number; opacity: number } {
+  try {
+    if (typeof localStorage === 'undefined') return { blur: 24, opacity: 82 };
+    const blur = clampNum(Number(localStorage.getItem(BG_BLUR_KEY) ?? '24'), 0, 100, 24);
+    const opacity = clampNum(Number(localStorage.getItem(BG_OPACITY_KEY) ?? '82'), 40, 100, 82);
+    return { blur, opacity };
+  } catch {
+    return { blur: 24, opacity: 82 };
+  }
+}
+
+export function saveLauncherBgSettings(next: { blur?: number; opacity?: number }): void {
+  const cur = getStoredLauncherBgSettings();
+  const blur = next.blur !== undefined ? clampNum(next.blur, 0, 100, cur.blur) : cur.blur;
+  const opacity = next.opacity !== undefined ? clampNum(next.opacity, 40, 100, cur.opacity) : cur.opacity;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(BG_BLUR_KEY, String(blur));
+      localStorage.setItem(BG_OPACITY_KEY, String(opacity));
+    }
+  } catch {
+    // Ignore storage quota errors.
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT, { detail: { blur, opacity } }));
+  }
+}
+
+export function broadcastLauncherBgImage(imageUrl: string | null, fileName: string | null): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (imageUrl && imageUrl.length < 2_500_000) {
+        localStorage.setItem(BG_IMAGE_CACHE_KEY, JSON.stringify({ imageUrl, fileName }));
+      } else if (!imageUrl) {
+        localStorage.removeItem(BG_IMAGE_CACHE_KEY);
+      }
+    }
+  } catch {
+    // Ignore storage quota errors.
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT, { detail: { imageUrl, fileName } }));
+  }
+}
+
+export function useLauncherAppearance(): LauncherBgAppearance & {
+  setBlur: (blur: number) => void;
+  setOpacity: (opacity: number) => void;
+  refreshBackground: () => Promise<void>;
+} {
+  const [settings, setSettings] = useState(getStoredLauncherBgSettings);
+  const [imageState, setImageState] = useState<{ imageUrl: string | null; fileName: string | null }>(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(BG_IMAGE_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { imageUrl?: string; fileName?: string };
+          if (parsed?.imageUrl) return { imageUrl: parsed.imageUrl, fileName: parsed.fileName ?? null };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { imageUrl: null, fileName: null };
+  });
+
+  const refreshBackground = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      const info = await invoke<{ hasImage?: boolean; fileName?: string | null; dataUrl?: string | null }>(
+        'customize_get_launcher_bg',
+      );
+      const nextUrl = info?.hasImage && info.dataUrl ? info.dataUrl : null;
+      const nextFile = info?.fileName ?? null;
+      setImageState({ imageUrl: nextUrl, fileName: nextFile });
+      broadcastLauncherBgImage(nextUrl, nextFile);
+    } catch {
+      // Ignore outside main Tauri window or offline preview.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshBackground();
+    const onAppearance = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        blur?: number;
+        opacity?: number;
+        imageUrl?: string | null;
+        fileName?: string | null;
+      }>).detail;
+      if (detail && (detail.blur !== undefined || detail.opacity !== undefined)) {
+        setSettings(getStoredLauncherBgSettings());
+      }
+      if (detail && 'imageUrl' in detail) {
+        setImageState({ imageUrl: detail.imageUrl ?? null, fileName: detail.fileName ?? null });
+      }
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === BG_BLUR_KEY || event.key === BG_OPACITY_KEY) {
+        setSettings(getStoredLauncherBgSettings());
+      }
+    };
+    window.addEventListener(APPEARANCE_EVENT, onAppearance);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(APPEARANCE_EVENT, onAppearance);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [refreshBackground]);
+
+  const setBlur = useCallback((blur: number) => {
+    saveLauncherBgSettings({ blur });
+  }, []);
+
+  const setOpacity = useCallback((opacity: number) => {
+    saveLauncherBgSettings({ opacity });
+  }, []);
+
+  return {
+    imageUrl: imageState.imageUrl,
+    fileName: imageState.fileName,
+    blur: settings.blur,
+    opacity: settings.opacity,
+    setBlur,
+    setOpacity,
+    refreshBackground,
+  };
+}

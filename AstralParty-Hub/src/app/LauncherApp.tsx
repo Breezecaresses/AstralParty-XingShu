@@ -50,6 +50,7 @@ const router = isModulePanel ? null : createBrowserRouter([{
   children: [
     { index: true, element: <Navigate to="/dashboard" replace /> },
     { path: 'dashboard', element: <LauncherHome /> },
+    { path: 'customize', lazy: async () => ({ Component: (await import('../pages/customize/CustomizePage')).CustomizePage }) },
     { path: 'extensions/launcher', element: <LauncherMods /> },
     { path: 'extensions/mods', element: <Navigate to="/extensions/launcher?section=inspect" replace /> },
     { path: 'player/accounts', element: <LauncherAccount /> },

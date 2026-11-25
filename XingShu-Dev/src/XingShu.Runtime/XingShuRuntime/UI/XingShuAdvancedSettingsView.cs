@@ -37,6 +37,10 @@ namespace XingShuRuntime.UI
         private Text _resetDefaultsBtnText;
         private float _resetConfirmUntil;
 
+        // Card Style: 功能中心外观风格 (原版游戏风 / 毛玻璃 v2)
+        private Toggle _glassStyleToggle;
+        private int _lastObservedStyle = -1;
+
         // 内部更新防重入与有界轮询缓存
         private bool _suppressCallbacks;
         private float _nextSyncTime;
@@ -77,6 +81,9 @@ namespace XingShuRuntime.UI
 
                 // 0. 特色功能卡片 (Feature Header Card: 76px)
                 BuildHeaderCard(contentArea);
+
+                // 0B. 界面外观风格 (原版游戏风 / 毛玻璃框架 v2)
+                BuildStyleCard(contentArea);
 
                 // 1. 卡片 B: 悬浮交互与辅助球设置 (Card B: 320px)
                 BuildAssistBallCard(contentArea);
@@ -374,6 +381,30 @@ namespace XingShuRuntime.UI
             ntRt.sizeDelta = new Vector2(-48f, 24f);
         }
 
+        private void BuildStyleCard(GameObject parent)
+        {
+            GameObject cardGo = CreateCardContainer(parent, "Card_CenterStyle", 84f);
+
+            Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "功能中心界面风格 (v2 框架)", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            RectTransform ctRt = cardTitle.rectTransform;
+            ctRt.anchorMin = new Vector2(0f, 1f); ctRt.anchorMax = new Vector2(0f, 1f); ctRt.pivot = new Vector2(0f, 1f);
+            ctRt.anchoredPosition = new Vector2(24f, -14f); ctRt.sizeDelta = new Vector2(360f, 22f);
+
+            Text subtitle = XingShuUIFactory.CreateText(cardGo, "Subtitle", "开启后切换为毛玻璃圆角通透 UI 并显示外部优化 Mod 扩展框架；关闭即保留原版游戏风", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            RectTransform stRt = subtitle.rectTransform;
+            stRt.anchorMin = new Vector2(0f, 1f); stRt.anchorMax = new Vector2(1f, 1f); stRt.pivot = new Vector2(0f, 1f);
+            stRt.anchoredPosition = new Vector2(24f, -42f); stRt.sizeDelta = new Vector2(-240f, 22f);
+
+            _glassStyleToggle = XingShuUIFactory.CreateToggle(cardGo, "GlassStyleToggle", "毛玻璃框架", XingShuUICenter.CenterStyle == 1, val =>
+            {
+                if (_suppressCallbacks) return;
+                XingShuUICenter.SetCenterStyle(val ? 1 : 0);
+            });
+            RectTransform tRt = _glassStyleToggle.GetComponent<RectTransform>();
+            tRt.anchorMin = new Vector2(1f, 0.5f); tRt.anchorMax = new Vector2(1f, 0.5f); tRt.pivot = new Vector2(1f, 0.5f);
+            tRt.anchoredPosition = new Vector2(-24f, 0f); tRt.sizeDelta = new Vector2(180f, 32f);
+        }
+
         private void BuildResetDefaultsCard(GameObject parent)
         {
             GameObject cardGo = CreateCardContainer(parent, "Card_ResetDefaults", 76f);
@@ -414,6 +445,14 @@ namespace XingShuRuntime.UI
             _suppressCallbacks = true;
             try
             {
+                // Card Style
+                int curStyle = XingShuUICenter.CenterStyle;
+                if (_lastObservedStyle != curStyle)
+                {
+                    _lastObservedStyle = curStyle;
+                    if (_glassStyleToggle != null) XingShuUIFactory.SetToggleRowStateWithoutNotify(_glassStyleToggle, curStyle == 1);
+                }
+
                 // Card B
                 bool autoHide = XingShuConfigService.GetBool(XingShuConfigKeys.AssistAutoHide, XingShuConfigKeys.AssistAutoHideDefault);
                 if (!_lastObservedAutoHide.HasValue || _lastObservedAutoHide.Value != autoHide)

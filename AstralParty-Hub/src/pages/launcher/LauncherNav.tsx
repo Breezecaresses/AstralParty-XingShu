@@ -4,15 +4,21 @@ import {
   ArrowLeft,
   Blocks,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Gamepad2,
   LogOut,
   Minus,
   PackagePlus,
+  Paintbrush,
   Palette,
+  Pin,
   Play,
+  Plus,
   Settings2,
   Square,
+  Trash2,
   UserRound,
   Wrench,
   X,
@@ -28,11 +34,19 @@ import {
 } from '../../shared/platformAccountClient';
 import { assetUrl, isTauriRuntime } from '../../shared/runtime';
 import { PCL_THEMES, useLauncherTheme } from './launcherTheme';
+import {
+  MAX_PINNED_TOP_TOOLS,
+  PINNABLE_TOOLS,
+  findToolByPath,
+  usePinnedTopTools,
+  type PinnableToolGroup,
+} from './topBarTools';
 
-type TabKey = 'launch' | 'room' | 'mods' | 'tools' | 'settings';
+type CoreTabKey = 'launch' | 'customize' | 'mods' | 'tools' | 'settings';
+type TabKey = CoreTabKey | `pin:${string}`;
 
 interface SubPageMeta {
-  tab: TabKey;
+  tab: CoreTabKey;
   backTo: string;
   backZh: string;
   backEn: string;
@@ -40,12 +54,16 @@ interface SubPageMeta {
   titleEn: string;
 }
 
-function resolveRouteMeta(pathname: string, search: string): { tab: TabKey; subPage: SubPageMeta | null } {
+function resolveRouteMeta(
+  pathname: string,
+  search: string,
+  pinnedKeys: string[],
+): { tab: TabKey; subPage: SubPageMeta | null } {
   if (pathname === '/dashboard') {
     return { tab: 'launch', subPage: null };
   }
-  if (pathname === '/room' || pathname.startsWith('/room/')) {
-    return { tab: 'room', subPage: null };
+  if (pathname === '/customize' || pathname.startsWith('/customize/')) {
+    return { tab: 'customize', subPage: null };
   }
   if (pathname === '/extensions/launcher') {
     return { tab: 'mods', subPage: null };
@@ -55,6 +73,25 @@ function resolveRouteMeta(pathname: string, search: string): { tab: TabKey; subP
   }
   if (pathname === '/settings') {
     return { tab: 'settings', subPage: null };
+  }
+
+  const matchedTool = findToolByPath(pathname);
+  if (matchedTool && pinnedKeys.includes(matchedTool.key)) {
+    return { tab: `pin:${matchedTool.key}`, subPage: null };
+  }
+
+  if (pathname === '/room' || pathname.startsWith('/room/')) {
+    return {
+      tab: 'tools',
+      subPage: {
+        tab: 'tools',
+        backTo: '/tools',
+        backZh: '返回工具库',
+        backEn: 'Back to Tools',
+        titleZh: '星枢开房',
+        titleEn: 'XingShu Room',
+      },
+    };
   }
 
   if (pathname.startsWith('/extensions/mods')) {
@@ -303,23 +340,21 @@ export function LauncherNav() {
   const { theme, setTheme } = useLauncherTheme();
   const activePreset = PCL_THEMES.find((item) => item.id === theme) ?? PCL_THEMES[0];
   const { user: platUser, gameBindings } = usePlatformAccount();
+  const { pinnedKeys, pinnedTools, isPinned, togglePin, movePin, clearPins } = usePinnedTopTools();
 
-  const { tab, subPage } = resolveRouteMeta(pathname, search);
+  const { tab, subPage } = resolveRouteMeta(pathname, search, pinnedKeys);
 
   const [maximized, setMaximized] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [platMenuOpen, setPlatMenuOpen] = useState(false);
+  const [pinMenuOpen, setPinMenuOpen] = useState(false);
+  const [pinLimitMsg, setPinLimitMsg] = useState('');
   const themePickerRef = useRef<HTMLDivElement>(null);
   const platPickerRef = useRef<HTMLDivElement>(null);
+  const pinPickerRef = useRef<HTMLDivElement>(null);
 
   const navRef = useRef<HTMLElement>(null);
-  const tabRefs = useRef<Record<TabKey, HTMLAnchorElement | null>>({
-    launch: null,
-    room: null,
-    mods: null,
-    tools: null,
-    settings: null,
-  });
+  const tabRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
   const hasMeasuredRef = useRef(false);
   const [pillStyle, setPillStyle] = useState<{ left: number; width: number; ready: boolean; animated: boolean }>({
     left: 0,
@@ -347,7 +382,7 @@ export function LauncherNav() {
 
   useLayoutEffect(() => {
     measureActivePill();
-  }, [measureActivePill, locale]);
+  }, [measureActivePill, locale, pinnedKeys, tab]);
 
   useEffect(() => {
     const navEl = navRef.current;
@@ -421,7 +456,7 @@ export function LauncherNav() {
   }, []);
 
   useEffect(() => {
-    if (!themeMenuOpen && !platMenuOpen) return;
+    if (!themeMenuOpen && !platMenuOpen && !pinMenuOpen) return;
     const onPointerDown = (event: MouseEvent) => {
       if (themePickerRef.current && !themePickerRef.current.contains(event.target as Node)) {
         setThemeMenuOpen(false);
@@ -429,11 +464,15 @@ export function LauncherNav() {
       if (platPickerRef.current && !platPickerRef.current.contains(event.target as Node)) {
         setPlatMenuOpen(false);
       }
+      if (pinPickerRef.current && !pinPickerRef.current.contains(event.target as Node)) {
+        setPinMenuOpen(false);
+      }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setThemeMenuOpen(false);
         setPlatMenuOpen(false);
+        setPinMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', onPointerDown);
@@ -442,7 +481,7 @@ export function LauncherNav() {
       document.removeEventListener('mousedown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [platMenuOpen, themeMenuOpen]);
+  }, [pinMenuOpen, platMenuOpen, themeMenuOpen]);
 
   const runWindowAction = (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauriRuntime()) return;
@@ -487,13 +526,29 @@ export function LauncherNav() {
     }
   };
 
-  const items: Array<{ key: TabKey; to: string; icon: typeof Play; label: string }> = [
+  const items: Array<{ key: CoreTabKey; to: string; icon: typeof Play; label: string }> = [
     { key: 'launch', to: '/dashboard', icon: Play, label: zh ? '启动' : 'Launch' },
-    { key: 'room', to: '/room', icon: Gamepad2, label: zh ? '开房' : 'Room' },
+    { key: 'customize', to: '/customize', icon: Paintbrush, label: zh ? '自定义' : 'Customize' },
     { key: 'mods', to: '/extensions/launcher', icon: Blocks, label: zh ? '模组' : 'Mods' },
     { key: 'tools', to: '/tools', icon: Wrench, label: zh ? '工具' : 'Tools' },
     { key: 'settings', to: '/settings', icon: Settings2, label: zh ? '设置' : 'Settings' },
   ];
+
+  const pinGroupLabels: Array<{ group: PinnableToolGroup; zh: string; en: string }> = [
+    { group: 'online', zh: '联机与网桥', en: 'Online & Bridge' },
+    { group: 'player', zh: '对局与资料', en: 'Matches & Players' },
+    { group: 'codex', zh: '游戏图鉴', en: 'Game Codex' },
+    { group: 'launcher', zh: '启动器维护', en: 'Maintenance' },
+  ];
+
+  const handleToggleTopPin = (toolKey: string) => {
+    const res = togglePin(toolKey);
+    if (res.limitReached) {
+      setPinLimitMsg(zh ? `顶部最多添加 ${MAX_PINNED_TOP_TOOLS} 个工具快捷栏位` : `Max ${MAX_PINNED_TOP_TOOLS} pinned tools`);
+    } else {
+      setPinLimitMsg('');
+    }
+  };
 
   return (
     <header
@@ -549,6 +604,140 @@ export function LauncherNav() {
               <span>{label}</span>
             </NavLink>
           ))}
+          {pinnedTools.length > 0 && <span className="pcl-capsule-sep" aria-hidden="true" />}
+          {pinnedTools.map((tool) => {
+            const Icon = tool.Icon;
+            const pinTabKey: TabKey = `pin:${tool.key}`;
+            return (
+              <NavLink
+                key={pinTabKey}
+                to={tool.to}
+                ref={(el) => {
+                  tabRefs.current[pinTabKey] = el;
+                }}
+                title={zh ? tool.zh : tool.en}
+                className={tab === pinTabKey ? 'is-pinned-tab selected' : 'is-pinned-tab'}
+              >
+                <Icon size={14} />
+                <span>{zh ? tool.shortZh : tool.shortEn}</span>
+              </NavLink>
+            );
+          })}
+          <div className="pcl-pin-wrap" ref={pinPickerRef} data-no-drag>
+            <button
+              type="button"
+              className={`pcl-capsule-pin-btn${pinMenuOpen ? ' is-open' : ''}`}
+              title={
+                zh
+                  ? `自定义顶部栏位（已固定 ${pinnedTools.length}/${MAX_PINNED_TOP_TOOLS}）`
+                  : `Customize top bar (${pinnedTools.length}/${MAX_PINNED_TOP_TOOLS})`
+              }
+              aria-label={zh ? '自定义顶部栏位' : 'Customize top bar'}
+              onClick={() => {
+                setPinLimitMsg('');
+                setPinMenuOpen((v) => !v);
+                setThemeMenuOpen(false);
+                setPlatMenuOpen(false);
+              }}
+            >
+              {pinnedTools.length > 0 ? <Pin size={13} /> : <Plus size={14} />}
+            </button>
+            {pinMenuOpen && (
+              <div className="pcl-pin-popover" role="dialog" aria-label={zh ? '自定义顶部栏位' : 'Customize Top Bar'}>
+                <div className="pcl-pin-pop-head">
+                  <div>
+                    <strong>{zh ? '自定义顶部栏位' : 'Top Bar Shortcuts'}</strong>
+                    <small>
+                      {zh
+                        ? `从「工具」添加快捷入口到顶部（最多 ${MAX_PINNED_TOP_TOOLS} 个）`
+                        : `Pin up to ${MAX_PINNED_TOP_TOOLS} items from Tools`}
+                    </small>
+                  </div>
+                  <span className="pcl-pin-counter">
+                    {pinnedTools.length} / {MAX_PINNED_TOP_TOOLS}
+                  </span>
+                </div>
+
+                {pinnedTools.length > 0 && (
+                  <div className="pcl-pin-active-strip">
+                    {pinnedTools.map((tool, idx) => (
+                      <div key={tool.key} className="pcl-pin-chip">
+                        <span>{zh ? tool.shortZh : tool.shortEn}</span>
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          title={zh ? '左移' : 'Move left'}
+                          onClick={() => movePin(tool.key, -1)}
+                        >
+                          <ChevronLeft size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === pinnedTools.length - 1}
+                          title={zh ? '右移' : 'Move right'}
+                          onClick={() => movePin(tool.key, 1)}
+                        >
+                          <ChevronRight size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          className="is-remove"
+                          title={zh ? '移除' : 'Remove'}
+                          onClick={() => handleToggleTopPin(tool.key)}
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="pcl-pin-clear-btn"
+                      onClick={() => {
+                        setPinLimitMsg('');
+                        clearPins();
+                      }}
+                    >
+                      <Trash2 size={11} />
+                      <span>{zh ? '清空' : 'Clear'}</span>
+                    </button>
+                  </div>
+                )}
+
+                {pinLimitMsg && <div className="pcl-pin-limit-note">{pinLimitMsg}</div>}
+
+                <div className="pcl-pin-groups">
+                  {pinGroupLabels.map(({ group, zh: gZh, en: gEn }) => {
+                    const groupTools = PINNABLE_TOOLS.filter((t) => t.group === group);
+                    return (
+                      <div key={group} className="pcl-pin-group">
+                        <span className="pcl-pin-group-title">{zh ? gZh : gEn}</span>
+                        <div className="pcl-pin-tool-grid">
+                          {groupTools.map((tool) => {
+                            const ToolIcon = tool.Icon;
+                            const active = isPinned(tool.key);
+                            const disabled = !active && pinnedTools.length >= MAX_PINNED_TOP_TOOLS;
+                            return (
+                              <button
+                                key={tool.key}
+                                type="button"
+                                disabled={disabled}
+                                className={`pcl-pin-tool-btn${active ? ' is-pinned' : ''}`}
+                                onClick={() => handleToggleTopPin(tool.key)}
+                              >
+                                <ToolIcon size={13} />
+                                <span>{zh ? tool.zh : tool.en}</span>
+                                {active && <Check size={12} className="pcl-pin-check" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </nav>
       </div>
 

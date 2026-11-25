@@ -19,6 +19,8 @@ import {
   Layers,
   MapPin,
   Paintbrush,
+  Pin,
+  PinOff,
   Plus,
   Puzzle,
   Radio,
@@ -67,6 +69,11 @@ import {
   getLauncherModuleMeta,
   normalizeModuleSlug,
 } from './launcherModMeta';
+import {
+  MAX_PINNED_TOP_TOOLS,
+  findToolByPath,
+  usePinnedTopTools,
+} from './topBarTools';
 import './launcher.css';
 
 type ToolEntry = {
@@ -121,12 +128,12 @@ const toolGroups: ToolGroup[] = [
     Icon: Gamepad2,
     zh: '联机与网桥',
     en: 'Online play & bridge',
-    descZh: '查看游戏运行时与星枢的连接状态。',
-    descEn: 'View the game runtime connection to XingShu.',
+    descZh: '游戏内实时建房、观战同步与本地网桥调试。',
+    descEn: 'In-game room creation, spectator sync and local bridge.',
     items: [
+      { to: '/room', Icon: Gamepad2, zh: '星枢开房', en: 'XingShu Room', detail: '游戏内发起建房、修改房规、踢人与开始对局', english: 'Create rooms, adjust settings and start matches in-game' },
       { to: '/spectator', Icon: Eye, zh: '星枢观战', en: 'Spectator', detail: '查看已连接的观战会话', english: 'View connected spectator sessions' },
       { to: '/bridge', Icon: Radio, zh: '星枢网桥', en: 'Connection bridge', detail: '查看本机网桥连接和日志', english: 'Inspect local bridge connections and logs' },
-      { to: '/room', Icon: Gamepad2, zh: '联机房间', en: 'Room lobby', detail: '查看和管理联机房间', english: 'View and manage online rooms' },
     ],
   },
   {
@@ -147,6 +154,8 @@ const toolGroups: ToolGroup[] = [
 
 export function LauncherTools() {
   const zh = useTranslation().locale === 'zh-CN';
+  const { pinnedTools, isPinned, togglePin } = usePinnedTopTools();
+  const [pinNotice, setPinNotice] = useState('');
   let stagger = 0;
 
   return (
@@ -155,7 +164,21 @@ export function LauncherTools() {
         <div>
           <h1>{zh ? '工具库' : 'Tools'}</h1>
         </div>
+        <div className="pcl-tools-pin-status">
+          <Pin size={13} />
+          <span>
+            {zh ? '顶部栏位快捷固定' : 'Top Bar Shortcuts'}:{' '}
+            <strong>
+              {pinnedTools.length} / {MAX_PINNED_TOP_TOOLS}
+            </strong>
+          </span>
+        </div>
       </div>
+      {pinNotice && (
+        <div className="launcher-banner is-warning" style={{ marginBottom: 14 }}>
+          {pinNotice}
+        </div>
+      )}
 
       <div className="pcl-catalog-groups">
         {toolGroups.map((group, groupIdx) => {
@@ -182,6 +205,8 @@ export function LauncherTools() {
               <div className="pcl-tool-grid">
                 {group.items.map(({ to, Icon, zh: name, en, detail, english }) => {
                   const tileIdx = stagger++;
+                  const pinMeta = findToolByPath(to);
+                  const pinned = pinMeta ? isPinned(pinMeta.key) : false;
                   return (
                     <Link
                       key={to}
@@ -194,6 +219,37 @@ export function LauncherTools() {
                           <Icon size={17} />
                         </span>
                         <strong>{zh ? name : en}</strong>
+                        {pinMeta && (
+                          <button
+                            type="button"
+                            className={`pcl-tool-tile-pin${pinned ? ' is-pinned' : ''}`}
+                            title={
+                              pinned
+                                ? zh
+                                  ? '取消固定到顶部栏位'
+                                  : 'Unpin from top bar'
+                                : zh
+                                  ? '固定到顶部栏位（最多 6 个）'
+                                  : 'Pin to top bar (max 6)'
+                            }
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const res = togglePin(pinMeta.key);
+                              if (res.limitReached) {
+                                setPinNotice(
+                                  zh
+                                    ? `顶部栏位最多固定 ${MAX_PINNED_TOP_TOOLS} 个工具，请先取消其中一个再添加。`
+                                    : `Up to ${MAX_PINNED_TOP_TOOLS} shortcuts can be pinned to the top bar.`,
+                                );
+                              } else {
+                                setPinNotice('');
+                              }
+                            }}
+                          >
+                            {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                          </button>
+                        )}
                         <ArrowUpRight size={14} className="pcl-tool-tile-arrow" />
                       </div>
                       <p>{zh ? detail : english}</p>

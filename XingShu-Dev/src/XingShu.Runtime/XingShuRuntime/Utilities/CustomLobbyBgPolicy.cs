@@ -610,5 +610,189 @@ namespace XingShuRuntime.Utilities
             }
             return est;
         }
+
+        internal const string SidecarFileName = "xingshu_lobby_bg.json";
+
+        internal struct LobbyBgSidecarConfig
+        {
+            public bool Enabled;
+            public string SelectedFile;
+            public bool SyncSubPanels;
+            public bool RandomOnLobby;
+            public LobbyBgFillMode FillMode;
+            public float Brightness;
+            public float Speed;
+            public bool Muted;
+            public float Volume;
+            public bool MuteVanillaBgm;
+            public long UpdatedAt;
+        }
+
+        internal static string SerializeSidecarJson(LobbyBgSidecarConfig cfg)
+        {
+            string fillStr = cfg.FillMode == LobbyBgFillMode.Contain
+                ? "contain"
+                : cfg.FillMode == LobbyBgFillMode.Stretch
+                    ? "stretch"
+                    : "cover";
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            return "{\n"
+                + "  \"enabled\": " + (cfg.Enabled ? "true" : "false") + ",\n"
+                + "  \"selectedFile\": \"" + EscapeJsonString(cfg.SelectedFile) + "\",\n"
+                + "  \"syncSubPanels\": " + (cfg.SyncSubPanels ? "true" : "false") + ",\n"
+                + "  \"randomOnLobby\": " + (cfg.RandomOnLobby ? "true" : "false") + ",\n"
+                + "  \"fillMode\": \"" + fillStr + "\",\n"
+                + "  \"brightness\": " + ClampBrightness(cfg.Brightness).ToString("0.###", inv) + ",\n"
+                + "  \"speed\": " + ClampSpeed(cfg.Speed).ToString("0.###", inv) + ",\n"
+                + "  \"muted\": " + (cfg.Muted ? "true" : "false") + ",\n"
+                + "  \"volume\": " + ClampVolume(cfg.Volume).ToString("0.###", inv) + ",\n"
+                + "  \"muteVanillaBgm\": " + (cfg.MuteVanillaBgm ? "true" : "false") + ",\n"
+                + "  \"updatedAt\": " + cfg.UpdatedAt.ToString(inv) + "\n"
+                + "}\n";
+        }
+
+        internal static bool TryParseSidecarJson(string json, out LobbyBgSidecarConfig cfg)
+        {
+            cfg = new LobbyBgSidecarConfig
+            {
+                SyncSubPanels = true,
+                FillMode = LobbyBgFillMode.Cover,
+                Brightness = DefaultBrightness,
+                Speed = DefaultSpeed,
+                Muted = true,
+                Volume = DefaultVolume,
+            };
+            if (string.IsNullOrEmpty(json) || json.IndexOf('{') < 0) return false;
+            bool anyMatched = false;
+            bool bVal;
+            string sVal;
+            float fVal;
+            long lVal;
+            if (TryReadJsonBool(json, "enabled", out bVal)) { cfg.Enabled = bVal; anyMatched = true; }
+            if (TryReadJsonString(json, "selectedFile", out sVal)) { cfg.SelectedFile = sVal; anyMatched = true; }
+            if (TryReadJsonBool(json, "syncSubPanels", out bVal)) { cfg.SyncSubPanels = bVal; anyMatched = true; }
+            if (TryReadJsonBool(json, "randomOnLobby", out bVal)) { cfg.RandomOnLobby = bVal; anyMatched = true; }
+            if (TryReadJsonString(json, "fillMode", out sVal))
+            {
+                anyMatched = true;
+                if (string.Equals(sVal, "contain", StringComparison.OrdinalIgnoreCase)) cfg.FillMode = LobbyBgFillMode.Contain;
+                else if (string.Equals(sVal, "stretch", StringComparison.OrdinalIgnoreCase)) cfg.FillMode = LobbyBgFillMode.Stretch;
+                else cfg.FillMode = LobbyBgFillMode.Cover;
+            }
+            if (TryReadJsonFloat(json, "brightness", out fVal)) { cfg.Brightness = ClampBrightness(fVal); anyMatched = true; }
+            if (TryReadJsonFloat(json, "speed", out fVal)) { cfg.Speed = ClampSpeed(fVal); anyMatched = true; }
+            if (TryReadJsonBool(json, "muted", out bVal)) { cfg.Muted = bVal; anyMatched = true; }
+            if (TryReadJsonFloat(json, "volume", out fVal)) { cfg.Volume = ClampVolume(fVal); anyMatched = true; }
+            if (TryReadJsonBool(json, "muteVanillaBgm", out bVal)) { cfg.MuteVanillaBgm = bVal; anyMatched = true; }
+            if (TryReadJsonLong(json, "updatedAt", out lVal)) { cfg.UpdatedAt = lVal; }
+            return anyMatched;
+        }
+
+        private static string EscapeJsonString(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            var sb = new System.Text.StringBuilder(value.Length + 8);
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '\\') sb.Append("\\\\");
+                else if (c == '"') sb.Append("\\\"");
+                else if (c == '\r') sb.Append("\\r");
+                else if (c == '\n') sb.Append("\\n");
+                else if (c == '\t') sb.Append("\\t");
+                else if (c >= ' ') sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        private static int FindJsonValueStart(string json, string key)
+        {
+            string pattern = "\"" + key + "\"";
+            int keyIdx = json.IndexOf(pattern, StringComparison.Ordinal);
+            if (keyIdx < 0) return -1;
+            int colon = json.IndexOf(':', keyIdx + pattern.Length);
+            if (colon < 0) return -1;
+            int i = colon + 1;
+            while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
+            return i < json.Length ? i : -1;
+        }
+
+        private static bool TryReadJsonBool(string json, string key, out bool value)
+        {
+            value = false;
+            int i = FindJsonValueStart(json, key);
+            if (i < 0) return false;
+            if (i + 4 <= json.Length && string.Compare(json, i, "true", 0, 4, StringComparison.OrdinalIgnoreCase) == 0)
+            {
+                value = true;
+                return true;
+            }
+            if (i + 5 <= json.Length && string.Compare(json, i, "false", 0, 5, StringComparison.OrdinalIgnoreCase) == 0)
+            {
+                value = false;
+                return true;
+            }
+            return false;
+        }
+
+        private static bool TryReadJsonFloat(string json, string key, out float value)
+        {
+            value = 0f;
+            int i = FindJsonValueStart(json, key);
+            if (i < 0) return false;
+            int end = i;
+            while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-' || json[end] == '+' || json[end] == '.'))
+            {
+                end++;
+            }
+            if (end <= i) return false;
+            return float.TryParse(json.Substring(i, end - i), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
+        private static bool TryReadJsonLong(string json, string key, out long value)
+        {
+            value = 0L;
+            int i = FindJsonValueStart(json, key);
+            if (i < 0) return false;
+            int end = i;
+            while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-'))
+            {
+                end++;
+            }
+            if (end <= i) return false;
+            return long.TryParse(json.Substring(i, end - i), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
+        private static bool TryReadJsonString(string json, string key, out string value)
+        {
+            value = "";
+            int i = FindJsonValueStart(json, key);
+            if (i < 0 || json[i] != '"') return false;
+            i++;
+            var sb = new System.Text.StringBuilder();
+            while (i < json.Length)
+            {
+                char c = json[i++];
+                if (c == '"')
+                {
+                    value = sb.ToString();
+                    return true;
+                }
+                if (c == '\\' && i < json.Length)
+                {
+                    char esc = json[i++];
+                    if (esc == '"' || esc == '\\' || esc == '/') sb.Append(esc);
+                    else if (esc == 'n') sb.Append('\n');
+                    else if (esc == 'r') sb.Append('\r');
+                    else if (esc == 't') sb.Append('\t');
+                    else sb.Append(esc);
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            return false;
+        }
     }
 }
