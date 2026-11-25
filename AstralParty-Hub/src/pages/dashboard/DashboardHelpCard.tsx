@@ -131,7 +131,7 @@ export function DashboardHelpCard() {
         <div className="xingshu-help-steps">
           <div className="xingshu-help-step">
             <strong>1. 纯净启动与按需装插件</strong>
-            <p>Hub 主页默认纯净启动游戏；如需启用 21 项官方局内功能，请前往「模组」页安装「星枢官方插件 Mod」并一键检查冲突。</p>
+            <p>Hub 主页默认纯净启动游戏；如需启用各项官方局内功能，请前往「模组」页安装「星枢官方插件 Mod」并一键检查冲突。</p>
           </div>
           <div className="xingshu-help-step">
             <strong>2. 进游开启与手牌</strong>

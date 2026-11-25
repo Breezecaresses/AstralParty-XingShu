@@ -2659,7 +2659,7 @@ export const ModrinthProjectDetailPage: React.FC = () => {
                   <p>
                     {item.isSeed
                       ? zh
-                        ? '官方内置基础模块（21 项 .xspkg）受系统保护，不支持直接删除；可通过「版本」标签上传新包覆盖升级。'
+                        ? '官方内置基础模块（.xspkg）受系统保护，不支持直接删除；可通过「版本」标签上传新包覆盖升级。'
                         : 'Official built-in .xspkg modules are protected from deletion.'
                       : zh
                         ? '删除项目后将永久移除所有上传包体、头像与宣传展示图，无法恢复。'

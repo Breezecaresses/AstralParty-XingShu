@@ -34,6 +34,38 @@ public sealed class MonsterCooldownRuntime : MonoBehaviour
         return _instance == null || !_instance.Context() ? -1 : _instance._ledger.Read(monster, skill, out estimated);
     }
 
+    internal static string GetStatusSummary()
+    {
+        var self = _instance;
+        if (self == null || !self.Context(false))
+        {
+            return "当前未在对局中；进入 PVE 对局后将自动记录并推演场上怪物的主动技能冷却。";
+        }
+        var sb = new System.Text.StringBuilder();
+        sb.Append("当前回合：第 ").Append(self._ledger.Round).Append(" 轮\n");
+        int shown = 0;
+        foreach (var kv in self._players)
+        {
+            var p = kv.Value;
+            if (p == null || p.player?.Hero == null || p.Property?.HP == null || p.Property.HP.Value <= 0) continue;
+            int skill = p.player.GetBattleActiveSkillId();
+            if (skill <= 0) continue;
+            bool est;
+            int cd = self._ledger.Read(kv.Key, skill, out est);
+            string name = CharacterHandle.GetCharacterName(p.player.characterConfig.Id, p.player.characterConfig.CharacterType);
+            string cdStr = cd < 0 ? "未知" : (cd == 0 ? "就绪 (0)" : $"CD {cd}");
+            if (est && cd >= 0) cdStr += " (推演)";
+            if (shown > 0) sb.Append('\n');
+            sb.Append("• ").Append(name).Append("：").Append(cdStr);
+            shown++;
+        }
+        if (shown == 0)
+        {
+            sb.Append("场上暂无存活的带主动技能怪物。");
+        }
+        return sb.ToString();
+    }
+
     private void Awake()
     {
         _instance = this;

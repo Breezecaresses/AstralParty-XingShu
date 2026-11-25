@@ -23,6 +23,8 @@ pub(crate) struct ModulePanelSnapshot {
     ready: bool,
     game_platform: Option<String>,
     game_root: Option<String>,
+    #[serde(default)]
+    modules: Vec<launcher::ModuleDefinition>,
     states: BTreeMap<String, &'static str>,
 }
 
@@ -139,11 +141,13 @@ pub(crate) async fn module_panel_snapshot(
     center: State<'_, ExtensionCenter>,
     selected: State<'_, ModulePanelTarget>,
 ) -> Result<ModulePanelSnapshot, String> {
+    let definitions = launcher::current_modules().unwrap_or_default();
     let Some(id) = selected.0.lock().await.clone() else {
         return Ok(ModulePanelSnapshot {
             ready: false,
             game_platform: None,
             game_root: None,
+            modules: definitions,
             states: BTreeMap::new(),
         });
     };
@@ -158,6 +162,7 @@ pub(crate) async fn module_panel_snapshot(
         ready,
         game_platform,
         game_root,
+        modules: definitions,
         states,
     })
 }

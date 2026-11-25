@@ -68,14 +68,27 @@ namespace XingShuRuntime.UI
         private XingShuGameSpeedView _gameSpeedView;
         private XingShuHandCardView _handCardView;
         private XingShuKnockbackView _knockbackView;
+        private XingShuMonsterTargetView _monsterTargetView;
+        private XingShuMonsterCooldownView _monsterCooldownView;
+        private XingShuDefenseHintView _defenseHintView;
+        private XingShuBattleCardHintView _battleCardHintView;
+        private XingShuMegathDamageView _megathDamageView;
+        private XingShuPlayerCombatHudView _playerCombatHudView;
+        private XingShuPlayerStarBuffView _playerStarBuffView;
         private XingShuStaticPortraitView _staticPortraitView;
         private XingShuReplayView _replayView;
         private XingShuFreeCameraView _freeCameraView;
         private XingShuActionGuardView _actionGuardView;
+        private XingShuQuickThanksView _quickThanksView;
+        private XingShuAvatarPraiseView _avatarPraiseView;
+        private XingShuStarCoinShopView _starCoinShopView;
+        private XingShuSettlementShotView _settlementShotView;
+        private XingShuSelectRoleMapView _selectRoleMapView;
         private XingShuBattleStatsView _battleStatsView;
         private XingShuAdvancedSettingsView _advancedSettingsView;
         private XingShuHotkeySettingsView _hotkeySettingsView;
         private XingShuLobbyBgView _lobbyBgView;
+        private readonly Dictionary<int, (GameObject Root, Action Sync)> _tabViews = new Dictionary<int, (GameObject, Action)>();
         private GameObject _comingSoonView;
         private Text _comingSoonText;
 
@@ -98,32 +111,56 @@ namespace XingShuRuntime.UI
 
         private static readonly int[] DISPLAY_TAB_ORDER = new int[]
         {
-            0, // 游戏变速
-            1, // 手牌监视
-            2, // 击飞预测
-            6, // 自动化与社交
-            7, // 对局数据
-            5, // 自由镜头
-            4, // 录像回放
+            0,  // 游戏变速
+            1,  // 手牌监视
+            2,  // 击飞预测
+            11, // 怪物索敌
+            12, // 怪物冷却
+            13, // 防御提示
+            14, // 卡牌点数
+            15, // 梅加斯伤害
+            16, // 角色状态
+            17, // 星级Buff
+            6,  // 战局守护
+            18, // 快捷致谢
+            19, // 头像点赞
+            20, // 星币商店
+            21, // 结算截图
+            22, // 选人地图
+            7,  // 对局数据
+            5,  // 自由镜头
+            4,  // 录像回放
             10, // 大厅背景
-            3, // 模组加载 (仅手机端展示)
-            8, // 高级设置
-            9  // 快捷键
+            3,  // 模组加载 (仅手机端展示)
+            8,  // 高级设置
+            9   // 快捷键
         };
 
         private static readonly string[] TAB_NAMES = new string[]
         {
-            "游戏变速",
-            "手牌监视",
-            "击飞预测",
-            "模组加载",
-            "录像回放",
-            "自由镜头",
-            "自动化与社交",
-            "对局数据",
-            "高级设置",
-            "快捷键",
-            "大厅背景"
+            "游戏变速",   // 0
+            "手牌监视",   // 1
+            "击飞预测",   // 2
+            "模组加载",   // 3
+            "录像回放",   // 4
+            "自由镜头",   // 5
+            "战局守护",   // 6
+            "对局数据",   // 7
+            "高级设置",   // 8
+            "快捷键",     // 9
+            "大厅背景",   // 10
+            "怪物索敌",   // 11
+            "怪物冷却",   // 12
+            "防御提示",   // 13
+            "卡牌点数",   // 14
+            "梅加斯伤害", // 15
+            "角色状态",   // 16
+            "星级Buff",   // 17
+            "快捷致谢",   // 18
+            "头像点赞",   // 19
+            "星币商店",   // 20
+            "结算截图",   // 21
+            "选人地图"    // 22
         };
 
         internal static void Install(GameObject host)
@@ -208,49 +245,9 @@ namespace XingShuRuntime.UI
                 }
 
                 // 页面数据同步 (无变更 0 GC / 0 UI 写入)
-                if (_currentTabIndex == 0 && _gameSpeedView != null)
+                if (_tabViews.TryGetValue(_currentTabIndex, out var activeView) && activeView.Sync != null)
                 {
-                    _gameSpeedView.UpdateSync();
-                }
-                else if (_currentTabIndex == 1 && _handCardView != null)
-                {
-                    _handCardView.UpdateSync();
-                }
-                else if (_currentTabIndex == 2 && _knockbackView != null)
-                {
-                    _knockbackView.UpdateSync();
-                }
-                else if (_currentTabIndex == 3 && _staticPortraitView != null)
-                {
-                    _staticPortraitView.UpdateSync();
-                }
-                else if (_currentTabIndex == 4 && _replayView != null)
-                {
-                    _replayView.UpdateSync();
-                }
-                else if (_currentTabIndex == 5 && _freeCameraView != null)
-                {
-                    _freeCameraView.UpdateSync();
-                }
-                else if (_currentTabIndex == 6 && _actionGuardView != null)
-                {
-                    _actionGuardView.UpdateSync();
-                }
-                else if (_currentTabIndex == 7 && _battleStatsView != null)
-                {
-                    _battleStatsView.UpdateSync();
-                }
-                else if (_currentTabIndex == 8 && _advancedSettingsView != null)
-                {
-                    _advancedSettingsView.UpdateSync();
-                }
-                else if (_currentTabIndex == 9 && _hotkeySettingsView != null)
-                {
-                    _hotkeySettingsView.UpdateSync();
-                }
-                else if (_currentTabIndex == 10 && _lobbyBgView != null)
-                {
-                    _lobbyBgView.UpdateSync();
+                    activeView.Sync();
                 }
             }
         }
@@ -964,11 +961,12 @@ namespace XingShuRuntime.UI
             GameObject sidebarWrap = XingShuUIFactory.CreateUIObject("Sidebar", parent);
             Place(sidebarWrap, Vector2.zero, Vector2.up, Vector2.zero, new Vector2(18f, 82f), new Vector2(280f, -216f));
             ScrollRect sideScroll = XingShuUIFactory.CreateVerticalScrollView(sidebarWrap, "SidebarScroll", out GameObject sidebar);
+            sideScroll.scrollSensitivity = 36f;
             Transform sbBar = sideScroll.transform.Find("VerticalScrollbar");
             if (sbBar != null) sbBar.gameObject.SetActive(false);
             VerticalLayoutGroup layout = sidebar.GetComponent<VerticalLayoutGroup>();
             layout.padding = new RectOffset(4, 6, 8, 8);
-            layout.spacing = 9f; layout.childAlignment = TextAnchor.UpperCenter;
+            layout.spacing = 6f; layout.childAlignment = TextAnchor.UpperCenter;
             layout.childControlWidth = true; layout.childControlHeight = true;
             layout.childForceExpandWidth = true; layout.childForceExpandHeight = false;
 
@@ -994,7 +992,7 @@ namespace XingShuRuntime.UI
 
                 GameObject tab = XingShuUIFactory.CreateUIObject("Tab_" + tabId, sidebar);
                 LayoutElement le = tab.AddComponent<LayoutElement>();
-                le.minHeight = 52f; le.preferredHeight = 52f; le.flexibleHeight = 0f;
+                le.minHeight = 44f; le.preferredHeight = 44f; le.flexibleHeight = 0f;
                 Image image = tab.AddComponent<Image>();
                 image.sprite = tabId == _currentTabIndex ? selected : normal; image.type = Image.Type.Sliced; image.color = Color.white;
 
@@ -1002,9 +1000,9 @@ namespace XingShuRuntime.UI
                 dotImg.preserveAspect = true;
                 dotImg.raycastTarget = false;
                 XingShuNativeGameUI.Bind(dotImg, XingShuNativeSprite.TabDot, Image.Type.Simple, true, Color.white);
-                Place(dotImg.gameObject, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(18f, 0f), new Vector2(15f, 15f));
+                Place(dotImg.gameObject, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(18f, 0f), new Vector2(14f, 14f));
 
-                Text text = XingShuUIFactory.CreateText(tab, "Text", TAB_NAMES[tabId], 20, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
+                Text text = XingShuUIFactory.CreateText(tab, "Text", TAB_NAMES[tabId], 18, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
                 text.rectTransform.anchorMin = Vector2.zero; text.rectTransform.anchorMax = Vector2.one;
                 text.rectTransform.offsetMin = new Vector2(44f, 0f); text.rectTransform.offsetMax = new Vector2(-8f, 0f);
                 text.raycastTarget = false;
@@ -1038,53 +1036,56 @@ namespace XingShuRuntime.UI
             caRt.offsetMin = new Vector2(28f, 84f);
             caRt.offsetMax = new Vector2(-28f, -84f);
 
-            // 1. 游戏加速页面 (Active Feature - Tab 0)
-            _gameSpeedView = new XingShuGameSpeedView(_contentArea.transform);
+            _tabViews.Clear();
 
-            // 2. 局内手牌监视页面 (Active Feature - Tab 1)
-            _handCardView = new XingShuHandCardView(_contentArea.transform);
-            _handCardView.Root.SetActive(false);
+            RegisterTabView(0, TabAvailable(0) ? (_gameSpeedView = new XingShuGameSpeedView(_contentArea.transform)).Root : null,
+                () => _gameSpeedView?.UpdateSync());
+            RegisterTabView(1, TabAvailable(1) ? (_handCardView = new XingShuHandCardView(_contentArea.transform)).Root : null,
+                () => _handCardView?.UpdateSync());
+            RegisterTabView(2, TabAvailable(2) ? (_knockbackView = new XingShuKnockbackView(_contentArea.transform)).Root : null,
+                () => _knockbackView?.UpdateSync());
+            RegisterTabView(11, TabAvailable(11) ? (_monsterTargetView = new XingShuMonsterTargetView(_contentArea.transform)).Root : null,
+                () => _monsterTargetView?.UpdateSync());
+            RegisterTabView(12, TabAvailable(12) ? (_monsterCooldownView = new XingShuMonsterCooldownView(_contentArea.transform)).Root : null,
+                () => _monsterCooldownView?.UpdateSync());
+            RegisterTabView(13, TabAvailable(13) ? (_defenseHintView = new XingShuDefenseHintView(_contentArea.transform)).Root : null,
+                () => _defenseHintView?.UpdateSync());
+            RegisterTabView(14, TabAvailable(14) ? (_battleCardHintView = new XingShuBattleCardHintView(_contentArea.transform)).Root : null,
+                () => _battleCardHintView?.UpdateSync());
+            RegisterTabView(15, TabAvailable(15) ? (_megathDamageView = new XingShuMegathDamageView(_contentArea.transform)).Root : null,
+                () => _megathDamageView?.UpdateSync());
+            RegisterTabView(16, TabAvailable(16) ? (_playerCombatHudView = new XingShuPlayerCombatHudView(_contentArea.transform)).Root : null,
+                () => _playerCombatHudView?.UpdateSync());
+            RegisterTabView(17, TabAvailable(17) ? (_playerStarBuffView = new XingShuPlayerStarBuffView(_contentArea.transform)).Root : null,
+                () => _playerStarBuffView?.UpdateSync());
+            RegisterTabView(6, TabAvailable(6) ? (_actionGuardView = new XingShuActionGuardView(_contentArea.transform)).Root : null,
+                () => _actionGuardView?.UpdateSync());
+            RegisterTabView(18, TabAvailable(18) ? (_quickThanksView = new XingShuQuickThanksView(_contentArea.transform)).Root : null,
+                () => _quickThanksView?.UpdateSync());
+            RegisterTabView(19, TabAvailable(19) ? (_avatarPraiseView = new XingShuAvatarPraiseView(_contentArea.transform)).Root : null,
+                () => _avatarPraiseView?.UpdateSync());
+            RegisterTabView(20, TabAvailable(20) ? (_starCoinShopView = new XingShuStarCoinShopView(_contentArea.transform)).Root : null,
+                () => _starCoinShopView?.UpdateSync());
+            RegisterTabView(21, TabAvailable(21) ? (_settlementShotView = new XingShuSettlementShotView(_contentArea.transform)).Root : null,
+                () => _settlementShotView?.UpdateSync());
+            RegisterTabView(22, TabAvailable(22) ? (_selectRoleMapView = new XingShuSelectRoleMapView(_contentArea.transform)).Root : null,
+                () => _selectRoleMapView?.UpdateSync());
+            RegisterTabView(7, TabAvailable(7) ? (_battleStatsView = new XingShuBattleStatsView(_contentArea.transform)).Root : null,
+                () => _battleStatsView?.UpdateSync());
+            RegisterTabView(5, TabAvailable(5) ? (_freeCameraView = new XingShuFreeCameraView(_contentArea.transform)).Root : null,
+                () => _freeCameraView?.UpdateSync());
+            RegisterTabView(4, TabAvailable(4) ? (_replayView = new XingShuReplayView(_contentArea.transform)).Root : null,
+                () => _replayView?.UpdateSync());
+            RegisterTabView(10, TabAvailable(10) ? (_lobbyBgView = new XingShuLobbyBgView(_contentArea.transform)).Root : null,
+                () => _lobbyBgView?.UpdateSync());
+            RegisterTabView(3, TabAvailable(3) ? (_staticPortraitView = new XingShuStaticPortraitView(_contentArea.transform)).Root : null,
+                () => _staticPortraitView?.UpdateSync());
 
-            // 3. 击飞预测页面 (Active Feature - Tab 2)
-            _knockbackView = new XingShuKnockbackView(_contentArea.transform);
-            _knockbackView.Root.SetActive(false);
-
-            // 4. 静态立绘页面 (Active Feature - Tab 3, 仅移动端挂载)
-            if (TabAvailable(3))
-            {
-                _staticPortraitView = new XingShuStaticPortraitView(_contentArea.transform);
-                _staticPortraitView.Root.SetActive(false);
-            }
-
-            // 4. 录像回放页面 (Active Feature - Tab 4)
-            _replayView = new XingShuReplayView(_contentArea.transform);
-            _replayView.Root.SetActive(false);
-
-            // 5. 自由镜头页面 (Active Feature - Tab 5)
-            _freeCameraView = new XingShuFreeCameraView(_contentArea.transform);
-            _freeCameraView.Root.SetActive(false);
-
-            // 6. 自动化与社交 (战局守护) 页面 (Active Feature - Tab 6)
-            _actionGuardView = new XingShuActionGuardView(_contentArea.transform);
-            _actionGuardView.Root.SetActive(false);
-
-            // 7. 对局数据页面 (Active Feature - Tab 7)
-            _battleStatsView = new XingShuBattleStatsView(_contentArea.transform);
-            _battleStatsView.Root.SetActive(false);
-
-            // 8. 高级设置页面 (Active Feature - Tab 8)
             _advancedSettingsView = new XingShuAdvancedSettingsView(_contentArea.transform);
-            _advancedSettingsView.Root.SetActive(false);
+            RegisterTabView(8, _advancedSettingsView.Root, () => _advancedSettingsView?.UpdateSync());
 
             _hotkeySettingsView = new XingShuHotkeySettingsView(_contentArea.transform);
-            _hotkeySettingsView.Root.SetActive(false);
-
-            // 10. 自定义大厅背景页面 (Active Feature - Tab 10)
-            if (TabAvailable(10))
-            {
-                _lobbyBgView = new XingShuLobbyBgView(_contentArea.transform);
-                _lobbyBgView.Root.SetActive(false);
-            }
+            RegisterTabView(9, _hotkeySettingsView.Root, () => _hotkeySettingsView?.UpdateSync());
 
             // 占位提示页面 (Coming Soon)
             _comingSoonView = XingShuUIFactory.CreateUIObject("Page_ComingSoon", _contentArea);
@@ -1111,31 +1112,38 @@ namespace XingShuRuntime.UI
             _comingSoonView.SetActive(false);
         }
 
+        private void RegisterTabView(int tabId, GameObject root, Action sync)
+        {
+            if (root == null) return;
+            root.SetActive(tabId == _currentTabIndex);
+            _tabViews[tabId] = (root, sync);
+        }
+
         private static bool TabAvailable(int index)
         {
             switch (index)
             {
                 case 0: return LauncherModules.CanLoad("GameSpeedControllerGUI");
                 case 1: return LauncherModules.CanLoad("HandCardDisplayManager");
-                case 2: return LauncherModules.CanLoad("MonsterKillProbability")
-                    || LauncherModules.CanLoad("DefensePointHint")
-                    || LauncherModules.CanLoad("MonsterTargetRuntime")
-                    || LauncherModules.CanLoad("MonsterCooldownRuntime")
-                    || LauncherModules.CanLoad("BattleCardPointHint")
-                    || LauncherModules.CanLoad("MegathSkillDamageHint")
-                    || LauncherModules.CanLoad("PlayerCombatStatusHud")
-                    || LauncherModules.CanLoad("PlayerStarBuffHud");
+                case 2: return LauncherModules.CanLoad("MonsterKillProbability");
                 case 3: return XingShuMobileUIHelper.IsMobile && LauncherModules.CanLoad("StaticPortraitGUI");
                 case 4: return LauncherModules.CanLoad("ReplayPlayerGUI");
                 case 5: return LauncherModules.CanLoad("MapCameraGUI");
-                case 6: return LauncherModules.CanLoad("AutoResetActionTimeGUI")
-                    || LauncherModules.CanLoad("XingShuAutoThanks")
-                    || LauncherModules.CanLoad("XingShuAutoPraise")
-                    || LauncherModules.CanLoad("DailyStarCoinShop")
-                    || LauncherModules.CanLoad("SettlementScreenshot")
-                    || LauncherModules.CanLoad("SelectRoleMapNameHint");
+                case 6: return LauncherModules.CanLoad("AutoResetActionTimeGUI");
                 case 7: return LauncherModules.CanLoad("BattleStatsOverlay");
                 case 10: return LauncherModules.CanLoad("CustomLobbyBackground");
+                case 11: return LauncherModules.CanLoad("MonsterTargetRuntime");
+                case 12: return LauncherModules.CanLoad("MonsterCooldownRuntime");
+                case 13: return LauncherModules.CanLoad("DefensePointHint");
+                case 14: return LauncherModules.CanLoad("BattleCardPointHint");
+                case 15: return LauncherModules.CanLoad("MegathSkillDamageHint");
+                case 16: return LauncherModules.CanLoad("PlayerCombatStatusHud");
+                case 17: return LauncherModules.CanLoad("PlayerStarBuffHud");
+                case 18: return LauncherModules.CanLoad("XingShuAutoThanks");
+                case 19: return LauncherModules.CanLoad("XingShuAutoPraise");
+                case 20: return LauncherModules.CanLoad("DailyStarCoinShop");
+                case 21: return LauncherModules.CanLoad("SettlementScreenshot");
+                case 22: return LauncherModules.CanLoad("SelectRoleMapNameHint");
                 default: return true;
             }
         }
@@ -1200,50 +1208,27 @@ namespace XingShuRuntime.UI
                 if (entry.Label != null)
                 {
                     entry.Label.color = Color.white;
-                    entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 22 : 20;
+                    entry.Label.fontSize = XingShuMobileUIHelper.IsMobile ? 20 : 18;
                     entry.Label.fontStyle = FontStyle.Bold;
                 }
             }
 
-            if (_gameSpeedView != null) _gameSpeedView.Root.SetActive(index == 0);
-            if (_handCardView != null) _handCardView.Root.SetActive(index == 1);
-            if (_knockbackView != null) _knockbackView.Root.SetActive(index == 2);
-            if (_staticPortraitView != null) _staticPortraitView.Root.SetActive(index == 3);
-            if (_replayView != null) _replayView.Root.SetActive(index == 4);
-            if (_freeCameraView != null) _freeCameraView.Root.SetActive(index == 5);
-            if (_actionGuardView != null) _actionGuardView.Root.SetActive(index == 6);
-            if (_battleStatsView != null)
+            foreach (var kv in _tabViews)
             {
-                _battleStatsView.Root.SetActive(index == 7);
-                if (index == 7)
+                bool active = kv.Key == index;
+                if (kv.Value.Root != null && kv.Value.Root.activeSelf != active)
                 {
-                    _battleStatsView.UpdateSync();
+                    kv.Value.Root.SetActive(active);
                 }
             }
-            if (_advancedSettingsView != null)
+            if (_tabViews.TryGetValue(index, out var currentView) && currentView.Sync != null)
             {
-                _advancedSettingsView.Root.SetActive(index == 8);
-                if (index == 8)
-                {
-                    _advancedSettingsView.UpdateSync();
-                }
-            }
-
-            if (_hotkeySettingsView != null)
-            {
-                _hotkeySettingsView.Root.SetActive(index == 9);
-                if (index == 9) _hotkeySettingsView.UpdateSync();
-            }
-
-            if (_lobbyBgView != null)
-            {
-                _lobbyBgView.Root.SetActive(index == 10);
-                if (index == 10) _lobbyBgView.UpdateSync();
+                currentView.Sync();
             }
 
             if (_comingSoonView != null)
             {
-                bool isComingSoon = index < 0 || index >= TAB_NAMES.Length;
+                bool isComingSoon = index < 0 || index >= TAB_NAMES.Length || !_tabViews.ContainsKey(index);
                 _comingSoonView.SetActive(isComingSoon);
                 if (isComingSoon && _comingSoonText != null)
                 {

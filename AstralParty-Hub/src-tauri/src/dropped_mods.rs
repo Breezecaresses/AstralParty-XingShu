@@ -2477,6 +2477,18 @@ fn install_dropped_in_locked_root_with_password(
         if tx.state != "COMPLETED" {
             return Err(HubError::transaction_error("模组安装事务未完成。"));
         }
+        let receipt_files: Vec<DroppedModReceiptFile> = inspect
+            .matched_files
+            .iter()
+            .enumerate()
+            .map(|(index, m)| DroppedModReceiptFile {
+                index,
+                target: m.target_rel.clone(),
+                mod_sha256: m.sha256.clone(),
+                baseline_sha256: m.current_sha256.clone(),
+                is_catalog: m.is_catalog,
+            })
+            .collect();
         let receipt = DroppedModReceipt {
             mod_id: inspect.mod_id.clone(),
             name: inspect.display_name.clone(),
@@ -2485,7 +2497,7 @@ fn install_dropped_in_locked_root_with_password(
             installed_at: Utc::now().to_rfc3339(),
             transaction_id: Some(tx.id.clone()),
             backup_id: tx.backup_id.clone(),
-            files: Vec::new(),
+            files: receipt_files,
             archive_sha256: Some(sha256_hex(&raw)),
         };
         save_receipt(root, &receipt)?;

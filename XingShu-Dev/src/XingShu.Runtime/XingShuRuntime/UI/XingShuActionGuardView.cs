@@ -1,6 +1,3 @@
-using System;
-using XingShuRuntime.Core;
-using XingShuRuntime.Social;
 using XingShuRuntime.Utilities;
 using UnityEngine;
 using UnityEngine.UI;
@@ -8,21 +5,18 @@ using UnityEngine.UI;
 namespace XingShuRuntime.UI
 {
     /// <summary>
-    /// 功能中心 - 战局守护与原生快捷通信 (ActionTimeGuard & Native Social) Modern UI 页面 (Phase 2D-5B)
-    /// 遵循 Route A 迁移路线：纯 UGUI View，绝不直连网络、不创建 Socket、不直接操作 RPC 回调
-    /// 彻底取代陈旧 IMGUI Window (987656)，以现代卡片化结构呈现状态监控、主开关与原生快捷通信
+    /// 功能中心 - 战局守护 (ActionTimeGuard) Standalone UI 页面 (Tab Index 6)
+    /// 纯粹的 UI View，只保留战局守护自身的总开关、实时监控看板与运行机制卡片
     /// </summary>
     internal sealed class XingShuActionGuardView
     {
         private readonly GameObject _root;
 
-        // Card 1: 顶部主功能与状态卡片
         private Toggle _enableToggle;
         private Image _statusBadgeBg;
         private Text _statusBadgeText;
         private Text _statusDetailText;
 
-        // Card 2: 监控看板指标文本
         private Text _rpcStatusText;
         private Text _battleStatusText;
         private Text _interceptCountText;
@@ -30,21 +24,6 @@ namespace XingShuRuntime.UI
         private Text _reconnectCountText;
         private Text _antiCheatStatusText;
 
-        // Card 4: 原生快捷通信卡片 & 选人地图提示
-        private Toggle _autoThanksToggle;
-        private Toggle _autoPraiseToggle;
-        private Slider _praiseScaleSlider, _praiseOffsetXSlider, _praiseOffsetYSlider;
-        private Text _praiseScaleValueText, _praiseOffsetXText, _praiseOffsetYText, _praiseParamText;
-        private Toggle _dailyShopToggle;
-        private Text _dailyShopStatus;
-        private Toggle _settlementScreenshotToggle;
-        private Text _settlementScreenshotPathText;
-        private Toggle _selectRoleMapToggle;
-        private Toggle _selectRoleMapLockToggle;
-        private Slider _selectRoleMapScaleSlider, _selectRoleMapXSlider, _selectRoleMapYSlider;
-        private Text _selectRoleMapScaleText, _selectRoleMapXText, _selectRoleMapYText;
-
-        // 缓存观测值 (0 GC / 仅状态变化时更新 UI)
         private float _lastSyncTime;
         private bool _lastObservedEnabled;
         private bool _lastObservedBattle;
@@ -53,167 +32,87 @@ namespace XingShuRuntime.UI
         private int _lastObservedReconnectCount = -1;
         private string _lastObservedInterceptTime = "";
         private long _lastObservedRoomId = -1L;
-        private bool _suppressCallbacks = false;
+        private bool _suppressCallbacks;
 
         internal GameObject Root => _root;
 
         internal XingShuActionGuardView(Transform parent)
         {
             _root = XingShuUIFactory.CreateUIObject("Page_ActionGuard", parent.gameObject);
-            RectTransform rootRt = _root.GetComponent<RectTransform>();
-            rootRt.anchorMin = Vector2.zero;
-            rootRt.anchorMax = Vector2.one;
-            rootRt.offsetMin = Vector2.zero;
-            rootRt.offsetMax = Vector2.zero;
-
             BuildUI();
         }
 
         private void BuildUI()
         {
-            Sprite cardBaseSprite = XingShuUIAssetService.GetSprite("card_base.png");
-            Sprite cfhSprite = XingShuUIAssetService.GetSprite("card_feature_header.png");
+            XingShuViewCardHelper.CreatePageScroll(_root, "AutomationScroll", out GameObject content);
 
-            // ==========================================
-            // 1. 顶部主功能与状态卡片 (Card 1: 112px)
-            // ==========================================
-            GameObject card1 = XingShuUIFactory.CreateUIObject("Card_HeaderStatus", _root);
-            RectTransform c1Rt = card1.GetComponent<RectTransform>();
-            c1Rt.anchorMin = new Vector2(0f, 1f);
-            c1Rt.anchorMax = new Vector2(1f, 1f);
-            c1Rt.pivot = new Vector2(0.5f, 1f);
-            c1Rt.anchoredPosition = Vector2.zero;
-            c1Rt.sizeDelta = new Vector2(0f, 112f);
+            // 1. 顶部主功能与状态卡片
+            GameObject card1 = XingShuViewCardHelper.CreateCardContainer(content, "Card_HeaderStatus", 112f, featureHeader: true);
 
-            Image c1Bg = card1.AddComponent<Image>();
-            c1Bg.sprite = cfhSprite;
-            c1Bg.type = Image.Type.Sliced;
-            c1Bg.color = XingShuUIAssetService.IsFallbackSprite(cfhSprite) ? XingShuUITheme.CardFeatureBase : Color.white;
-
-            // 标题 "战局守护"
             Text titleText = XingShuUIFactory.CreateText(card1, "Title", "战局守护", 20, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform ttRt = titleText.rectTransform;
-            ttRt.anchorMin = new Vector2(0f, 1f);
-            ttRt.anchorMax = new Vector2(0f, 1f);
-            ttRt.pivot = new Vector2(0f, 1f);
-            ttRt.anchoredPosition = new Vector2(24f, -14f);
-            ttRt.sizeDelta = new Vector2(240f, 26f);
+            XingShuViewCardHelper.PlaceTopLeft(titleText.rectTransform, new Vector2(24f, -14f), new Vector2(240f, 26f));
 
-            // 副标题 "超时保护 · 战局状态恢复"
             Text subText = XingShuUIFactory.CreateText(card1, "Subtitle", "超时保护 · 战局状态恢复", 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            RectTransform stRt = subText.rectTransform;
-            stRt.anchorMin = new Vector2(0f, 1f);
-            stRt.anchorMax = new Vector2(0f, 1f);
-            stRt.pivot = new Vector2(0f, 1f);
-            stRt.anchoredPosition = new Vector2(24f, -40f);
-            stRt.sizeDelta = new Vector2(360f, 20f);
+            XingShuViewCardHelper.PlaceTopLeft(subText.rectTransform, new Vector2(24f, -44f), new Vector2(360f, 20f));
 
-            // 状态徽章 (右上角)
             GameObject badgeGo = XingShuUIFactory.CreateUIObject("StatusBadge", card1);
-            RectTransform badgeRt = badgeGo.GetComponent<RectTransform>();
-            badgeRt.anchorMin = new Vector2(1f, 1f);
-            badgeRt.anchorMax = new Vector2(1f, 1f);
-            badgeRt.pivot = new Vector2(1f, 1f);
-            badgeRt.anchoredPosition = new Vector2(-24f, -14f);
-            badgeRt.sizeDelta = new Vector2(180f, 26f);
+            RectTransform bRt = badgeGo.GetComponent<RectTransform>();
+            bRt.anchorMin = bRt.anchorMax = new Vector2(1f, 1f);
+            bRt.pivot = new Vector2(1f, 1f);
+            bRt.anchoredPosition = new Vector2(-24f, -16f);
+            bRt.sizeDelta = new Vector2(160f, 28f);
 
             _statusBadgeBg = badgeGo.AddComponent<Image>();
-            _statusBadgeBg.sprite = cardBaseSprite;
+            _statusBadgeBg.sprite = XingShuUIAssetService.GetSprite("status_badge.png");
             _statusBadgeBg.type = Image.Type.Sliced;
             _statusBadgeBg.color = new Color(0.12f, 0.16f, 0.22f, 0.85f);
 
-            _statusBadgeText = XingShuUIFactory.CreateText(badgeGo, "Text", "已关闭", 12, XingShuUITheme.MutedText, TextAnchor.MiddleCenter, FontStyle.Bold);
+            _statusBadgeText = XingShuUIFactory.CreateText(badgeGo, "BadgeText", "初始化...", 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleCenter, FontStyle.Bold);
             RectTransform sbtRt = _statusBadgeText.rectTransform;
             sbtRt.anchorMin = Vector2.zero;
             sbtRt.anchorMax = Vector2.one;
             sbtRt.offsetMin = Vector2.zero;
             sbtRt.offsetMax = Vector2.zero;
 
-            // 启用战局守护总开关 (Toggle, 左下角)
             _enableToggle = XingShuUIFactory.CreateToggle(card1, "EnableToggle", "启用战局守护", AutoResetActionTimeGUI.IsEnabled, OnToggleValueChanged);
             RectTransform toggleRt = _enableToggle.GetComponent<RectTransform>();
-            toggleRt.anchorMin = new Vector2(0f, 0f);
-            toggleRt.anchorMax = new Vector2(0f, 0f);
-            toggleRt.pivot = new Vector2(0f, 0f);
+            toggleRt.anchorMin = toggleRt.anchorMax = toggleRt.pivot = Vector2.zero;
             toggleRt.anchoredPosition = new Vector2(24f, 12f);
             toggleRt.sizeDelta = new Vector2(220f, 32f);
 
-            // 状态说明文字 (右下角)
             _statusDetailText = XingShuUIFactory.CreateText(card1, "StatusDetail", "战局中自动拦截服务端超时踢出协议并恢复同步；设置自动保存", 12, XingShuUITheme.MutedText, TextAnchor.MiddleRight);
             RectTransform sdtRt = _statusDetailText.rectTransform;
-            sdtRt.anchorMin = new Vector2(1f, 0f);
-            sdtRt.anchorMax = new Vector2(1f, 0f);
-            sdtRt.pivot = new Vector2(1f, 0f);
+            sdtRt.anchorMin = sdtRt.anchorMax = sdtRt.pivot = new Vector2(1f, 0f);
             sdtRt.anchoredPosition = new Vector2(-24f, 18f);
             sdtRt.sizeDelta = new Vector2(400f, 20f);
 
-            // ==========================================
-            // 2. 防护状态看板卡片 (Card 2: 160px, y: -118)
-            // ==========================================
-            GameObject card2 = XingShuUIFactory.CreateUIObject("Card_Dashboard", _root);
-            RectTransform c2Rt = card2.GetComponent<RectTransform>();
-            c2Rt.anchorMin = new Vector2(0f, 1f);
-            c2Rt.anchorMax = new Vector2(1f, 1f);
-            c2Rt.pivot = new Vector2(0.5f, 1f);
-            c2Rt.anchoredPosition = new Vector2(0f, -118f);
-            c2Rt.sizeDelta = new Vector2(0f, 160f);
+            // 2. 防护状态看板卡片
+            GameObject card2 = XingShuViewCardHelper.CreateCardContainer(content, "Card_Dashboard", 160f);
 
-            Image c2Bg = card2.AddComponent<Image>();
-            c2Bg.sprite = cardBaseSprite;
-            c2Bg.type = Image.Type.Sliced;
-            c2Bg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-
-            // 卡片标题
             Text c2Title = XingShuUIFactory.CreateText(card2, "Card2Title", "防护状态看板", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform c2tRt = c2Title.rectTransform;
-            c2tRt.anchorMin = new Vector2(0f, 1f);
-            c2tRt.anchorMax = new Vector2(0f, 1f);
-            c2tRt.pivot = new Vector2(0f, 1f);
-            c2tRt.anchoredPosition = new Vector2(20f, -12f);
-            c2tRt.sizeDelta = new Vector2(260f, 22f);
+            XingShuViewCardHelper.PlaceTopLeft(c2Title.rectTransform, new Vector2(20f, -12f), new Vector2(260f, 22f));
 
-            // 列 1 (左侧指标, x: 20, width: 380)
             BuildMetricRow(card2, "超时协议保护", out _rpcStatusText, 20f, -38f, 380f);
             BuildMetricRow(card2, "累计拦截次数", out _interceptCountText, 20f, -68f, 380f);
             BuildMetricRow(card2, "累计恢复同步", out _reconnectCountText, 20f, -98f, 380f);
 
-            // 列 2 (右侧指标, x: 440, width: 380)
             BuildMetricRow(card2, "战局运行状态", out _battleStatusText, 440f, -38f, 380f);
             BuildMetricRow(card2, "最近拦截时间", out _lastInterceptTimeText, 440f, -68f, 380f);
             BuildMetricRow(card2, "防作弊与挂机", out _antiCheatStatusText, 440f, -98f, 380f);
 
-            // 看板底部说明 (11px, MutedText)
             Text noteText = XingShuUIFactory.CreateText(card2, "DashboardNote", "核心防护钩子由本地战局守护维持，对局异常时自动执行无感状态同步", 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
             RectTransform ntRt = noteText.rectTransform;
-            ntRt.anchorMin = new Vector2(0f, 0f);
+            ntRt.anchorMin = Vector2.zero;
             ntRt.anchorMax = new Vector2(1f, 0f);
             ntRt.pivot = new Vector2(0.5f, 0f);
             ntRt.anchoredPosition = new Vector2(0f, 8f);
             ntRt.sizeDelta = new Vector2(-40f, 18f);
 
-            // ==========================================
-            // 3. 运行机制说明卡片 (Card 3: 92px, y: -286)
-            // ==========================================
-            GameObject card3 = XingShuUIFactory.CreateUIObject("Card_Mechanism", _root);
-            RectTransform c3Rt = card3.GetComponent<RectTransform>();
-            c3Rt.anchorMin = new Vector2(0f, 1f);
-            c3Rt.anchorMax = new Vector2(1f, 1f);
-            c3Rt.pivot = new Vector2(0.5f, 1f);
-            c3Rt.anchoredPosition = new Vector2(0f, -286f);
-            c3Rt.sizeDelta = new Vector2(0f, 92f);
-
-            Image c3Bg = card3.AddComponent<Image>();
-            c3Bg.sprite = cardBaseSprite;
-            c3Bg.type = Image.Type.Sliced;
-            c3Bg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
+            // 3. 运行机制说明卡片
+            GameObject card3 = XingShuViewCardHelper.CreateCardContainer(content, "Card_Mechanism", 104f);
 
             Text c3Title = XingShuUIFactory.CreateText(card3, "Card3Title", "运行机制说明", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform c3tRt = c3Title.rectTransform;
-            c3tRt.anchorMin = new Vector2(0f, 1f);
-            c3tRt.anchorMax = new Vector2(0f, 1f);
-            c3tRt.pivot = new Vector2(0f, 1f);
-            c3tRt.anchoredPosition = new Vector2(20f, -12f);
-            c3tRt.sizeDelta = new Vector2(260f, 22f);
+            XingShuViewCardHelper.PlaceTopLeft(c3Title.rectTransform, new Vector2(20f, -12f), new Vector2(260f, 22f));
 
             string mechanismContent =
                 "• 超时协议拦截：当对局出现超时踢出指令时，战局守护按既定逻辑拦截并请求房间全量无感同步。\n" +
@@ -222,322 +121,23 @@ namespace XingShuRuntime.UI
 
             Text mechTxt = XingShuUIFactory.CreateText(card3, "MechanismContent", mechanismContent, 11, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
             RectTransform mtRt = mechTxt.rectTransform;
-            mtRt.anchorMin = new Vector2(0f, 0f);
-            mtRt.anchorMax = new Vector2(1f, 1f);
+            mtRt.anchorMin = Vector2.zero;
+            mtRt.anchorMax = Vector2.one;
             mtRt.pivot = new Vector2(0f, 1f);
-            mtRt.offsetMin = new Vector2(20f, 6f);
+            mtRt.offsetMin = new Vector2(20f, 8f);
             mtRt.offsetMax = new Vector2(-20f, -34f);
 
-            // ==========================================
-            // 4A. 原生快捷通信 - 自动致谢独立卡片 (Card 4A: 68px, y: -386)
-            // ==========================================
-            GameObject cardThanks = XingShuUIFactory.CreateUIObject("Card_AutoThanks", _root);
-            RectTransform ctRt = cardThanks.GetComponent<RectTransform>();
-            ctRt.anchorMin = new Vector2(0f, 1f);
-            ctRt.anchorMax = new Vector2(1f, 1f);
-            ctRt.pivot = new Vector2(0.5f, 1f);
-            ctRt.anchoredPosition = new Vector2(0f, -386f);
-            ctRt.sizeDelta = new Vector2(0f, 68f);
-
-            Image ctBg = cardThanks.AddComponent<Image>();
-            ctBg.sprite = cardBaseSprite;
-            ctBg.type = Image.Type.Sliced;
-            ctBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-
-            Text ctTitle = XingShuUIFactory.CreateText(cardThanks, "ThanksTitle", "自动致谢", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform cttRt = ctTitle.rectTransform;
-            cttRt.anchorMin = new Vector2(0f, 1f);
-            cttRt.anchorMax = new Vector2(0f, 1f);
-            cttRt.pivot = new Vector2(0f, 1f);
-            cttRt.anchoredPosition = new Vector2(20f, -12f);
-            cttRt.sizeDelta = new Vector2(200f, 22f);
-
-            Text ctDesc = XingShuUIFactory.CreateText(cardThanks, "ThanksDesc", "收到卡牌 / 星币 / 治疗时自动触发游戏原生致谢回复", 11, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            RectTransform ctdRt = ctDesc.rectTransform;
-            ctdRt.anchorMin = new Vector2(0f, 1f);
-            ctdRt.anchorMax = new Vector2(0f, 1f);
-            ctdRt.pivot = new Vector2(0f, 1f);
-            ctdRt.anchoredPosition = new Vector2(20f, -38f);
-            ctdRt.sizeDelta = new Vector2(500f, 20f);
-
-            _autoThanksToggle = XingShuUIFactory.CreateToggle(cardThanks, "AutoThanksToggle", "开启", XingShuAutoThanks.IsEnabled, (v) => { if (!_suppressCallbacks) XingShuAutoThanks.IsEnabled = v; });
-            RectTransform atRt = _autoThanksToggle.GetComponent<RectTransform>();
-            atRt.anchorMin = new Vector2(1f, 0.5f);
-            atRt.anchorMax = new Vector2(1f, 0.5f);
-            atRt.pivot = new Vector2(1f, 0.5f);
-            atRt.anchoredPosition = new Vector2(-20f, 0f);
-            atRt.sizeDelta = new Vector2(130f, 32f);
-
-            // ==========================================
-            // 4B. 头像点赞与大小设置
-            // ==========================================
-            GameObject cardPraise = XingShuUIFactory.CreateUIObject("Card_AutoPraise", _root);
-            RectTransform cpRt = cardPraise.GetComponent<RectTransform>();
-            cpRt.anchorMin = new Vector2(0f, 1f);
-            cpRt.anchorMax = new Vector2(1f, 1f);
-            cpRt.pivot = new Vector2(0.5f, 1f);
-            cpRt.anchoredPosition = new Vector2(0f, -464f);
-            cpRt.sizeDelta = new Vector2(0f, 276f);
-
-            Image cpBg = cardPraise.AddComponent<Image>();
-            cpBg.sprite = cardBaseSprite;
-            cpBg.type = Image.Type.Sliced;
-            cpBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-
-            Text cpTitle = XingShuUIFactory.CreateText(cardPraise, "PraiseTitle", "头像点赞", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform cptRt = cpTitle.rectTransform;
-            cptRt.anchorMin = new Vector2(0f, 1f);
-            cptRt.anchorMax = new Vector2(0f, 1f);
-            cptRt.pivot = new Vector2(0f, 1f);
-            cptRt.anchoredPosition = new Vector2(20f, -12f);
-            cptRt.sizeDelta = new Vector2(200f, 22f);
-
-            Text cpDesc = XingShuUIFactory.CreateText(cardPraise, "PraiseDesc", "头像旁选择/取消，结算时只为选中的真人玩家点赞", 11, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            RectTransform cpdRt = cpDesc.rectTransform;
-            cpdRt.anchorMin = new Vector2(0f, 1f);
-            cpdRt.anchorMax = new Vector2(0f, 1f);
-            cpdRt.pivot = new Vector2(0f, 1f);
-            cpdRt.anchoredPosition = new Vector2(20f, -36f);
-            cpdRt.sizeDelta = new Vector2(500f, 20f);
-
-            _autoPraiseToggle = XingShuUIFactory.CreateToggle(cardPraise, "AutoPraiseToggle", "开启", XingShuAutoPraise.IsEnabled, (v) => { if (!_suppressCallbacks) XingShuAutoPraise.IsEnabled = v; });
-            RectTransform apRt = _autoPraiseToggle.GetComponent<RectTransform>();
-            apRt.anchorMin = new Vector2(1f, 1f);
-            apRt.anchorMax = new Vector2(1f, 1f);
-            apRt.pivot = new Vector2(1f, 1f);
-            apRt.anchoredPosition = new Vector2(-20f, -10f);
-            apRt.sizeDelta = new Vector2(130f, 32f);
-
-            Text scaleLabel = XingShuUIFactory.CreateText(cardPraise, "PraiseScaleLabel", "点赞图标大小（60%–200%）", 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform pslRt = scaleLabel.rectTransform;
-            pslRt.anchorMin = new Vector2(0f, 1f);
-            pslRt.anchorMax = new Vector2(0f, 1f);
-            pslRt.pivot = new Vector2(0f, 1f);
-            pslRt.anchoredPosition = new Vector2(20f, -62f);
-            pslRt.sizeDelta = new Vector2(260f, 20f);
-
-            _praiseScaleValueText = XingShuUIFactory.CreateText(cardPraise, "PraiseScaleValue", $"{Mathf.RoundToInt(XingShuAutoPraise.PraiseScale * 100f)}%", 13, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            RectTransform psvRt = _praiseScaleValueText.rectTransform;
-            psvRt.anchorMin = new Vector2(1f, 1f);
-            psvRt.anchorMax = new Vector2(1f, 1f);
-            psvRt.pivot = new Vector2(1f, 1f);
-            psvRt.anchoredPosition = new Vector2(-122f, -62f);
-            psvRt.sizeDelta = new Vector2(56f, 20f);
-
-            Button resetPraiseScale = XingShuUIFactory.CreateButton(cardPraise, "ResetPraiseScale", "恢复默认",
-                XingShuUIAssetService.GetSprite("button_secondary.png"), XingShuUITheme.Card, XingShuUITheme.PrimaryText,
-                () => { XingShuAutoPraise.PraiseScale = XingShuConfigKeys.AutoPraiseScaleDefault; SyncPraiseScale(); }, 12);
-            RectTransform resetRt = resetPraiseScale.GetComponent<RectTransform>();
-            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
-            resetRt.pivot = new Vector2(1f, 1f);
-            resetRt.anchoredPosition = new Vector2(-20f, -58f);
-            resetRt.sizeDelta = new Vector2(88f, 30f);
-
-            _praiseScaleSlider = XingShuUIFactory.CreateSlider(cardPraise, "PraiseScaleSlider", XingShuConfigKeys.AutoPraiseScaleMin, XingShuConfigKeys.AutoPraiseScaleMax, XingShuAutoPraise.PraiseScale, OnPraiseScaleSliderChanged);
-            RectTransform pssRt = _praiseScaleSlider.GetComponent<RectTransform>();
-            pssRt.anchorMin = new Vector2(0f, 1f);
-            pssRt.anchorMax = new Vector2(1f, 1f);
-            pssRt.pivot = new Vector2(0.5f, 1f);
-            pssRt.anchoredPosition = new Vector2(0f, -94f);
-            pssRt.sizeDelta = new Vector2(-40f, 28f);
-
-            AddPraiseOffsetRow(cardPraise, "PraiseOffsetX", "点赞 X 偏移", 128f, XingShuConfigKeys.AutoPraiseOffsetMin, XingShuConfigKeys.AutoPraiseOffsetMax,
-                XingShuAutoPraise.OffsetX, v => XingShuAutoPraise.OffsetX = Mathf.Round(v), out _praiseOffsetXSlider, out _praiseOffsetXText);
-            AddPraiseOffsetRow(cardPraise, "PraiseOffsetY", "点赞 Y 偏移", 184f, XingShuConfigKeys.AutoPraiseOffsetMin, XingShuConfigKeys.AutoPraiseOffsetMax,
-                XingShuAutoPraise.OffsetY, v => XingShuAutoPraise.OffsetY = Mathf.Round(v), out _praiseOffsetYSlider, out _praiseOffsetYText);
-
-            _praiseParamText = XingShuUIFactory.CreateText(cardPraise, "PraiseParamSummary", "", 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            var ppRt = _praiseParamText.rectTransform;
-            ppRt.anchorMin = ppRt.anchorMax = ppRt.pivot = new Vector2(0f, 1f);
-            ppRt.anchoredPosition = new Vector2(20f, -242f); ppRt.sizeDelta = new Vector2(460f, 22f);
-
-            Button resetPraisePos = XingShuUIFactory.CreateButton(cardPraise, "ResetPraisePos", "重置位置",
-                XingShuUIAssetService.GetSprite("button_secondary.png"), XingShuUITheme.Card, XingShuUITheme.PrimaryText,
-                () => { XingShuAutoPraise.ResetPosition(); SyncPraiseScale(); }, 12);
-            var rpRt = resetPraisePos.GetComponent<RectTransform>();
-            rpRt.anchorMin = rpRt.anchorMax = rpRt.pivot = new Vector2(1f, 1f);
-            rpRt.anchoredPosition = new Vector2(-20f, -238f); rpRt.sizeDelta = new Vector2(88f, 28f);
-
-            // All automation cards share a scrollable surface cleanly without stray labels.
-            GameObject shopCard = XingShuUIFactory.CreateUIObject("Card_DailyStarCoinShop", _root);
-            shopCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 148f);
-            Image shopBg = shopCard.AddComponent<Image>();
-            shopBg.sprite = cardBaseSprite;
-            shopBg.type = Image.Type.Sliced;
-            shopBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-            Text shopTitle = XingShuUIFactory.CreateText(shopCard, "Title", "每日星币商店", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            PlaceShopText(shopTitle, -12f, 26f);
-            Text shopDesc = XingShuUIFactory.CreateText(shopCard, "Description", "每天登录后处理官方随机货架：先领免费商品，再买完剩余星币商品。\n默认关闭，按游戏账号保存；星币不足时保留未购商品，不兑换其他货币。", 12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            PlaceShopText(shopDesc, -44f, 40f);
-            _dailyShopStatus = XingShuUIFactory.CreateText(shopCard, "Status", DailyStarCoinShop.Status, 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            PlaceShopText(_dailyShopStatus, -98f, 34f);
-            _dailyShopToggle = XingShuUIFactory.CreateToggle(shopCard, "DailyShopToggle", "自动购买", DailyStarCoinShop.IsEnabled,
-                value => { if (!_suppressCallbacks) DailyStarCoinShop.SetEnabled(value); });
-            var shopToggleRt = _dailyShopToggle.GetComponent<RectTransform>();
-            shopToggleRt.anchorMin = shopToggleRt.anchorMax = new Vector2(1f, 1f);
-            shopToggleRt.pivot = new Vector2(1f, 1f);
-            shopToggleRt.anchoredPosition = new Vector2(-20f, -10f);
-            shopToggleRt.sizeDelta = new Vector2(165f, 34f);
-
-            GameObject screenshotCard = XingShuUIFactory.CreateUIObject("Card_AutoSettlementScreenshot", _root);
-            screenshotCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 146f);
-            Image shotBg = screenshotCard.AddComponent<Image>();
-            shotBg.sprite = cardBaseSprite;
-            shotBg.type = Image.Type.Sliced;
-            shotBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-            Text shotTitle = XingShuUIFactory.CreateText(screenshotCard, "Title", "自动结算战绩截图", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            PlaceShopText(shotTitle, -12f, 26f);
-            Text shotDesc = XingShuUIFactory.CreateText(screenshotCard, "Description", "对局结算战绩界面稳定后自动保存 PNG 截图，每局仅保存一次。", 12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            PlaceShopText(shotDesc, -44f, 24f);
-            _settlementScreenshotPathText = XingShuUIFactory.CreateText(screenshotCard, "Status", FormatScreenshotPathSummary(), 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            var spRt = _settlementScreenshotPathText.rectTransform;
-            spRt.anchorMin = new Vector2(0f, 1f);
-            spRt.anchorMax = new Vector2(1f, 1f);
-            spRt.pivot = new Vector2(0f, 1f);
-            spRt.anchoredPosition = new Vector2(20f, -84f);
-#if !XINGSHU_ANDROID_PREVIEW
-            spRt.sizeDelta = new Vector2(-190f, 46f);
-            Button openFolderBtn = XingShuUIFactory.CreateButton(
-                screenshotCard,
-                "OpenScreenshotFolder",
-                "打开截图目录",
-                XingShuUIAssetService.GetSprite("button_secondary.png"),
-                XingShuUITheme.Card,
-                XingShuUITheme.PrimaryText,
-                () => XingShuRuntime.MatchPort.SettlementScreenshot.OpenFolder(),
-                12);
-            var ofRt = openFolderBtn.GetComponent<RectTransform>();
-            ofRt.anchorMin = ofRt.anchorMax = new Vector2(1f, 1f);
-            ofRt.pivot = new Vector2(1f, 1f);
-            ofRt.anchoredPosition = new Vector2(-20f, -90f);
-            ofRt.sizeDelta = new Vector2(140f, 34f);
-#else
-            spRt.sizeDelta = new Vector2(-40f, 46f);
-#endif
-            _settlementScreenshotToggle = XingShuUIFactory.CreateToggle(screenshotCard, "AutoScreenshotToggle", "自动截图", XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled,
-                value => { if (!_suppressCallbacks) XingShuRuntime.MatchPort.SettlementScreenshot.SetEnabled(value); });
-            var shotToggleRt = _settlementScreenshotToggle.GetComponent<RectTransform>();
-            shotToggleRt.anchorMin = shotToggleRt.anchorMax = new Vector2(1f, 1f);
-            shotToggleRt.pivot = new Vector2(1f, 1f);
-            shotToggleRt.anchoredPosition = new Vector2(-20f, -10f);
-            shotToggleRt.sizeDelta = new Vector2(165f, 34f);
-
-            GameObject mapHintCard = XingShuUIFactory.CreateUIObject("Card_SelectRoleMapName", _root);
-            mapHintCard.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 276f);
-            Image mhBg = mapHintCard.AddComponent<Image>();
-            mhBg.sprite = cardBaseSprite;
-            mhBg.type = Image.Type.Sliced;
-            mhBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
-            Text mhTitle = XingShuUIFactory.CreateText(mapHintCard, "Title", "选人地图提示", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            PlaceShopText(mhTitle, -12f, 26f);
-            Text mhDesc = XingShuUIFactory.CreateText(mapHintCard, "Description", "选人界面显示地图名称、模式与 PvE 难度；未锁定时可直接拖动", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            PlaceShopText(mhDesc, -38f, 20f);
-            _selectRoleMapToggle = XingShuUIFactory.CreateToggle(mapHintCard, "SelectRoleMapToggle", "显示地图", SelectRoleMapNameHint.IsEnabled,
-                value => { if (!_suppressCallbacks) SelectRoleMapNameHint.SetEnabled(value); });
-            var mhRt = _selectRoleMapToggle.GetComponent<RectTransform>();
-            mhRt.anchorMin = mhRt.anchorMax = new Vector2(1f, 1f);
-            mhRt.pivot = new Vector2(1f, 1f);
-            mhRt.anchoredPosition = new Vector2(-20f, -10f);
-            mhRt.sizeDelta = new Vector2(165f, 34f);
-
-            _selectRoleMapLockToggle = XingShuUIFactory.CreateToggle(mapHintCard, "SelectRoleMapLockToggle", "锁定位置（禁止拖动）", SelectRoleMapNameHint.Locked,
-                value => { if (!_suppressCallbacks) SelectRoleMapNameHint.SetLocked(value); });
-            var mhlRt = _selectRoleMapLockToggle.GetComponent<RectTransform>();
-            mhlRt.anchorMin = mhlRt.anchorMax = new Vector2(0f, 1f);
-            mhlRt.pivot = new Vector2(0f, 1f);
-            mhlRt.anchoredPosition = new Vector2(20f, -64f);
-            mhlRt.sizeDelta = new Vector2(240f, 32f);
-
-            Button resetMapBtn = XingShuUIFactory.CreateButton(mapHintCard, "ResetSelectRoleMapLayout", "恢复默认",
-                XingShuUIAssetService.GetSprite("button_secondary.png"), XingShuUITheme.Card, XingShuUITheme.PrimaryText,
-                () => { SelectRoleMapNameHint.ResetLayout(); SyncSelectRoleMapControls(); }, 12);
-            var rmRt = resetMapBtn.GetComponent<RectTransform>();
-            rmRt.anchorMin = rmRt.anchorMax = new Vector2(1f, 1f);
-            rmRt.pivot = new Vector2(1f, 1f);
-            rmRt.anchoredPosition = new Vector2(-20f, -64f);
-            rmRt.sizeDelta = new Vector2(104f, 30f);
-
-            AddPercentSliderRow(mapHintCard, "MapScale", "显示大小（60%–180%）", 104f,
-                XingShuConfigKeys.SelectRoleMapNameScaleMin, XingShuConfigKeys.SelectRoleMapNameScaleMax,
-                SelectRoleMapNameHint.Scale,
-                v => { SelectRoleMapNameHint.SetScale(Mathf.Round(v * 20f) / 20f); SyncSelectRoleMapControls(); },
-                out _selectRoleMapScaleSlider, out _selectRoleMapScaleText);
-
-            AddPercentSliderRow(mapHintCard, "MapPosX", "水平位置 X（左 → 右）", 158f,
-                0f, 1f, SelectRoleMapNameHint.PosX,
-                v => { SelectRoleMapNameHint.SetPosition(v, SelectRoleMapNameHint.PosY); SyncSelectRoleMapControls(); },
-                out _selectRoleMapXSlider, out _selectRoleMapXText);
-
-            AddPercentSliderRow(mapHintCard, "MapPosY", "垂直位置 Y（上 → 下）", 212f,
-                0f, 1f, SelectRoleMapNameHint.PosY,
-                v => { SelectRoleMapNameHint.SetPosition(SelectRoleMapNameHint.PosX, v); SyncSelectRoleMapControls(); },
-                out _selectRoleMapYSlider, out _selectRoleMapYText);
-
-            // Clean priority ordering in scrollable automation list:
-            // MapHint -> DailyShop -> SettlementScreenshot -> HeaderStatus -> Dashboard -> AutoThanks -> AutoPraise -> Mechanism
-            mapHintCard.transform.SetAsFirstSibling();
-            shopCard.transform.SetSiblingIndex(1);
-            screenshotCard.transform.SetSiblingIndex(2);
-            card3.transform.SetAsLastSibling();
-
-            bool guardInstalled = XingShuRuntime.Core.LauncherModules.CanLoad("AutoResetActionTimeGUI");
-            card1.SetActive(guardInstalled);
-            card2.SetActive(guardInstalled);
-            card3.SetActive(guardInstalled);
-            cardThanks.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("XingShuAutoThanks"));
-            cardPraise.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("XingShuAutoPraise"));
-            shopCard.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("DailyStarCoinShop"));
-            screenshotCard.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("SettlementScreenshot"));
-            mapHintCard.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("SelectRoleMapNameHint"));
-
-            var cards = new System.Collections.Generic.List<RectTransform>();
-            foreach (Transform child in _root.transform) cards.Add(child.GetComponent<RectTransform>());
-            XingShuUIFactory.CreateVerticalScrollView(_root, "AutomationScroll", out GameObject content);
-            var layout = content.GetComponent<VerticalLayoutGroup>();
-            layout.spacing = 12f;
-            layout.padding = new RectOffset(0, 12, 4, 28);
-            foreach (var card in cards)
-            {
-                float height = card.sizeDelta.y;
-                card.SetParent(content.transform, false);
-                var element = card.gameObject.AddComponent<LayoutElement>();
-                element.preferredHeight = element.minHeight = height;
-                element.flexibleHeight = 0f;
-            }
-        }
-
-        private static string FormatScreenshotPathSummary()
-        {
-            string status = XingShuRuntime.MatchPort.SettlementScreenshot.Status;
-            string lastPath = XingShuRuntime.MatchPort.SettlementScreenshot.LastSavedPath;
-            string folder = XingShuRuntime.MatchPort.SettlementScreenshot.OutputFolder;
-            string target = !string.IsNullOrEmpty(lastPath) ? "最近保存：" + lastPath : "保存目录：" + (folder ?? "未就绪");
-            return status + "\n" + target;
-        }
-
-        private static void PlaceShopText(Text text, float y, float height)
-        {
-            var rt = text.rectTransform;
-            rt.anchorMin = new Vector2(0f, 1f);
-            rt.anchorMax = new Vector2(1f, 1f);
-            rt.pivot = new Vector2(0.5f, 1f);
-            rt.anchoredPosition = new Vector2(0f, y);
-            rt.sizeDelta = new Vector2(-40f, height);
+            UpdateSync();
         }
 
         private void BuildMetricRow(GameObject parent, string label, out Text valueText, float x, float y, float width)
         {
             GameObject rowGo = XingShuUIFactory.CreateUIObject("MetricRow_" + label, parent);
-            RectTransform rt = rowGo.GetComponent<RectTransform>();
-            rt.anchorMin = new Vector2(0f, 1f);
-            rt.anchorMax = new Vector2(0f, 1f);
-            rt.pivot = new Vector2(0f, 1f);
-            rt.anchoredPosition = new Vector2(x, y);
-            rt.sizeDelta = new Vector2(width, 26f);
+            XingShuViewCardHelper.PlaceTopLeft(rowGo.GetComponent<RectTransform>(), new Vector2(x, y), new Vector2(width, 26f));
 
             Text lbl = XingShuUIFactory.CreateText(rowGo, "Label", label + "：", 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
             RectTransform lRt = lbl.rectTransform;
-            lRt.anchorMin = new Vector2(0f, 0f);
+            lRt.anchorMin = Vector2.zero;
             lRt.anchorMax = new Vector2(0f, 1f);
             lRt.pivot = new Vector2(0f, 0.5f);
             lRt.anchoredPosition = Vector2.zero;
@@ -546,7 +146,7 @@ namespace XingShuRuntime.UI
             valueText = XingShuUIFactory.CreateText(rowGo, "Value", "-", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleRight, FontStyle.Bold);
             RectTransform vRt = valueText.rectTransform;
             vRt.anchorMin = new Vector2(1f, 0f);
-            vRt.anchorMax = new Vector2(1f, 1f);
+            vRt.anchorMax = Vector2.one;
             vRt.pivot = new Vector2(1f, 0.5f);
             vRt.anchoredPosition = Vector2.zero;
             vRt.sizeDelta = new Vector2(220f, 0f);
@@ -560,27 +160,8 @@ namespace XingShuRuntime.UI
 
         internal void UpdateSync()
         {
-            // 节流: 每 0.25 秒低频轮询，避免高频字符串拼接与 UI 刷新
-            if (Time.unscaledTime - _lastSyncTime < 0.25f)
-            {
-                return;
-            }
+            if (Time.unscaledTime - _lastSyncTime < 0.25f) return;
             _lastSyncTime = Time.unscaledTime;
-
-            _suppressCallbacks = true;
-            _dailyShopToggle.isOn = DailyStarCoinShop.IsEnabled;
-            _dailyShopToggle.interactable = DailyStarCoinShop.CanConfigure;
-            if (_dailyShopStatus.text != DailyStarCoinShop.Status) _dailyShopStatus.text = DailyStarCoinShop.Status;
-            if (_settlementScreenshotToggle != null) _settlementScreenshotToggle.isOn = XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled;
-            if (_selectRoleMapToggle != null) _selectRoleMapToggle.isOn = SelectRoleMapNameHint.IsEnabled;
-            if (_selectRoleMapLockToggle != null) _selectRoleMapLockToggle.isOn = SelectRoleMapNameHint.Locked;
-            if (_settlementScreenshotPathText != null)
-            {
-                string summary = FormatScreenshotPathSummary();
-                if (_settlementScreenshotPathText.text != summary) _settlementScreenshotPathText.text = summary;
-            }
-            _suppressCallbacks = false;
-            SyncSelectRoleMapControls();
 
             bool enabled = AutoResetActionTimeGUI.IsEnabled;
             bool isBattle = AutoResetActionTimeGUI.IsInBattle;
@@ -590,7 +171,6 @@ namespace XingShuRuntime.UI
             string lastIntercept = AutoResetActionTimeGUI.LastInterceptTime;
             long roomId = AutoResetActionTimeGUI.CurrentRoomId;
 
-            // 1. 同步 Toggle 状态
             if (enabled != _lastObservedEnabled)
             {
                 _lastObservedEnabled = enabled;
@@ -602,37 +182,30 @@ namespace XingShuRuntime.UI
                 }
             }
 
-            // 2. 同步状态徽章与主卡片文字 (四种离散状态)
-            bool stateChanged = (enabled != _lastObservedEnabled) || (isBattle != _lastObservedBattle) || (hookRegistered != _lastObservedHook);
-            if (stateChanged)
+            if (_statusBadgeText != null)
             {
                 _lastObservedBattle = isBattle;
                 _lastObservedHook = hookRegistered;
-
-                if (_statusBadgeText != null)
+                if (!enabled)
                 {
-                    if (!enabled)
-                    {
-                        _statusBadgeText.text = "已关闭";
-                        _statusBadgeText.color = XingShuUITheme.BadgeMuted;
-                        if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.12f, 0.16f, 0.22f, 0.85f);
-                    }
-                    else if (!isBattle)
-                    {
-                        _statusBadgeText.text = "已就绪 · 等待对局";
-                        _statusBadgeText.color = XingShuUITheme.Pink;
-                        if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.25f, 0.20f, 0.08f, 0.85f);
-                    }
-                    else
-                    {
-                        _statusBadgeText.text = hookRegistered ? "战局中保护生效" : "保护已启用 · 等待挂接";
-                        _statusBadgeText.color = XingShuUITheme.BadgeActive;
-                        if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.08f, 0.22f, 0.16f, 0.85f);
-                    }
+                    _statusBadgeText.text = "已关闭";
+                    _statusBadgeText.color = XingShuUITheme.BadgeMuted;
+                    if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.12f, 0.16f, 0.22f, 0.85f);
+                }
+                else if (!isBattle)
+                {
+                    _statusBadgeText.text = "已就绪 · 等待对局";
+                    _statusBadgeText.color = XingShuUITheme.Pink;
+                    if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.25f, 0.20f, 0.08f, 0.85f);
+                }
+                else
+                {
+                    _statusBadgeText.text = hookRegistered ? "战局中保护生效" : "保护已启用 · 等待挂接";
+                    _statusBadgeText.color = XingShuUITheme.BadgeActive;
+                    if (_statusBadgeBg != null) _statusBadgeBg.color = new Color(0.08f, 0.22f, 0.16f, 0.85f);
                 }
             }
 
-            // 3. 看板指标同步 (仅当值变更时更新 Text，严格 0 GC)
             if (_rpcStatusText != null)
             {
                 string rpcText = hookRegistered ? "已就绪" : (enabled ? "等待就绪" : "未就绪");
@@ -644,7 +217,7 @@ namespace XingShuRuntime.UI
                 }
             }
 
-            if (_battleStatusText != null && (isBattle != _lastObservedBattle || roomId != _lastObservedRoomId))
+            if (_battleStatusText != null && roomId != _lastObservedRoomId || _battleStatusText != null)
             {
                 _lastObservedRoomId = roomId;
                 string battleText = isBattle ? (roomId > 0 ? $"对局中 (ID: {roomId})" : "战斗准备中") : "当前无有效战局";
@@ -659,28 +232,19 @@ namespace XingShuRuntime.UI
             if (interceptCount != _lastObservedInterceptCount)
             {
                 _lastObservedInterceptCount = interceptCount;
-                if (_interceptCountText != null)
-                {
-                    _interceptCountText.text = $"{interceptCount} 次";
-                }
+                if (_interceptCountText != null) _interceptCountText.text = $"{interceptCount} 次";
             }
 
             if (lastIntercept != _lastObservedInterceptTime)
             {
                 _lastObservedInterceptTime = lastIntercept;
-                if (_lastInterceptTimeText != null)
-                {
-                    _lastInterceptTimeText.text = string.IsNullOrEmpty(lastIntercept) ? "无" : lastIntercept;
-                }
+                if (_lastInterceptTimeText != null) _lastInterceptTimeText.text = string.IsNullOrEmpty(lastIntercept) ? "无" : lastIntercept;
             }
 
             if (reconnectCount != _lastObservedReconnectCount)
             {
                 _lastObservedReconnectCount = reconnectCount;
-                if (_reconnectCountText != null)
-                {
-                    _reconnectCountText.text = $"{reconnectCount} 次";
-                }
+                if (_reconnectCountText != null) _reconnectCountText.text = $"{reconnectCount} 次";
             }
 
             if (_antiCheatStatusText != null)
@@ -693,131 +257,6 @@ namespace XingShuRuntime.UI
                     _antiCheatStatusText.color = acColor;
                 }
             }
-
-            // 4. 同步原生快捷通信 Toggle 状态
-            if (_autoThanksToggle != null && _autoThanksToggle.isOn != XingShuAutoThanks.IsEnabled)
-            {
-                _suppressCallbacks = true;
-                _autoThanksToggle.isOn = XingShuAutoThanks.IsEnabled;
-                _suppressCallbacks = false;
-            }
-
-            if (_autoPraiseToggle != null && _autoPraiseToggle.isOn != XingShuAutoPraise.IsEnabled)
-            {
-                _suppressCallbacks = true;
-                _autoPraiseToggle.isOn = XingShuAutoPraise.IsEnabled;
-                _suppressCallbacks = false;
-            }
-
-            SyncPraiseScale();
-        }
-
-        private void AddPercentSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial,
-            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
-        {
-            GameObject pair = XingShuUIFactory.CreateUIObject("MetricPair_" + id, card);
-            var pRt = pair.GetComponent<RectTransform>();
-            pRt.anchorMin = new Vector2(0f, 1f);
-            pRt.anchorMax = new Vector2(1f, 1f);
-            pRt.pivot = new Vector2(0.5f, 1f);
-            pRt.anchoredPosition = new Vector2(0f, -topY);
-            pRt.sizeDelta = new Vector2(-40f, 22f);
-            var hlg = pair.AddComponent<HorizontalLayoutGroup>();
-            hlg.spacing = 8f;
-            hlg.childControlWidth = true;
-            hlg.childControlHeight = true;
-            hlg.childForceExpandWidth = false;
-            hlg.childForceExpandHeight = true;
-
-            Text lbl = XingShuUIFactory.CreateText(pair, id + "Label", labelText, 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            var lblLe = lbl.gameObject.AddComponent<LayoutElement>();
-            lblLe.flexibleWidth = 1f;
-            lblLe.minWidth = 140f;
-
-            valueText = XingShuUIFactory.CreateText(pair, id + "Value", $"{Mathf.RoundToInt(initial * 100f)}%", 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            var valLe = valueText.gameObject.AddComponent<LayoutElement>();
-            valLe.minWidth = 60f;
-            valLe.preferredWidth = 72f;
-            valLe.flexibleWidth = 0f;
-
-            slider = XingShuUIFactory.CreateSlider(card, id + "Slider", min, max, initial,
-                v => { if (!_suppressCallbacks) onChanged(v); });
-            var sRt = slider.GetComponent<RectTransform>();
-            sRt.anchorMin = new Vector2(0f, 1f); sRt.anchorMax = new Vector2(1f, 1f); sRt.pivot = new Vector2(0.5f, 1f);
-            sRt.anchoredPosition = new Vector2(0f, -(topY + 24f)); sRt.sizeDelta = new Vector2(-40f, 26f);
-        }
-
-        private void SyncSelectRoleMapControls()
-        {
-            float scale = SelectRoleMapNameHint.Scale;
-            float px = SelectRoleMapNameHint.PosX;
-            float py = SelectRoleMapNameHint.PosY;
-            bool locked = SelectRoleMapNameHint.Locked;
-            _suppressCallbacks = true;
-            if (_selectRoleMapScaleSlider != null && Mathf.Abs(_selectRoleMapScaleSlider.value - scale) > 0.005f)
-                _selectRoleMapScaleSlider.value = scale;
-            if (_selectRoleMapXSlider != null && Mathf.Abs(_selectRoleMapXSlider.value - px) > 0.005f)
-                _selectRoleMapXSlider.value = px;
-            if (_selectRoleMapYSlider != null && Mathf.Abs(_selectRoleMapYSlider.value - py) > 0.005f)
-                _selectRoleMapYSlider.value = py;
-            if (_selectRoleMapLockToggle != null && _selectRoleMapLockToggle.isOn != locked)
-                _selectRoleMapLockToggle.isOn = locked;
-            _suppressCallbacks = false;
-            if (_selectRoleMapScaleText != null) _selectRoleMapScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-            if (_selectRoleMapXText != null) _selectRoleMapXText.text = $"{Mathf.RoundToInt(px * 100f)}%";
-            if (_selectRoleMapYText != null) _selectRoleMapYText.text = $"{Mathf.RoundToInt(py * 100f)}%";
-        }
-
-        private void AddPraiseOffsetRow(GameObject card, string id, string label, float top, float min, float max, float initial,
-            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
-        {
-            Text lbl = XingShuUIFactory.CreateText(card, id + "Label", label, 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            var lRt = lbl.rectTransform;
-            lRt.anchorMin = lRt.anchorMax = lRt.pivot = new Vector2(0f, 1f);
-            lRt.anchoredPosition = new Vector2(20f, -top); lRt.sizeDelta = new Vector2(220f, 20f);
-
-            valueText = XingShuUIFactory.CreateText(card, id + "Value", FormatSignedPx(initial), 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            var vRt = valueText.rectTransform;
-            vRt.anchorMin = vRt.anchorMax = vRt.pivot = new Vector2(1f, 1f);
-            vRt.anchoredPosition = new Vector2(-20f, -top); vRt.sizeDelta = new Vector2(72f, 20f);
-
-            slider = XingShuUIFactory.CreateSlider(card, id + "Slider", min, max, initial,
-                v => { if (!_suppressCallbacks) { onChanged(v); SyncPraiseScale(); } });
-            var sRt = slider.GetComponent<RectTransform>();
-            sRt.anchorMin = new Vector2(0f, 1f); sRt.anchorMax = new Vector2(1f, 1f); sRt.pivot = new Vector2(0.5f, 1f);
-            sRt.anchoredPosition = new Vector2(0f, -(top + 22f)); sRt.sizeDelta = new Vector2(-40f, 26f);
-        }
-
-        private static string FormatSignedPx(float value)
-        {
-            int rounded = Mathf.RoundToInt(value);
-            return (rounded >= 0 ? "+" : "") + rounded + "px";
-        }
-
-        private void SyncPraiseScale()
-        {
-            float scale = XingShuAutoPraise.PraiseScale;
-            float ox = XingShuAutoPraise.OffsetX;
-            float oy = XingShuAutoPraise.OffsetY;
-            _suppressCallbacks = true;
-            if (_praiseScaleSlider != null && Mathf.Abs(_praiseScaleSlider.value - scale) > .001f)
-                _praiseScaleSlider.value = scale;
-            if (_praiseOffsetXSlider != null && Mathf.Abs(_praiseOffsetXSlider.value - ox) > .5f)
-                _praiseOffsetXSlider.value = ox;
-            if (_praiseOffsetYSlider != null && Mathf.Abs(_praiseOffsetYSlider.value - oy) > .5f)
-                _praiseOffsetYSlider.value = oy;
-            _suppressCallbacks = false;
-            if (_praiseScaleValueText != null) _praiseScaleValueText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-            if (_praiseOffsetXText != null) _praiseOffsetXText.text = FormatSignedPx(ox);
-            if (_praiseOffsetYText != null) _praiseOffsetYText.text = FormatSignedPx(oy);
-            if (_praiseParamText != null) _praiseParamText.text = $"当前参数：大小 {Mathf.RoundToInt(scale * 100f)}% · 偏移 ({FormatSignedPx(ox)}, {FormatSignedPx(oy)})";
-        }
-
-        private void OnPraiseScaleSliderChanged(float val)
-        {
-            if (_suppressCallbacks) return;
-            XingShuAutoPraise.PraiseScale = Mathf.Round(val * 20f) / 20f;
-            SyncPraiseScale();
         }
     }
 }

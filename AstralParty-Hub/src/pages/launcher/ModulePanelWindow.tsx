@@ -20,14 +20,14 @@ import { getLauncherModuleMeta, OFFICIAL_SUB_GROUPS, type ModSubGroup } from './
 import { errorMessage } from './launcherModel';
 import './module-panel.css';
 
-const modules = definitions.map(({ id, name, description }) => ({
+const fallbackModules = definitions.map(({ id, name, description }) => ({
   id,
   name,
   description,
   visual: getLauncherModuleMeta(id),
 }));
 
-type Module = (typeof modules)[number];
+type Module = (typeof fallbackModules)[number];
 type ModuleState = 'enabled' | 'disabled' | 'not_installed' | 'not_selected';
 type CategoryFilter = 'all' | ModSubGroup;
 
@@ -35,6 +35,7 @@ interface ModulePanelSnapshot {
   ready: boolean;
   gamePlatform?: string | null;
   gameRoot?: string | null;
+  modules?: Array<{ id: string; name: string; description: string }>;
   states: Record<string, ModuleState>;
 }
 
@@ -43,7 +44,7 @@ const PREVIEW_SNAPSHOT: ModulePanelSnapshot = {
   gamePlatform: 'STEAM_CN',
   gameRoot: 'Astral Party/8vJXn6CN',
   states: Object.fromEntries(
-    modules.map((m, idx) => [
+    fallbackModules.map((m, idx) => [
       m.id,
       idx < 14 ? 'enabled' : idx < 16 ? 'disabled' : 'not_installed',
     ]),
@@ -215,9 +216,19 @@ export function ModulePanelWindow() {
     [snapshot],
   );
 
+  const modules = useMemo<Module[]>(() => {
+    const raw = snapshot?.modules && snapshot.modules.length > 0 ? snapshot.modules : definitions;
+    return raw.map(({ id, name, description }) => ({
+      id,
+      name,
+      description,
+      visual: getLauncherModuleMeta(id),
+    }));
+  }, [snapshot?.modules]);
+
   const enabledCount = useMemo(
     () => modules.filter((m) => resolveState(m.id) === 'enabled').length,
-    [resolveState],
+    [modules, resolveState],
   );
 
   const filteredModules = useMemo(() => {
@@ -231,7 +242,7 @@ export function ModulePanelWindow() {
         m.id.toLowerCase().includes(q)
       );
     });
-  }, [group, search]);
+  }, [group, modules, search]);
 
   const groupCounts = useMemo(() => {
     const map: Record<string, number> = { all: modules.length };
@@ -239,7 +250,7 @@ export function ModulePanelWindow() {
       map[g.id] = modules.filter((m) => m.visual.group === g.id).length;
     }
     return map;
-  }, []);
+  }, [modules]);
 
   if (!expanded) {
     return (

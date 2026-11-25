@@ -395,7 +395,7 @@ export function LauncherMods() {
       setRailSection(section);
     }
     const module = query.get('module');
-    if (module && officialModules.some(({ id }) => id === module)) {
+    if (module && /^[a-z0-9-]{2,64}$/.test(module)) {
       setDetailKey(`xingshu.launcher.${module}`);
     }
   }, [location.key, location.search]);
@@ -549,9 +549,25 @@ export function LauncherMods() {
     const linkedDrops = new Set(Object.values(states).map((state) => state.linkedDropId).filter(Boolean));
     const mergedWorkshopIds = new Set<string>();
 
-    const modules: ModRow[] = localReady && catalog?.modules
+    const baseModules: ModRow[] = localReady && catalog?.modules?.length
       ? catalog.modules
       : officialModules.map((mod) => ({ ...mod, installed: false, managed: false, available: false }));
+    const seenSlugs = new Set(baseModules.map((m) => m.id));
+    const modules: ModRow[] = [...baseModules];
+    for (const wsItem of wsMap.values()) {
+      if (!wsItem.id.startsWith('xingshu.launcher.')) continue;
+      const slug = wsItem.id.slice('xingshu.launcher.'.length);
+      if (!slug || seenSlugs.has(slug)) continue;
+      seenSlugs.add(slug);
+      modules.push({
+        id: slug,
+        name: wsItem.name,
+        description: wsItem.description,
+        installed: false,
+        managed: false,
+        available: localReady && catalog?.modules?.some((m) => m.available) ? true : false,
+      });
+    }
     for (const mod of modules) {
       const wsId = `xingshu.launcher.${mod.id}`;
       const ws = wsMap.get(wsId);
@@ -661,9 +677,14 @@ export function LauncherMods() {
         category: dr.sourceKind === 'xspkg' ? 'optimization' : 'card',
         categoryLabel: zh ? '本地安装包' : 'Local Package',
         installKind: dr.sourceKind === 'xspkg' ? 'xspkg' : 'bundle_mod',
-        description: zh
-          ? `本地导入替换资源（${dr.fileCount} 个目标资产，支持随时无损开关与还原）`
-          : `Locally imported mod (${dr.fileCount} target assets, lossless toggle ready)`,
+        description:
+          dr.sourceKind === 'xspkg'
+            ? zh
+              ? `.xspkg 扩展包（已写入 ${Math.max(dr.fileCount, (dr.targets || []).length)} 个目标资产，支持随时无损开关与还原）`
+              : `Local .xspkg package (${Math.max(dr.fileCount, (dr.targets || []).length)} targets, lossless toggle ready)`
+            : zh
+              ? `本地导入替换资源（${dr.fileCount} 个目标资产，支持随时无损开关与还原）`
+              : `Locally imported mod (${dr.fileCount} target assets, lossless toggle ready)`,
         tags: [zh ? '本地导入' : 'Local', dr.sourceKind],
         platforms: ['STEAM_CN', 'TAPTAP', 'BILIBILI', 'WEGAME'],
         version: 'Local',
@@ -742,6 +763,10 @@ export function LauncherMods() {
   );
   const disabledInstalledCount = useMemo(
     () => unifiedItems.filter((i) => i.disabled || (i.downloaded && !i.installed)).length,
+    [unifiedItems],
+  );
+  const officialCount = useMemo(
+    () => unifiedItems.filter((i) => i.sourceKind === 'official').length,
     [unifiedItems],
   );
   const installedOfficialCount = useMemo(
@@ -997,7 +1022,7 @@ export function LauncherMods() {
       setNotice({
         kind: 'success',
         text: zh
-          ? '「星枢官方插件 Mod」已安装完成。现在可自由启用下方 21 项星枢功能或使用游戏内开房。'
+          ? `「星枢官方插件 Mod」已安装完成。现在可自由启用下方 ${officialCount} 项星枢功能或使用游戏内开房。`
           : 'XingShu Official Plugin Mod installed cleanly.',
       });
       setRevision((v) => v + 1);
@@ -1083,9 +1108,9 @@ export function LauncherMods() {
       modId: key,
       stage: 'installing',
       downloadedBytes: 0,
-      totalBytes: officialModules.length,
+      totalBytes: officialCount,
       percent: 4,
-      detail: zh ? '准备安装核心插件与全部 21 项官方模组…' : 'Preparing core plugin and all 21 official modules…',
+      detail: zh ? `准备安装核心插件与全部 ${officialCount} 项官方模组…` : `Preparing core plugin and all ${officialCount} official modules…`,
     });
     setError('');
     setNotice({ kind: 'info', text: zh ? '正在一键安装全部官方模组…' : 'Installing all official modules…' });
@@ -1123,7 +1148,7 @@ export function LauncherMods() {
       modId: key,
       stage: 'installing',
       downloadedBytes: 0,
-      totalBytes: officialModules.length,
+      totalBytes: officialCount,
       percent: 5,
       detail: zh ? '正在一键卸载所有星枢官方功能模组…' : 'Removing all official feature modules…',
     });
@@ -1580,7 +1605,7 @@ export function LauncherMods() {
                           ? `当前游戏目录仍安装着旧版星枢插件（${disk.version?.replace(/^1\\.0\\.0-game-ui-/, '') || '旧版'}），尚未还原为官方原版。可点击右侧「更新插件至新版」升级修复，或点击「卸载并还原原版」恢复纯净客户端。`
                           : `An older XingShu plugin (${disk.version || 'older'}) is still installed in this game folder. Update to the latest version or uninstall & restore to vanilla.`
                         : zh
-                          ? '星枢默认纯净启动官方游戏。仅当你需要启用下方 21 项局内功能或使用游戏内开房时，才需要在此安装此核心插件；随时可一键卸载还原回官方原版。'
+                          ? `星枢默认纯净启动官方游戏。仅当你需要启用下方 ${officialCount} 项局内功能或使用游戏内开房时，才需要在此安装此核心插件；随时可一键卸载还原回官方原版。`
                           : 'Hub launches the vanilla game cleanly by default. Install this optional core plugin to enable in-game modules and live room control, or restore to vanilla anytime.'}
                     </p>
                   </div>
@@ -1723,17 +1748,17 @@ export function LauncherMods() {
               <div className="pcl-official-batch-info">
                 <div className="pcl-official-batch-title">
                   <Blocks size={16} />
-                  <strong>{zh ? '星枢官方功能模组（21 项独立模块）' : 'XingShu Official Feature Modules (21)'}</strong>
+                  <strong>{zh ? `星枢官方功能模组（${officialCount} 项独立模块）` : `XingShu Official Feature Modules (${officialCount})`}</strong>
                   <span className="pcl-count-chip pcl-tabular">
                     {zh
-                      ? `已开启 ${enabledOfficialCount} / ${officialModules.length} 项`
-                      : `${enabledOfficialCount} / ${officialModules.length} active`}
+                      ? `已开启 ${enabledOfficialCount} / ${officialCount} 项`
+                      : `${enabledOfficialCount} / ${officialCount} active`}
                   </span>
                 </div>
                 <p>
                   {zh
                     ? '支持「一键全部安装并启用」（自动补全核心插件 Mod），也可以不安装或在下方逐项自由开关。'
-                    : 'Install and enable all 19 modules at once (includes core plugin), or toggle them individually below.'}
+                    : `Install and enable all ${officialCount} modules at once (includes core plugin), or toggle them individually below.`}
                 </p>
               </div>
               <div className="pcl-official-batch-actions">
@@ -1744,7 +1769,7 @@ export function LauncherMods() {
                   onClick={() => void handleInstallAllOfficialMods()}
                 >
                   <Download size={14} />
-                  <span>{zh ? `一键安装全部官方模组 (${officialModules.length} 项)` : `Install All (${officialModules.length})`}</span>
+                  <span>{zh ? `一键安装全部官方模组 (${officialCount} 项)` : `Install All (${officialCount})`}</span>
                 </button>
                 <button
                   type="button"
@@ -1879,7 +1904,7 @@ export function LauncherMods() {
                   <strong>{zh ? '当前筛选下暂无已安装 Mod' : 'No installed mods match'}</strong>
                   <p>
                     {zh
-                      ? '可点击上方「下载新 Mod」启用 21 项官方功能模块，或从社区工坊一键安装皮肤与卡图包。'
+                      ? `可点击上方「下载新 Mod」启用 ${officialCount} 项官方功能模块，或从社区工坊一键安装皮肤与卡图包。`
                       : 'Explore official feature modules and community workshop packs to install your first mod.'}
                   </p>
                   <button

@@ -47,6 +47,8 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
     private readonly Dictionary<long, PillSlot> _avatarPills = new Dictionary<long, PillSlot>(4);
     private readonly HashSet<long> _playersWithServerAddMove = new HashSet<long>();
     private readonly Dictionary<long, int> _lastRawExtraMove = new Dictionary<long, int>(4);
+    private readonly Dictionary<long, int> _baselinePermanentAdd = new Dictionary<long, int>(4);
+    private Tools.Signal _boundBuffSignal;
 
     private bool _enabled = XingShuConfigKeys.PlayerCombatHudEnabledDefault;
     private bool _showHead = XingShuConfigKeys.PlayerCombatHudShowHeadDefault;
@@ -379,6 +381,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         }
 
         bool refreshText = Time.unscaledTime >= _nextTextRefresh;
+        EnsureBuffSignalBound(logic);
         if (refreshText)
         {
             _nextTextRefresh = Time.unscaledTime + TextRefreshIntervalSeconds;
@@ -700,6 +703,26 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         return result;
     }
 
+    private void EnsureBuffSignalBound(GameLogicManager logic)
+    {
+        var sig = logic?.buff?.buff;
+        if (_boundBuffSignal == sig) return;
+        if (_boundBuffSignal != null)
+        {
+            try { _boundBuffSignal.RemoveListener(OnBuffSignalChanged); } catch { }
+        }
+        _boundBuffSignal = sig;
+        if (_boundBuffSignal != null)
+        {
+            _boundBuffSignal.AddListener(OnBuffSignalChanged);
+        }
+    }
+
+    private void OnBuffSignalChanged()
+    {
+        _nextTextRefresh = 0f;
+    }
+
     private string FormatMoveToken(BattlePlayerData p)
     {
         if (p == null || p.player?.Hero == null) return "";
@@ -731,14 +754,99 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
             }
         }
 
-        int extraMove = PlayerCombatStatusPolicy.ResolveExtraMoveSpeed(
+        int buffTempAdd = CollectBuffTempMoveBonus(p);
+        int fallbackAdd = Math.Max(0, additionMoveSum + p.player.Hero.AppendMovePoint1 + p.player.Hero.AppendMovePoint2);
+        int observedAdd = (hasServerUpdate || extraAdd != 0 || extraMinus != 0) ? Math.Max(0, extraAdd) : fallbackAdd;
+
+        if (!_baselinePermanentAdd.TryGetValue(pid, out int baselinePerm))
+        {
+            baselinePerm = buffTempAdd == 0 ? observedAdd : fallbackAdd;
+            _baselinePermanentAdd[pid] = baselinePerm;
+        }
+        else if (buffTempAdd == 0)
+        {
+            // When no temporary speed buff is present, ExtraAddMovePoint tracks permanent move-speed sources.
+            baselinePerm = observedAdd;
+            _baselinePermanentAdd[pid] = baselinePerm;
+        }
+
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(
             extraAdd,
             extraMinus,
             hasServerUpdate,
             additionMoveSum,
             p.player.Hero.AppendMovePoint1,
-            p.player.Hero.AppendMovePoint2);
-        return PlayerCombatStatusPolicy.FormatMoveSpeedToken(extraMove);
+            p.player.Hero.AppendMovePoint2,
+            buffTempAdd,
+            baselinePerm,
+            out int permanentNet,
+            out int tempAdd);
+
+        return PlayerCombatStatusPolicy.FormatMoveSpeedToken(permanentNet, tempAdd);
+    }
+
+    private static int CollectBuffTempMoveBonus(BattlePlayerData p)
+    {
+        var dict = p?.buffContainer?._buffDict;
+        if (dict == null || dict.Count == 0) return 0;
+
+        int loveStacks = 0;
+        foreach (var kv in dict)
+        {
+            var b = kv.Value;
+            if (b != null && b.BuffId == 3021101 && b.Progress > 0)
+            {
+                loveStacks += b.Progress;
+            }
+        }
+
+        int sum = 0;
+        foreach (var kv in dict)
+        {
+            var b = kv.Value;
+            if (b == null || b.BuffId <= 0) continue;
+
+            BuffInfoConfigure cfg = null;
+            try { cfg = b.BuffId.GetBuffConfigure(); } catch { }
+            string name = SafeGetBuffLocal(cfg != null ? cfg.NameId : 0);
+            string desc = SafeGetBuffLocal(cfg != null ? cfg.DescId : 0);
+
+            long param0 = 0L;
+            long param1 = 0L;
+            if (b.Params != null)
+            {
+                b.Params.TryGetValue(0, out param0);
+                b.Params.TryGetValue(1, out param1);
+            }
+
+            if (PlayerCombatStatusPolicy.TryExtractBuffTempMoveDelta(
+                b.BuffId,
+                b.Progress,
+                b.KeepRound,
+                name,
+                desc,
+                param0,
+                param1,
+                loveStacks,
+                out int delta) && delta > 0)
+            {
+                sum += delta;
+            }
+        }
+        return sum;
+    }
+
+    private static string SafeGetBuffLocal(int id)
+    {
+        if (id <= 0) return "";
+        try
+        {
+            return id.GetLocal(UIStringType.Buff) ?? "";
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private static string FormatCdToken(BattlePlayerData p)
@@ -1053,6 +1161,12 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         _draggingAvatarPlayerId = 0L;
         _playersWithServerAddMove.Clear();
         _lastRawExtraMove.Clear();
+        _baselinePermanentAdd.Clear();
+        if (_boundBuffSignal != null)
+        {
+            try { _boundBuffSignal.RemoveListener(OnBuffSignalChanged); } catch { }
+            _boundBuffSignal = null;
+        }
         DisposePool(_headPills);
         DisposePool(_avatarPills);
         _attachedHeadLayer = null;

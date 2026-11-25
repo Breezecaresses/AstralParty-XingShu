@@ -2,7 +2,6 @@ import { lazy, Suspense, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { createBrowserRouter, Navigate, RouterProvider, useNavigate } from 'react-router-dom';
 import { I18nProvider, useTranslation } from '../i18n';
-import officialModules from '../shared/launcherModules.json';
 import { isTauriRuntime } from '../shared/runtime';
 import { CloudLoginCard } from '../pages/account/CloudLoginCard';
 import { PlatformAccountPage } from '../pages/account/PlatformAccountPage';
@@ -33,7 +32,7 @@ function LauncherLayout() {
     let active = true;
     let stop: (() => void) | undefined;
     void listen<string>('xingshu:manage-module', ({ payload }) => {
-      if (active && officialModules.some(({ id }) => id === payload)) {
+      if (active && typeof payload === 'string' && /^[a-z0-9-]{2,64}$/.test(payload)) {
         navigate(`/extensions/launcher?section=discover&module=${encodeURIComponent(payload)}`);
       }
     }).then((unlisten) => {

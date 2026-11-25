@@ -1066,7 +1066,8 @@ public sealed class PlayerStarBuffHud : MonoBehaviour
         bg.DrawRoundRect(BaseIconSize, BaseIconSize, new Color(0.14f, 0.17f, 0.25f, 0.85f), new[] { 4f, 4f, 4f, 4f });
         root.AddChild(bg);
 
-        var icon = new GLoader
+        // Use game's TextureLoader (GLoader subclass) so external UT_Buff_* keys resolve via TextureManager.AsyncLoad.
+        GLoader icon = new global::UI.TextureLoader
         {
             touchable = false,
             fill = FillType.Scale,

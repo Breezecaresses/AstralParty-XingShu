@@ -150,7 +150,7 @@ export function AppUpdatePanel() {
 
       <p style={{ color: 'var(--text-muted)', lineHeight: 1.8 }}>
         {isZh
-          ? '这里只更新电脑端星枢 Hub。安卓版请在手机端点击「检查更新」升级；「星枢官方插件 Mod」及 21 项局内功能模组请在顶部「模组」页直接更新与管理。'
+          ? '这里只更新电脑端星枢 Hub。安卓版请在手机端点击「检查更新」升级；「星枢官方插件 Mod」及官方局内功能模组请在顶部「模组」页直接更新与管理。'
           : 'This updates Desktop Hub only. Android APK and in-game mods update in their own Mods screens.'}
       </p>
 

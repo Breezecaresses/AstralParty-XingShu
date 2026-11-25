@@ -29,6 +29,27 @@ internal static class PlayerStarBuffTests
         Check(PlayerCombatStatusPolicy.FormatMoveSpeedToken(2) == "[color=#7CFF9B]移速+2[/color]", "format +2 token");
         Check(PlayerCombatStatusPolicy.FormatMoveSpeedToken(-1) == "[color=#FF8DA1]移速-1[/color]", "format -1 token");
         Check(PlayerCombatStatusPolicy.FormatMoveSpeedToken(0) == "", "format 0 returns empty");
+        Check(PlayerCombatStatusPolicy.FormatMoveSpeedToken(0, 4) == "移速[color=#82D8FF]+4[/color]", "temp +4 displays in light blue #82D8FF");
+        Check(PlayerCombatStatusPolicy.FormatMoveSpeedToken(-1, 4) == "移速[color=#FF8DA1]-1[/color][color=#82D8FF]+4[/color]", "permanent -1 + temp +4 keeps both colors");
+        Check(PlayerCombatStatusPolicy.FormatMoveSpeedToken(2, 3) == "移速[color=#7CFF9B]+2[/color][color=#82D8FF]+3[/color]", "permanent +2 + temp +3 keeps both colors");
+
+        // 1b. Temp move-speed buff extraction & breakdown anti-double-counting
+        int mvDelta;
+        Check(PlayerCombatStatusPolicy.TryExtractBuffTempMoveDelta(3020101, 4, 1, "感情过量摄入", "获得等量的移动速度", 0, 0, 4, out mvDelta) && mvDelta == 4, "extracts Sugar skill +4 temp speed");
+        Check(PlayerCombatStatusPolicy.TryExtractBuffTempMoveDelta(21026, 0, 1, "疾行", "移动速度[color=#94FF46]+3[/color]，持续1回合", 0, 0, 0, out mvDelta) && mvDelta == 3, "extracts 疾行 +3 from colored desc");
+        Check(PlayerCombatStatusPolicy.TryExtractBuffTempMoveDelta(501, 3, 2, "极速", "每层使自身移动速度+1", 0, 0, 0, out mvDelta) && mvDelta == 3, "extracts per-stack move speed +3");
+        Check(!PlayerCombatStatusPolicy.TryExtractBuffTempMoveDelta(9901, 2, 1, "加急加快", "移动时投掷2枚骰子，生效一次", 0, 0, 0, out mvDelta), "does NOT mistake extra dice buff for +move");
+        Check(!PlayerCombatStatusPolicy.TryExtractBuffTempMoveDelta(9902, 0, 0, "星级天赋", "达到3星时攻击力+1、移动速度+2", 0, 0, 0, out mvDelta), "does NOT extract star-upgrade passive desc");
+
+        int permNet, tempNet;
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(0, 1, true, 0, 0, 0, 4, 0, out permNet, out tempNet);
+        Check(permNet == -1 && tempNet == 4, "syncs +4 immediately before server AddMove updates");
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(4, 1, true, 0, 0, 0, 4, 0, out permNet, out tempNet);
+        Check(permNet == -1 && tempNet == 4, "does NOT double-count once server AddMove syncs +4");
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(2, 0, true, 0, 0, 0, 3, 2, out permNet, out tempNet);
+        Check(permNet == 2 && tempNet == 3, "preserves 3-star +2 baseline + skill +3 before server sync");
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(5, 0, true, 0, 0, 0, 3, 2, out permNet, out tempNet);
+        Check(permNet == 2 && tempNet == 3, "preserves 3-star +2 baseline + skill +3 after server sync");
 
         // 2. Buff classification tests
         Check(PlayerStarBuffPolicy.ClassifyBuff(21026, 1, false, false, "疾行", "移动速度+3") == StarBuffCategory.Move, "疾行 classified as Move");

@@ -102,6 +102,8 @@ struct CoreManifestWire {
     release: serde_json::Value,
     #[serde(default)]
     inventory: Vec<KnownRuntime>,
+    #[serde(default)]
+    official_modules: Vec<ModuleDefinition>,
 }
 
 #[derive(Clone)]
@@ -112,6 +114,7 @@ struct CoreManifestBundle {
     path_prefix: String,
     payload_sizes: HashMap<String, u64>,
     inventory: Vec<KnownRuntime>,
+    official_modules: Vec<ModuleDefinition>,
     source: &'static str,
 }
 
@@ -236,6 +239,17 @@ fn parse_and_validate_core_manifest(raw: &[u8], source: &'static str) -> HubResu
         }
         validate_bundle_relative_path(&entry.platform, &entry.bundle_relative_path)?;
     }
+    let mut seen_mod_ids = HashSet::new();
+    for module in &wire.official_modules {
+        let id = module.id.trim();
+        if !(2..=64).contains(&id.len())
+            || !id.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+            || module.name.trim().is_empty()
+            || !seen_mod_ids.insert(id.to_string())
+        {
+            return Err(error("PACKAGE_INVALID", "官方功能模块清单格式或标识无效。"));
+        }
+    }
     let release_raw_json = serde_json::to_vec(&wire.release)
         .map_err(|e| error("PACKAGE_INVALID", e.to_string()))?;
     let release_sha256 = crate::security::hash::compute_sha256_bytes(&release_raw_json);
@@ -247,6 +261,7 @@ fn parse_and_validate_core_manifest(raw: &[u8], source: &'static str) -> HubResu
         path_prefix,
         payload_sizes: wire.payload_sizes,
         inventory: wire.inventory,
+        official_modules: wire.official_modules,
         source,
     })
 }
@@ -263,6 +278,7 @@ fn embedded_core_manifest() -> HubResult<CoreManifestBundle> {
         .map_err(|_| error("PACKAGE_INVALID", "内置组件下载清单无法识别。"))?;
     let inventory: Vec<KnownRuntime> = serde_json::from_str(include_str!("runtime_inventory.generated.json"))
         .map_err(|_| error("PACKAGE_INVALID", "内置历史版本索引无法识别。"))?;
+    let official_modules = embedded_modules()?;
     let raw = serde_json::to_vec(&serde_json::json!({
         "formatVersion": 1,
         "runtimeVersion": runtime_version,
@@ -270,6 +286,7 @@ fn embedded_core_manifest() -> HubResult<CoreManifestBundle> {
         "payloadSizes": media.payload_sizes,
         "release": release_val,
         "inventory": inventory,
+        "officialModules": official_modules,
     }))
     .map_err(|e| error("PACKAGE_INVALID", e.to_string()))?;
     parse_and_validate_core_manifest(&raw, "embedded")
@@ -757,7 +774,7 @@ pub async fn launcher_start(installation_id: String, center: State<'_, Extension
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct ModuleDefinition { id: String, name: String, description: String }
+pub(crate) struct ModuleDefinition { id: String, name: String, description: String }
 
 impl ModuleDefinition {
     fn package_id(&self) -> String { format!("xingshu.launcher.{}", self.id) }
@@ -790,9 +807,42 @@ impl ModuleDefinition {
     }
 }
 
-fn modules() -> HubResult<Vec<ModuleDefinition>> {
+fn embedded_modules() -> HubResult<Vec<ModuleDefinition>> {
     serde_json::from_str(include_str!("../../src/shared/launcherModules.json"))
         .map_err(|_| error("MOD_CATALOG", "模组清单无法读取。"))
+}
+
+fn modules_from_bundle(bundle: &CoreManifestBundle) -> HubResult<Vec<ModuleDefinition>> {
+    let embedded = embedded_modules()?;
+    if bundle.official_modules.is_empty() {
+        return Ok(embedded);
+    }
+    let mut merged = Vec::with_capacity(bundle.official_modules.len().max(embedded.len()));
+    let mut seen = HashSet::new();
+    for item in &bundle.official_modules {
+        if seen.insert(item.id.clone()) {
+            merged.push(item.clone());
+        }
+    }
+    for item in embedded {
+        if seen.insert(item.id.clone()) {
+            merged.push(item);
+        }
+    }
+    Ok(merged)
+}
+
+fn modules() -> HubResult<Vec<ModuleDefinition>> {
+    if let Ok(bundle) = cached_or_embedded_core_manifest() {
+        if let Ok(list) = modules_from_bundle(&bundle) {
+            return Ok(list);
+        }
+    }
+    embedded_modules()
+}
+
+pub(crate) fn current_modules() -> HubResult<Vec<ModuleDefinition>> {
+    modules()
 }
 
 pub(crate) fn is_known_module(id: &str) -> bool {
@@ -864,7 +914,8 @@ pub async fn launcher_mods(installation_id: Option<String>, center: State<'_, Ex
             bundle.release.platforms.iter().any(|platform| platform.id == game.platform)
         });
         let repo = crate::storage::repositories::ExtensionRepository::new(db);
-        let rows = modules()?.into_iter().map(|definition| {
+        let all_defs = modules_from_bundle(&bundle)?;
+        let rows = all_defs.into_iter().map(|definition| {
             let (active, is_disabled) = location.as_ref()
                 .and_then(|(root, _)| definition.paths(root).ok())
                 .map(|(active, disabled)| (definition.matches_file(&active), definition.matches_file(&disabled)))
@@ -1093,10 +1144,11 @@ fn uninstall_official_module_sync(
 pub async fn launcher_change_mod(installation_id: String, mod_id: String, install: bool,
     center: State<'_, ExtensionCenter>, app: tauri::AppHandle) -> HubResult<()> {
     use tauri::Manager;
+    let bundle = resolve_core_manifest(false).await?;
     let _guard = INSTALLATION_CHANGE.lock().await;
     let db = center.db.clone();
     let game = extension_center::get_game(&db, &installation_id)?;
-    let module = modules()?.into_iter().find(|m| m.id == mod_id).ok_or_else(|| error("MOD_UNKNOWN", "没有这个模组。"))?;
+    let module = modules_from_bundle(&bundle)?.into_iter().find(|m| m.id == mod_id).ok_or_else(|| error("MOD_UNKNOWN", "没有这个模组。"))?;
     let pkg_id = module.package_id();
     let archive = if install {
         crate::workshop::emit_mod_progress(&app, &pkg_id, "downloading", 0, 0, 10, "正在下载官方功能模块…");
@@ -1223,10 +1275,11 @@ pub async fn launcher_install_all_official_mods(
 
     let bundle = resolve_core_manifest(include_core).await?;
     let game_check = game.clone();
+    let bundle_check = bundle.clone();
     let initial_disk = tauri::async_runtime::spawn_blocking(move || {
         let (_, exe) = canonical_game(&game_check)?;
         ProcessGate::check_target(&exe)?;
-        disk_state(&game_check, &bundle)
+        disk_state(&game_check, &bundle_check)
     })
     .await
     .map_err(|_| error("MOD_INSTALL", "安装环境核验未完成。"))??;
@@ -1238,7 +1291,7 @@ pub async fn launcher_install_all_official_mods(
         core_installed = true;
     }
 
-    let all_modules = modules()?;
+    let all_modules = modules_from_bundle(&bundle)?;
     let total_count = all_modules.len();
     let mut installed_count = 0usize;
     let mut enabled_count = 0usize;
@@ -1329,7 +1382,8 @@ pub async fn launcher_uninstall_all_official_mods(
     let _guard = INSTALLATION_CHANGE.lock().await;
     let db = center.db.clone();
     let game = extension_center::get_game(&db, &installation_id)?;
-    let all_modules = modules()?;
+    let bundle = resolve_core_manifest(false).await?;
+    let all_modules = modules_from_bundle(&bundle)?;
     let total_count = all_modules.len();
 
     let (removed_count, skipped_count) = tauri::async_runtime::spawn_blocking(move || -> HubResult<(usize, usize)> {
@@ -1561,10 +1615,12 @@ mod tests {
     }
 
     #[test]
-    fn built_official_module_xspkg_passes_package_parser_for_all_22_modules() {
+    fn built_official_module_xspkg_passes_package_parser_for_all_modules() {
         let all = modules().unwrap();
-        assert_eq!(all.len(), 22, "Expected 22 official launcher modules");
+        assert!(!all.is_empty(), "Expected at least one official launcher module");
+        let mut unique = HashSet::new();
         for module in all {
+            assert!(unique.insert(module.id.clone()), "Duplicate official module id: {}", module.id);
             let bytes = build_official_module_xspkg(&module).unwrap();
             let tmp = tempfile::NamedTempFile::new().unwrap();
             std::fs::write(tmp.path(), bytes).unwrap();
@@ -1580,5 +1636,47 @@ mod tests {
             assert_eq!(manifest.files[0].sha256, digest);
             assert_eq!(manifest.files[0].size, payload.len() as u64);
         }
+    }
+
+    #[test]
+    fn remote_core_manifest_supports_dynamic_official_modules() {
+        let base = embedded_core_manifest().unwrap();
+        let mut dyn_mods = embedded_modules().unwrap();
+        for idx in 1..=3 {
+            dyn_mods.push(ModuleDefinition {
+                id: format!("future-mod-{idx}"),
+                name: format!("未来动态模块 {idx}"),
+                description: format!("远端热更新下发的动态官方模块 {idx}"),
+            });
+        }
+        let expected_len = dyn_mods.len();
+        let first_plat = &base.release.platforms[0];
+        let mut sizes = HashMap::new();
+        sizes.insert(first_plat.id.clone(), *base.payload_sizes.get(&first_plat.id).unwrap());
+        let remote_raw = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "runtimeVersion": base.release.runtime_version,
+            "pathPrefix": base.path_prefix,
+            "payloadSizes": sizes,
+            "release": {
+                "RuntimeVersion": base.release.runtime_version,
+                "Platforms": [{
+                    "Id": first_plat.id,
+                    "BundleRelativePath": first_plat.bundle_relative_path,
+                    "Payload": first_plat.payload,
+                    "PayloadSha256": first_plat.payload_sha256,
+                    "VanillaSha256": first_plat.vanilla_sha256,
+                    "GameAssemblySha256": first_plat.game_assembly_sha256,
+                    "AcceptedHashes": first_plat.accepted_hashes,
+                }]
+            },
+            "inventory": [],
+            "officialModules": dyn_mods,
+        }))
+        .unwrap();
+        let parsed = parse_and_validate_core_manifest(&remote_raw, "remote").unwrap();
+        let merged = modules_from_bundle(&parsed).unwrap();
+        assert_eq!(merged.len(), expected_len);
+        assert!(merged.iter().any(|m| m.id == "future-mod-3"));
     }
 }

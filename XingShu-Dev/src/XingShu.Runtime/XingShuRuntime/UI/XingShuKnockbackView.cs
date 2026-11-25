@@ -1,16 +1,13 @@
 using System;
-using XingShuRuntime.Core;
 using XingShuRuntime.Utilities;
-using XingShuRuntime.Targeting;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace XingShuRuntime.UI
 {
     /// <summary>
-    /// 功能中心 - 击飞预测 (Knockback Prediction) Modern UI 页面 (Phase 2D-1A)
+    /// 功能中心 - 击飞预测 (Knockback Prediction) Standalone UI 页面 (Tab Index 2)
     /// 纯粹的 View 层，100% 委托 MonsterKillProbability 底层状态与调整契约
-    /// 遵循纯色半透拟态磨砂玻璃规范，嵌入 Tab Index 2
     /// </summary>
     internal sealed class XingShuKnockbackView
     {
@@ -19,74 +16,6 @@ namespace XingShuRuntime.UI
         // Card 1: Switch & Status
         private Toggle _enableToggle;
         private Text _statusText;
-        private Toggle _targetingToggle;
-        private Toggle _arrowBoostToggle;
-        private Text _targetingSummary;
-        private Toggle _defenseHintToggle;
-        private Toggle _battleCardHintToggle;
-        private Toggle _battleCardLockToggle;
-        private Slider _battleCardScaleSlider;
-        private Slider _battleCardMarginXSlider;
-        private Slider _battleCardYSlider;
-        private Text _battleCardScaleText;
-        private Text _battleCardMarginXText;
-        private Text _battleCardYText;
-        private Toggle _megathEnabledToggle;
-        private Toggle _megathLockToggle;
-        private Slider _megathScaleSlider;
-        private Slider _megathXSlider;
-        private Slider _megathYSlider;
-        private Text _megathScaleText;
-        private Text _megathXText;
-        private Text _megathYText;
-        private Toggle _playerHudEnabledToggle;
-        private Toggle _playerHudHeadToggle;
-        private Toggle _playerHudAvatarToggle;
-        private Toggle _playerHudLockToggle;
-        private Toggle _playerHudCdToggle;
-        private Toggle _playerHudHpToggle;
-        private Toggle _playerHudAtkDefToggle;
-        private Toggle _playerHudMoveToggle;
-        private Slider _playerHudScaleSlider;
-        private Slider _playerHudOffXSlider;
-        private Slider _playerHudOffYSlider;
-        private Slider _playerHudHeadOffYSlider;
-        private Text _playerHudScaleText;
-        private Text _playerHudOffXText;
-        private Text _playerHudOffYText;
-        private Text _playerHudHeadOffYText;
-
-        // PlayerStarBuffHudCard controls
-        private Toggle _starBuffEnabledToggle;
-        private Toggle _starBuffLockToggle;
-        private Text _starBuffSummaryText;
-        private Button[] _starBuffAnchorButtons;
-        private Text[] _starBuffAnchorBtnTexts;
-        private Toggle _starBuffCatMoveToggle;
-        private Toggle _starBuffCatHeroToggle;
-        private Toggle _starBuffCatCombatToggle;
-        private Toggle _starBuffCatDebuffToggle;
-        private Toggle _starBuffCatEventToggle;
-        private Toggle _starBuffCatOtherToggle;
-        private Slider _starBuffScaleSlider;
-        private Slider _starBuffOffXSlider;
-        private Slider _starBuffOffYSlider;
-        private Slider _starBuffMaxSlider;
-        private Text _starBuffScaleText;
-        private Text _starBuffOffXText;
-        private Text _starBuffOffYText;
-        private Text _starBuffMaxText;
-        private InputField _starBuffSearchInput;
-        private Button[] _starBuffFilterButtons;
-        private Text[] _starBuffFilterBtnTexts;
-        private Text _starBuffPageText;
-        private readonly System.Collections.Generic.List<Toggle> _starBuffRowToggles = new System.Collections.Generic.List<Toggle>(8);
-        private readonly System.Collections.Generic.List<Text> _starBuffRowLabels = new System.Collections.Generic.List<Text>(8);
-        private readonly System.Collections.Generic.List<PlayerStarBuffHud.BuffCatalogEntry> _starBuffVisibleEntries = new System.Collections.Generic.List<PlayerStarBuffHud.BuffCatalogEntry>();
-        private int _starBuffFilterTab;
-        private string _starBuffSearchQuery = "";
-        private int _starBuffPage;
-        private int _lastStarBuffRevision = -1;
 
         // Card 2: Target & Preview
         private Button _previewBtn;
@@ -119,956 +48,86 @@ namespace XingShuRuntime.UI
         private InputField _probColorInput;
         private Image _probColorSwatch;
         private Text _probColorErrorText;
+
         private InputField _targetColorInput;
         private Image _targetColorSwatch;
         private Text _targetColorErrorText;
 
-        // Observed State for 0 GC projection
+        // State caching (0 GC)
         private bool _suppressCallbacks;
         private bool _lastObservedEnabled;
         private bool _lastObservedPreview;
         private int _lastObservedFontSize = -1;
-        private float _lastObservedFontX = float.MinValue;
-        private float _lastObservedFontY = float.MinValue;
-        private bool _lastObservedAutoColor;
-        private bool _lastObservedRainbow100;
+        private float _lastObservedFontX = float.NaN;
+        private float _lastObservedFontY = float.NaN;
         private string _lastObservedProbColor = "";
         private string _lastObservedTargetColor = "";
         private string _lastObservedStatus = "";
         private string _lastObservedTargetSummary = "";
+        private bool _lastObservedAutoColor;
+        private bool _lastObservedRainbow100;
 
         internal GameObject Root => _root;
 
         internal XingShuKnockbackView(Transform parent)
         {
             _root = XingShuUIFactory.CreateUIObject("Page_Knockback", parent.gameObject);
-            RectTransform rootRt = _root.GetComponent<RectTransform>();
-            rootRt.anchorMin = Vector2.zero;
-            rootRt.anchorMax = Vector2.one;
-            rootRt.offsetMin = Vector2.zero;
-            rootRt.offsetMax = Vector2.zero;
-
             BuildUI();
         }
 
         private void BuildUI()
         {
-            ScrollRect scrollRect = XingShuUIFactory.CreateVerticalScrollView(_root, "KnockbackScrollView", out GameObject contentArea);
-            VerticalLayoutGroup vlg = contentArea.GetComponent<VerticalLayoutGroup>();
-            if (vlg != null)
-            {
-                vlg.spacing = 12f;
-                vlg.padding = new RectOffset(0, 12, 4, 28);
-            }
+            XingShuViewCardHelper.CreatePageScroll(_root, "KnockbackScrollView", out GameObject contentArea);
 
-            // 1. 全局总开关控制 (Switch Card: 96px)
+            // 1. 总开关与运行状态
             BuildSwitchCard(contentArea);
-            BuildDefenseHintCard(contentArea);
-            BuildBattleCardHintCard(contentArea);
-            BuildMegathDamageHintCard(contentArea);
-            BuildPlayerCombatHudCard(contentArea);
-            BuildPlayerStarBuffCard(contentArea);
 
-            // 2. 目标与拖动卡预览 (Target & Preview Card: 180px)
+            // 2. 目标与拖动卡预览
             BuildTargetCard(contentArea);
 
-            BuildMonsterTargetCard(contentArea);
-
-            // 3. 局内战斗浮字样式 (Style Card: 200px)
+            // 3. 局内战斗浮字外观
             BuildStyleCard(contentArea);
 
-            // 4. 计算口径与说明 (Info Card: 110px)
+            // 4. 计算口径与说明
             BuildInfoCard(contentArea);
 
-            // 初始状态同步
             UpdateSync(force: true);
-        }
-
-        private void BuildDefenseHintCard(GameObject parent)
-        {
-            GameObject card = CreateCardContainer(parent, "DefenseHintCard", 110f);
-            var title = XingShuUIFactory.CreateText(card, "Title", "防御点数提示", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
-            title.rectTransform.pivot = new Vector2(0f, 1f);
-            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
-            title.rectTransform.sizeDelta = new Vector2(450f, 28f);
-            var desc = XingShuUIFactory.CreateText(card, "Description", "本人防御时显示压至最低伤害、避免击飞所需的总防御和骰点。\n含已同步防御牌；数值未完全揭示时按保守上限估算，不代替操作。", 13, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            desc.rectTransform.anchorMin = new Vector2(0f, 0f);
-            desc.rectTransform.anchorMax = Vector2.one;
-            desc.rectTransform.offsetMin = new Vector2(20f, 8f);
-            desc.rectTransform.offsetMax = new Vector2(-20f, -52f);
-            _defenseHintToggle = XingShuUIFactory.CreateToggle(card, "EnableDefenseHint", "显示提示", DefensePointHint.IsEnabled,
-                value => { if (!_suppressCallbacks) DefensePointHint.SetEnabled(value); });
-            var rt = _defenseHintToggle.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
-            rt.pivot = new Vector2(1f, 1f);
-            rt.anchoredPosition = new Vector2(-20f, -12f);
-            rt.sizeDelta = new Vector2(160f, 32f);
-            card.SetActive(XingShuRuntime.Core.LauncherModules.CanLoad("DefensePointHint"));
-        }
-
-        private void BuildBattleCardHintCard(GameObject parent)
-        {
-            GameObject card = CreateCardContainer(parent, "BattleCardPointHintCard", 278f);
-            var title = XingShuUIFactory.CreateText(card, "Title", "战斗卡牌点数提示", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
-            title.rectTransform.pivot = new Vector2(0f, 1f);
-            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
-            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
-
-            var desc = XingShuUIFactory.CreateText(card, "Description", "战斗时显示攻防双方卡牌与点数明细；未锁定时可在局内直接拖动调整位置", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            desc.rectTransform.anchorMin = new Vector2(0f, 1f);
-            desc.rectTransform.anchorMax = new Vector2(1f, 1f);
-            desc.rectTransform.pivot = new Vector2(0.5f, 1f);
-            desc.rectTransform.anchoredPosition = new Vector2(0f, -38f);
-            desc.rectTransform.sizeDelta = new Vector2(-40f, 20f);
-
-            _battleCardHintToggle = XingShuUIFactory.CreateToggle(card, "EnableBattleCardHint", "显示点数", BattleCardPointHint.IsEnabled,
-                value => { if (!_suppressCallbacks) BattleCardPointHint.SetEnabled(value); });
-            var rt = _battleCardHintToggle.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
-            rt.pivot = new Vector2(1f, 1f);
-            rt.anchoredPosition = new Vector2(-20f, -10f);
-            rt.sizeDelta = new Vector2(165f, 34f);
-
-            _battleCardLockToggle = XingShuUIFactory.CreateToggle(card, "BattleCardLockToggle", "锁定位置（禁止拖动）", BattleCardPointHint.Locked,
-                value => { if (!_suppressCallbacks) BattleCardPointHint.SetLocked(value); });
-            var lockRt = _battleCardLockToggle.GetComponent<RectTransform>();
-            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
-            lockRt.pivot = new Vector2(0f, 1f);
-            lockRt.anchoredPosition = new Vector2(20f, -64f);
-            lockRt.sizeDelta = new Vector2(240f, 32f);
-
-            Button resetBtn = CreateActionButton(card, "ResetBattleCardLayout", "恢复默认",
-                () => { BattleCardPointHint.ResetLayout(); SyncBattleCardControls(); }, 104f, 30f, 12);
-            var resetRt = resetBtn.GetComponent<RectTransform>();
-            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
-            resetRt.pivot = new Vector2(1f, 1f);
-            resetRt.anchoredPosition = new Vector2(-20f, -64f);
-
-            AddPercentSliderRow(card, "BattleCardScale", "显示大小（60%–180%）", 104f,
-                XingShuConfigKeys.BattleCardPointScaleMin, XingShuConfigKeys.BattleCardPointScaleMax,
-                BattleCardPointHint.Scale,
-                v => { BattleCardPointHint.SetScale(Mathf.Round(v * 20f) / 20f); SyncBattleCardControls(); },
-                out _battleCardScaleSlider, out _battleCardScaleText);
-
-            AddPercentSliderRow(card, "BattleCardMarginX", "两侧水平边距（0%–45%）", 158f,
-                0f, 0.45f, Mathf.Clamp(BattleCardPointHint.AtkX, 0f, 0.45f),
-                v => { BattleCardPointHint.SetMirrorMarginX(v); SyncBattleCardControls(); },
-                out _battleCardMarginXSlider, out _battleCardMarginXText);
-
-            AddPercentSliderRow(card, "BattleCardY", "垂直位置 Y（上 → 下）", 212f,
-                0f, 1f, BattleCardPointHint.AtkY,
-                v => { BattleCardPointHint.SetUnifiedY(v); SyncBattleCardControls(); },
-                out _battleCardYSlider, out _battleCardYText);
-
-            card.SetActive(LauncherModules.CanLoad("BattleCardPointHint"));
-        }
-
-        private void BuildMegathDamageHintCard(GameObject parent)
-        {
-            GameObject card = CreateCardContainer(parent, "MegathDamageHintCard", 278f);
-            var title = XingShuUIFactory.CreateText(card, "Title", "梅加斯伤害计算面板", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
-            title.rectTransform.pivot = new Vector2(0f, 1f);
-            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
-            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
-
-            var desc = XingShuUIFactory.CreateText(card, "Description", "仅游玩梅加斯时显示主动技能「轨道轰炸」理论最大伤害；未锁定时可在局内直接拖动", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            desc.rectTransform.anchorMin = new Vector2(0f, 1f);
-            desc.rectTransform.anchorMax = new Vector2(1f, 1f);
-            desc.rectTransform.pivot = new Vector2(0.5f, 1f);
-            desc.rectTransform.anchoredPosition = new Vector2(0f, -38f);
-            desc.rectTransform.sizeDelta = new Vector2(-40f, 20f);
-
-            _megathEnabledToggle = XingShuUIFactory.CreateToggle(card, "EnableMegathHint", "显示面板", MegathSkillDamageHint.IsEnabled,
-                value => { if (!_suppressCallbacks) MegathSkillDamageHint.SetEnabled(value); });
-            var rt = _megathEnabledToggle.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
-            rt.pivot = new Vector2(1f, 1f);
-            rt.anchoredPosition = new Vector2(-20f, -10f);
-            rt.sizeDelta = new Vector2(165f, 34f);
-
-            _megathLockToggle = XingShuUIFactory.CreateToggle(card, "MegathLockToggle", "锁定位置（禁止拖动）", MegathSkillDamageHint.Locked,
-                value => { if (!_suppressCallbacks) MegathSkillDamageHint.SetLocked(value); });
-            var lockRt = _megathLockToggle.GetComponent<RectTransform>();
-            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
-            lockRt.pivot = new Vector2(0f, 1f);
-            lockRt.anchoredPosition = new Vector2(20f, -64f);
-            lockRt.sizeDelta = new Vector2(240f, 32f);
-
-            Button resetBtn = CreateActionButton(card, "ResetMegathLayout", "恢复默认",
-                () => { MegathSkillDamageHint.ResetLayout(); SyncMegathControls(); }, 104f, 30f, 12);
-            var resetRt = resetBtn.GetComponent<RectTransform>();
-            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
-            resetRt.pivot = new Vector2(1f, 1f);
-            resetRt.anchoredPosition = new Vector2(-20f, -64f);
-
-            AddPercentSliderRow(card, "MegathScale", "显示大小（60%–180%）", 104f,
-                XingShuConfigKeys.MegathDamageHintScaleMin, XingShuConfigKeys.MegathDamageHintScaleMax,
-                MegathSkillDamageHint.Scale,
-                v => { MegathSkillDamageHint.SetScale(Mathf.Round(v * 20f) / 20f); SyncMegathControls(); },
-                out _megathScaleSlider, out _megathScaleText);
-
-            AddPercentSliderRow(card, "MegathX", "水平位置 X（左 → 右）", 158f,
-                0f, 1f, MegathSkillDamageHint.PosX,
-                v => { MegathSkillDamageHint.SetPosition(v, MegathSkillDamageHint.PosY); SyncMegathControls(); },
-                out _megathXSlider, out _megathXText);
-
-            AddPercentSliderRow(card, "MegathY", "垂直位置 Y（上 → 下）", 212f,
-                0f, 1f, MegathSkillDamageHint.PosY,
-                v => { MegathSkillDamageHint.SetPosition(MegathSkillDamageHint.PosX, v); SyncMegathControls(); },
-                out _megathYSlider, out _megathYText);
-
-            card.SetActive(LauncherModules.CanLoad("MegathSkillDamageHint"));
-        }
-
-        private void BuildPlayerCombatHudCard(GameObject parent)
-        {
-            GameObject card = CreateCardContainer(parent, "PlayerCombatStatusHudCard", 408f);
-            var title = XingShuUIFactory.CreateText(card, "Title", "角色状态显示（头顶与头像栏）", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
-            title.rectTransform.pivot = new Vector2(0f, 1f);
-            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
-            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
-
-            var desc = XingShuUIFactory.CreateText(card, "Description", "角色头顶与怪物推演同层锁死不可拖动；左侧头像星级栏下方状态条可自由拖动及微调", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            desc.rectTransform.anchorMin = new Vector2(0f, 1f);
-            desc.rectTransform.anchorMax = new Vector2(1f, 1f);
-            desc.rectTransform.pivot = new Vector2(0.5f, 1f);
-            desc.rectTransform.anchoredPosition = new Vector2(0f, -38f);
-            desc.rectTransform.sizeDelta = new Vector2(-40f, 20f);
-
-            _playerHudEnabledToggle = XingShuUIFactory.CreateToggle(card, "EnablePlayerCombatHud", "显示状态", PlayerCombatStatusHud.IsEnabled,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetEnabled(value); });
-            var rt = _playerHudEnabledToggle.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
-            rt.pivot = new Vector2(1f, 1f);
-            rt.anchoredPosition = new Vector2(-20f, -10f);
-            rt.sizeDelta = new Vector2(165f, 34f);
-
-            _playerHudHeadToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudHeadToggle", "棋盘头顶(锁)", PlayerCombatStatusHud.ShowHead,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowHead(value); });
-            var headRt = _playerHudHeadToggle.GetComponent<RectTransform>();
-            headRt.anchorMin = headRt.anchorMax = new Vector2(0f, 1f);
-            headRt.pivot = new Vector2(0f, 1f);
-            headRt.anchoredPosition = new Vector2(20f, -64f);
-            headRt.sizeDelta = new Vector2(140f, 30f);
-
-            _playerHudAvatarToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudAvatarToggle", "头像下方栏", PlayerCombatStatusHud.ShowAvatar,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowAvatar(value); });
-            var avRt = _playerHudAvatarToggle.GetComponent<RectTransform>();
-            avRt.anchorMin = avRt.anchorMax = new Vector2(0f, 1f);
-            avRt.pivot = new Vector2(0f, 1f);
-            avRt.anchoredPosition = new Vector2(168f, -64f);
-            avRt.sizeDelta = new Vector2(138f, 30f);
-
-            _playerHudLockToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudLockToggle", "锁定头像栏", PlayerCombatStatusHud.Locked,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetLocked(value); });
-            var lockRt = _playerHudLockToggle.GetComponent<RectTransform>();
-            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
-            lockRt.pivot = new Vector2(0f, 1f);
-            lockRt.anchoredPosition = new Vector2(314f, -64f);
-            lockRt.sizeDelta = new Vector2(138f, 30f);
-
-            Button resetBtn = CreateActionButton(card, "ResetPlayerHudLayout", "恢复默认",
-                () => { PlayerCombatStatusHud.ResetLayout(); SyncPlayerCombatHudControls(); }, 104f, 30f, 12);
-            var resetRt = resetBtn.GetComponent<RectTransform>();
-            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
-            resetRt.pivot = new Vector2(1f, 1f);
-            resetRt.anchoredPosition = new Vector2(-20f, -64f);
-
-            _playerHudCdToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudCdToggle", "冷却 CD", PlayerCombatStatusHud.ShowCd,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowCd(value); });
-            var cdRt = _playerHudCdToggle.GetComponent<RectTransform>();
-            cdRt.anchorMin = cdRt.anchorMax = new Vector2(0f, 1f);
-            cdRt.pivot = new Vector2(0f, 1f);
-            cdRt.anchoredPosition = new Vector2(20f, -102f);
-            cdRt.sizeDelta = new Vector2(128f, 30f);
-
-            _playerHudHpToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudHpToggle", "头顶 HP", PlayerCombatStatusHud.ShowHp,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowHp(value); });
-            var hpRt = _playerHudHpToggle.GetComponent<RectTransform>();
-            hpRt.anchorMin = hpRt.anchorMax = new Vector2(0f, 1f);
-            hpRt.pivot = new Vector2(0f, 1f);
-            hpRt.anchoredPosition = new Vector2(158f, -102f);
-            hpRt.sizeDelta = new Vector2(128f, 30f);
-
-            _playerHudAtkDefToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudAtkDefToggle", "基础攻防", PlayerCombatStatusHud.ShowAtkDef,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowAtkDef(value); });
-            var adRt = _playerHudAtkDefToggle.GetComponent<RectTransform>();
-            adRt.anchorMin = adRt.anchorMax = new Vector2(0f, 1f);
-            adRt.pivot = new Vector2(0f, 1f);
-            adRt.anchoredPosition = new Vector2(296f, -102f);
-            adRt.sizeDelta = new Vector2(126f, 30f);
-
-            _playerHudMoveToggle = XingShuUIFactory.CreateToggle(card, "PlayerHudMoveToggle", "额外移速", PlayerCombatStatusHud.ShowMove,
-                value => { if (!_suppressCallbacks) PlayerCombatStatusHud.SetShowMove(value); });
-            var mvRt = _playerHudMoveToggle.GetComponent<RectTransform>();
-            mvRt.anchorMin = mvRt.anchorMax = new Vector2(0f, 1f);
-            mvRt.pivot = new Vector2(0f, 1f);
-            mvRt.anchoredPosition = new Vector2(430f, -102f);
-            mvRt.sizeDelta = new Vector2(126f, 30f);
-
-            AddPercentSliderRow(card, "PlayerHudScale", "显示大小（60%–180%）", 142f,
-                XingShuConfigKeys.PlayerCombatHudScaleMin, XingShuConfigKeys.PlayerCombatHudScaleMax,
-                PlayerCombatStatusHud.Scale,
-                v => { PlayerCombatStatusHud.SetScale(Mathf.Round(v * 20f) / 20f); SyncPlayerCombatHudControls(); },
-                out _playerHudScaleSlider, out _playerHudScaleText);
-
-            AddSliderRow(card, "PlayerHudOffX", "头像栏水平偏移 X（-160–160 px）", 198f,
-                XingShuConfigKeys.PlayerCombatHudOffsetXMin, XingShuConfigKeys.PlayerCombatHudOffsetXMax,
-                PlayerCombatStatusHud.OffsetX, $"{Mathf.RoundToInt(PlayerCombatStatusHud.OffsetX)} px",
-                v => { PlayerCombatStatusHud.SetOffset(Mathf.Round(v), PlayerCombatStatusHud.OffsetY); SyncPlayerCombatHudControls(); },
-                out _playerHudOffXSlider, out _playerHudOffXText);
-
-            AddSliderRow(card, "PlayerHudOffY", "头像栏垂直偏移 Y（-160–160 px）", 254f,
-                XingShuConfigKeys.PlayerCombatHudOffsetYMin, XingShuConfigKeys.PlayerCombatHudOffsetYMax,
-                PlayerCombatStatusHud.OffsetY, $"{Mathf.RoundToInt(PlayerCombatStatusHud.OffsetY)} px",
-                v => { PlayerCombatStatusHud.SetOffset(PlayerCombatStatusHud.OffsetX, Mathf.Round(v)); SyncPlayerCombatHudControls(); },
-                out _playerHudOffYSlider, out _playerHudOffYText);
-
-            AddSliderRow(card, "PlayerHudHeadOffY", "棋盘头顶高度偏移 Y（-120–120 px）", 310f,
-                XingShuConfigKeys.PlayerCombatHudHeadOffsetYMin, XingShuConfigKeys.PlayerCombatHudHeadOffsetYMax,
-                PlayerCombatStatusHud.HeadOffsetY, $"{Mathf.RoundToInt(PlayerCombatStatusHud.HeadOffsetY)} px",
-                v => { PlayerCombatStatusHud.SetHeadOffsetY(Mathf.Round(v)); SyncPlayerCombatHudControls(); },
-                out _playerHudHeadOffYSlider, out _playerHudHeadOffYText);
-
-            card.SetActive(LauncherModules.CanLoad("PlayerCombatStatusHud"));
-        }
-
-        private const int StarBuffRowsPerPage = 8;
-
-        private void BuildPlayerStarBuffCard(GameObject parent)
-        {
-            GameObject card = CreateCardContainer(parent, "PlayerStarBuffHudCard", 780f);
-            var title = XingShuUIFactory.CreateText(card, "Title", "角色星级Buff显示（左侧头像⭐区域）", 17, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            title.rectTransform.anchorMin = title.rectTransform.anchorMax = new Vector2(0f, 1f);
-            title.rectTransform.pivot = new Vector2(0f, 1f);
-            title.rectTransform.anchoredPosition = new Vector2(20f, -12f);
-            title.rectTransform.sizeDelta = new Vector2(450f, 26f);
-
-            _starBuffSummaryText = XingShuUIFactory.CreateText(card, "Description",
-                "在左侧角色星级左右展示疾行/角色专属/战斗增益等 Buff；支持分类与单项精确开关",
-                12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            _starBuffSummaryText.rectTransform.anchorMin = new Vector2(0f, 1f);
-            _starBuffSummaryText.rectTransform.anchorMax = new Vector2(1f, 1f);
-            _starBuffSummaryText.rectTransform.pivot = new Vector2(0.5f, 1f);
-            _starBuffSummaryText.rectTransform.anchoredPosition = new Vector2(0f, -38f);
-            _starBuffSummaryText.rectTransform.sizeDelta = new Vector2(-40f, 20f);
-
-            _starBuffEnabledToggle = XingShuUIFactory.CreateToggle(card, "EnableStarBuffHud", "显示Buff", PlayerStarBuffHud.IsEnabled,
-                value => { if (!_suppressCallbacks) PlayerStarBuffHud.SetEnabled(value); });
-            var enRt = _starBuffEnabledToggle.GetComponent<RectTransform>();
-            enRt.anchorMin = enRt.anchorMax = new Vector2(1f, 1f);
-            enRt.pivot = new Vector2(1f, 1f);
-            enRt.anchoredPosition = new Vector2(-20f, -10f);
-            enRt.sizeDelta = new Vector2(160f, 34f);
-
-            _starBuffLockToggle = XingShuUIFactory.CreateToggle(card, "StarBuffLockToggle", "锁定位置", PlayerStarBuffHud.Locked,
-                value => { if (!_suppressCallbacks) PlayerStarBuffHud.SetLocked(value); });
-            var lockRt = _starBuffLockToggle.GetComponent<RectTransform>();
-            lockRt.anchorMin = lockRt.anchorMax = new Vector2(0f, 1f);
-            lockRt.pivot = new Vector2(0f, 1f);
-            lockRt.anchoredPosition = new Vector2(20f, -64f);
-            lockRt.sizeDelta = new Vector2(130f, 30f);
-
-            Button allOnBtn = CreateActionButton(card, "StarBuffAllOnBtn", "全选Buff",
-                () => { PlayerStarBuffHud.SetAllCategories(true); SyncPlayerStarBuffControls(refreshCatalog: true); }, 92f, 30f, 12);
-            var onRt = allOnBtn.GetComponent<RectTransform>();
-            onRt.anchorMin = onRt.anchorMax = new Vector2(0f, 1f);
-            onRt.pivot = new Vector2(0f, 1f);
-            onRt.anchoredPosition = new Vector2(160f, -64f);
-
-            Button allOffBtn = CreateActionButton(card, "StarBuffAllOffBtn", "全不选",
-                () => { PlayerStarBuffHud.SetAllCategories(false); SyncPlayerStarBuffControls(refreshCatalog: true); }, 82f, 30f, 12);
-            var offRt = allOffBtn.GetComponent<RectTransform>();
-            offRt.anchorMin = offRt.anchorMax = new Vector2(0f, 1f);
-            offRt.pivot = new Vector2(0f, 1f);
-            offRt.anchoredPosition = new Vector2(260f, -64f);
-
-            Button resetBtn = CreateActionButton(card, "StarBuffResetBtn", "恢复默认",
-                () => { PlayerStarBuffHud.ResetLayout(); SyncPlayerStarBuffControls(refreshCatalog: true); }, 96f, 30f, 12);
-            var resetRt = resetBtn.GetComponent<RectTransform>();
-            resetRt.anchorMin = resetRt.anchorMax = new Vector2(1f, 1f);
-            resetRt.pivot = new Vector2(1f, 1f);
-            resetRt.anchoredPosition = new Vector2(-20f, -64f);
-
-            // Anchor position presets (星级右侧 / 星级左侧 / 星级下方)
-            var anchorLabel = XingShuUIFactory.CreateText(card, "StarBuffAnchorLabel", "显示方位：", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            anchorLabel.rectTransform.anchorMin = anchorLabel.rectTransform.anchorMax = new Vector2(0f, 1f);
-            anchorLabel.rectTransform.pivot = new Vector2(0f, 1f);
-            anchorLabel.rectTransform.anchoredPosition = new Vector2(20f, -102f);
-            anchorLabel.rectTransform.sizeDelta = new Vector2(76f, 28f);
-
-            string[] anchorNames = { "星级右侧", "星级左侧", "星级下方" };
-            _starBuffAnchorButtons = new Button[anchorNames.Length];
-            _starBuffAnchorBtnTexts = new Text[anchorNames.Length];
-            for (int i = 0; i < anchorNames.Length; i++)
-            {
-                int capturedMode = i;
-                Button btn = CreateActionButton(card, "StarBuffAnchor_" + i, anchorNames[i],
-                    () => { PlayerStarBuffHud.SetAnchorMode(capturedMode); SyncPlayerStarBuffControls(refreshCatalog: false); }, 96f, 28f, 12);
-                var bRt = btn.GetComponent<RectTransform>();
-                bRt.anchorMin = bRt.anchorMax = new Vector2(0f, 1f);
-                bRt.pivot = new Vector2(0f, 1f);
-                bRt.anchoredPosition = new Vector2(100f + i * 104f, -102f);
-                _starBuffAnchorButtons[i] = btn;
-                _starBuffAnchorBtnTexts[i] = btn.GetComponentInChildren<Text>();
-            }
-
-            // 6 category switches
-            _starBuffCatMoveToggle = CreateStarBuffCategoryToggle(card, "CatMove", "疾行/移速", 20f, -138f, StarBuffCategory.Move);
-            _starBuffCatHeroToggle = CreateStarBuffCategoryToggle(card, "CatHero", "角色专属", 190f, -138f, StarBuffCategory.Hero);
-            _starBuffCatCombatToggle = CreateStarBuffCategoryToggle(card, "CatCombat", "攻防战斗", 360f, -138f, StarBuffCategory.Combat);
-            _starBuffCatDebuffToggle = CreateStarBuffCategoryToggle(card, "CatDebuff", "减益/毒咒", 20f, -172f, StarBuffCategory.Debuff);
-            _starBuffCatEventToggle = CreateStarBuffCategoryToggle(card, "CatEvent", "事件/回复", 190f, -172f, StarBuffCategory.Event);
-            _starBuffCatOtherToggle = CreateStarBuffCategoryToggle(card, "CatOther", "其他Buff", 360f, -172f, StarBuffCategory.Other);
-
-            AddPercentSliderRow(card, "StarBuffScale", "Buff图标大小（50%–180%）", 210f,
-                XingShuConfigKeys.PlayerStarBuffsScaleMin, XingShuConfigKeys.PlayerStarBuffsScaleMax,
-                PlayerStarBuffHud.Scale,
-                v => { PlayerStarBuffHud.SetScale(Mathf.Round(v * 20f) / 20f); SyncPlayerStarBuffControls(false); },
-                out _starBuffScaleSlider, out _starBuffScaleText);
-
-            AddSliderRow(card, "StarBuffOffX", "水平偏移 X（-220–260 px）", 264f,
-                XingShuConfigKeys.PlayerStarBuffsOffsetXMin, XingShuConfigKeys.PlayerStarBuffsOffsetXMax,
-                PlayerStarBuffHud.OffsetX, $"{Mathf.RoundToInt(PlayerStarBuffHud.OffsetX)} px",
-                v => { PlayerStarBuffHud.SetOffset(Mathf.Round(v), PlayerStarBuffHud.OffsetY); SyncPlayerStarBuffControls(false); },
-                out _starBuffOffXSlider, out _starBuffOffXText);
-
-            AddSliderRow(card, "StarBuffOffY", "垂直偏移 Y（-160–160 px）", 318f,
-                XingShuConfigKeys.PlayerStarBuffsOffsetYMin, XingShuConfigKeys.PlayerStarBuffsOffsetYMax,
-                PlayerStarBuffHud.OffsetY, $"{Mathf.RoundToInt(PlayerStarBuffHud.OffsetY)} px",
-                v => { PlayerStarBuffHud.SetOffset(PlayerStarBuffHud.OffsetX, Mathf.Round(v)); SyncPlayerStarBuffControls(false); },
-                out _starBuffOffYSlider, out _starBuffOffYText);
-
-            AddSliderRow(card, "StarBuffMaxIcons", "单玩家最多显示 Buff 数（3–16）", 372f,
-                XingShuConfigKeys.PlayerStarBuffsMaxIconsMin, XingShuConfigKeys.PlayerStarBuffsMaxIconsMax,
-                PlayerStarBuffHud.MaxIcons, $"{PlayerStarBuffHud.MaxIcons} 个",
-                v => { PlayerStarBuffHud.SetMaxIcons(Mathf.RoundToInt(v)); SyncPlayerStarBuffControls(false); },
-                out _starBuffMaxSlider, out _starBuffMaxText);
-
-            // Individual Buff Selector section
-            var listHeader = XingShuUIFactory.CreateText(card, "StarBuffListHeader", "可选 Buff 精确开关（点勾选框即可单独开启/关闭任意 Buff）", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            listHeader.rectTransform.anchorMin = listHeader.rectTransform.anchorMax = new Vector2(0f, 1f);
-            listHeader.rectTransform.pivot = new Vector2(0f, 1f);
-            listHeader.rectTransform.anchoredPosition = new Vector2(20f, -430f);
-            listHeader.rectTransform.sizeDelta = new Vector2(480f, 22f);
-
-            Button refreshCatalogBtn = CreateActionButton(card, "StarBuffRefreshCatalog", "刷新Buff",
-                () => RefreshStarBuffCatalogRows(resetPage: false), 84f, 28f, 12);
-            var refRt = refreshCatalogBtn.GetComponent<RectTransform>();
-            refRt.anchorMin = refRt.anchorMax = new Vector2(1f, 1f);
-            refRt.pivot = new Vector2(1f, 1f);
-            refRt.anchoredPosition = new Vector2(-20f, -427f);
-
-            _starBuffSearchInput = XingShuUIFactory.CreateInputField(
-                card, "StarBuffSearchInput", "搜索 Buff 名称或 ID（如 疾行 / 狂暴 / 治愈）", "",
-                "PlayerStarBuffSearch",
-                q =>
-                {
-                    if (_suppressCallbacks) return;
-                    _starBuffSearchQuery = q ?? "";
-                    _starBuffPage = 0;
-                    RefreshStarBuffCatalogRows(resetPage: true);
-                },
-                null, 12);
-            var searchRt = _starBuffSearchInput.GetComponent<RectTransform>();
-            searchRt.anchorMin = new Vector2(0f, 1f);
-            searchRt.anchorMax = new Vector2(1f, 1f);
-            searchRt.pivot = new Vector2(0.5f, 1f);
-            searchRt.anchoredPosition = new Vector2(0f, -458f);
-            searchRt.sizeDelta = new Vector2(-40f, 30f);
-
-            string[] filterLabels = { "全部", "局内", "疾行", "专属", "战斗", "减益", "事件/他" };
-            _starBuffFilterButtons = new Button[filterLabels.Length];
-            _starBuffFilterBtnTexts = new Text[filterLabels.Length];
-            for (int i = 0; i < filterLabels.Length; i++)
-            {
-                int capturedTab = i;
-                float bw = i == filterLabels.Length - 1 ? 74f : 60f;
-                float bx = 20f + i * 64f;
-                Button fBtn = CreateActionButton(card, "StarBuffFilter_" + i, filterLabels[i],
-                    () =>
-                    {
-                        _starBuffFilterTab = capturedTab;
-                        _starBuffPage = 0;
-                        RefreshStarBuffCatalogRows(resetPage: true);
-                    }, bw, 26f, 11);
-                var fRt = fBtn.GetComponent<RectTransform>();
-                fRt.anchorMin = fRt.anchorMax = new Vector2(0f, 1f);
-                fRt.pivot = new Vector2(0f, 1f);
-                fRt.anchoredPosition = new Vector2(bx, -494f);
-                _starBuffFilterButtons[i] = fBtn;
-                _starBuffFilterBtnTexts[i] = fBtn.GetComponentInChildren<Text>();
-            }
-
-            _starBuffRowToggles.Clear();
-            _starBuffRowLabels.Clear();
-            for (int r = 0; r < StarBuffRowsPerPage; r++)
-            {
-                int rowIdx = r;
-                float rowY = -(526f + r * 28f);
-                Toggle rowToggle = XingShuUIFactory.CreateToggle(card, "StarBuffRow_" + r, "", true,
-                    val =>
-                    {
-                        if (_suppressCallbacks) return;
-                        int entryIndex = _starBuffPage * StarBuffRowsPerPage + rowIdx;
-                        if (entryIndex >= 0 && entryIndex < _starBuffVisibleEntries.Count)
-                        {
-                            var entry = _starBuffVisibleEntries[entryIndex];
-                            PlayerStarBuffHud.SetBuffOverride(entry.BuffId, entry.Category, val);
-                            SyncPlayerStarBuffControls(refreshCatalog: true);
-                        }
-                    });
-                var rRt = rowToggle.GetComponent<RectTransform>();
-                rRt.anchorMin = new Vector2(0f, 1f);
-                rRt.anchorMax = new Vector2(1f, 1f);
-                rRt.pivot = new Vector2(0.5f, 1f);
-                rRt.anchoredPosition = new Vector2(0f, rowY);
-                rRt.sizeDelta = new Vector2(-40f, 26f);
-                Text rowLbl = rowToggle.GetComponentInChildren<Text>();
-                if (rowLbl != null)
-                {
-                    rowLbl.fontSize = 12;
-                }
-                _starBuffRowToggles.Add(rowToggle);
-                _starBuffRowLabels.Add(rowLbl);
-            }
-
-            Button prevPageBtn = CreateActionButton(card, "StarBuffPrevPage", "上一页",
-                () =>
-                {
-                    if (_starBuffPage > 0)
-                    {
-                        _starBuffPage--;
-                        RenderStarBuffPage();
-                    }
-                }, 86f, 26f, 12);
-            var prevRt = prevPageBtn.GetComponent<RectTransform>();
-            prevRt.anchorMin = prevRt.anchorMax = new Vector2(0f, 1f);
-            prevRt.pivot = new Vector2(0f, 1f);
-            prevRt.anchoredPosition = new Vector2(20f, -750f);
-
-            _starBuffPageText = XingShuUIFactory.CreateText(card, "StarBuffPageText", "第 1 / 1 页", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleCenter);
-            _starBuffPageText.rectTransform.anchorMin = _starBuffPageText.rectTransform.anchorMax = new Vector2(0.5f, 1f);
-            _starBuffPageText.rectTransform.pivot = new Vector2(0.5f, 1f);
-            _starBuffPageText.rectTransform.anchoredPosition = new Vector2(0f, -750f);
-            _starBuffPageText.rectTransform.sizeDelta = new Vector2(220f, 26f);
-
-            Button nextPageBtn = CreateActionButton(card, "StarBuffNextPage", "下一页",
-                () =>
-                {
-                    int totalPages = Math.Max(1, (_starBuffVisibleEntries.Count + StarBuffRowsPerPage - 1) / StarBuffRowsPerPage);
-                    if (_starBuffPage + 1 < totalPages)
-                    {
-                        _starBuffPage++;
-                        RenderStarBuffPage();
-                    }
-                }, 86f, 26f, 12);
-            var nextRt = nextPageBtn.GetComponent<RectTransform>();
-            nextRt.anchorMin = nextRt.anchorMax = new Vector2(1f, 1f);
-            nextRt.pivot = new Vector2(1f, 1f);
-            nextRt.anchoredPosition = new Vector2(-20f, -750f);
-
-            RefreshStarBuffCatalogRows(resetPage: true);
-            card.SetActive(LauncherModules.CanLoad("PlayerStarBuffHud"));
-        }
-
-        private Toggle CreateStarBuffCategoryToggle(GameObject card, string id, string label, float x, float y, StarBuffCategory category)
-        {
-            Toggle toggle = XingShuUIFactory.CreateToggle(card, "StarBuff_" + id, label, PlayerStarBuffHud.GetCategoryEnabled(category),
-                val =>
-                {
-                    if (_suppressCallbacks) return;
-                    PlayerStarBuffHud.SetCategoryEnabled(category, val);
-                    SyncPlayerStarBuffControls(refreshCatalog: true);
-                });
-            var rt = toggle.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(0f, 1f);
-            rt.pivot = new Vector2(0f, 1f);
-            rt.anchoredPosition = new Vector2(x, y);
-            rt.sizeDelta = new Vector2(160f, 30f);
-            return toggle;
-        }
-
-        private void RefreshStarBuffCatalogRows(bool resetPage)
-        {
-            _starBuffVisibleEntries.Clear();
-            var list = PlayerStarBuffHud.GetCatalogEntries(_starBuffSearchQuery, _starBuffFilterTab);
-            for (int i = 0; i < list.Count; i++)
-            {
-                _starBuffVisibleEntries.Add(list[i]);
-            }
-            int totalPages = Math.Max(1, (_starBuffVisibleEntries.Count + StarBuffRowsPerPage - 1) / StarBuffRowsPerPage);
-            if (resetPage || _starBuffPage >= totalPages)
-            {
-                _starBuffPage = resetPage ? 0 : Math.Max(0, totalPages - 1);
-            }
-            if (_starBuffFilterBtnTexts != null)
-            {
-                for (int i = 0; i < _starBuffFilterBtnTexts.Length; i++)
-                {
-                    if (_starBuffFilterBtnTexts[i] != null)
-                    {
-                        _starBuffFilterBtnTexts[i].color = i == _starBuffFilterTab ? XingShuUITheme.LimeAccent : XingShuUITheme.PrimaryText;
-                    }
-                }
-            }
-            RenderStarBuffPage();
-        }
-
-        private void RenderStarBuffPage()
-        {
-            int total = _starBuffVisibleEntries.Count;
-            int totalPages = Math.Max(1, (total + StarBuffRowsPerPage - 1) / StarBuffRowsPerPage);
-            if (_starBuffPage >= totalPages) _starBuffPage = totalPages - 1;
-            if (_starBuffPage < 0) _starBuffPage = 0;
-
-            bool prevSuppress = _suppressCallbacks;
-            _suppressCallbacks = true;
-            try
-            {
-                int start = _starBuffPage * StarBuffRowsPerPage;
-                for (int r = 0; r < _starBuffRowToggles.Count; r++)
-                {
-                    Toggle tg = _starBuffRowToggles[r];
-                    if (tg == null) continue;
-                    int idx = start + r;
-                    if (idx < total)
-                    {
-                        var entry = _starBuffVisibleEntries[idx];
-                        tg.gameObject.SetActive(true);
-                        tg.isOn = entry.Enabled;
-                        if (r < _starBuffRowLabels.Count && _starBuffRowLabels[r] != null)
-                        {
-                            string prefix = entry.IsActiveInMatch ? "[局内] " : "";
-                            string catName = PlayerStarBuffPolicy.GetCategoryLabel(entry.Category);
-                            _starBuffRowLabels[r].text = $"{prefix}{entry.Name}  ({catName} · #{entry.BuffId})";
-                        }
-                    }
-                    else
-                    {
-                        tg.gameObject.SetActive(false);
-                    }
-                }
-            }
-            finally
-            {
-                _suppressCallbacks = prevSuppress;
-            }
-
-            if (_starBuffPageText != null)
-            {
-                _starBuffPageText.text = $"第 {_starBuffPage + 1} / {totalPages} 页（共 {total} 项）";
-            }
-        }
-
-        private void SyncPlayerStarBuffControls(bool refreshCatalog)
-        {
-            if (_starBuffEnabledToggle == null) return;
-            float scale = PlayerStarBuffHud.Scale;
-            float offX = PlayerStarBuffHud.OffsetX;
-            float offY = PlayerStarBuffHud.OffsetY;
-            int maxIcons = PlayerStarBuffHud.MaxIcons;
-            int anchorMode = PlayerStarBuffHud.AnchorMode;
-            bool locked = PlayerStarBuffHud.Locked;
-
-            bool prevSuppress = _suppressCallbacks;
-            _suppressCallbacks = true;
-            if (_starBuffEnabledToggle != null) _starBuffEnabledToggle.isOn = PlayerStarBuffHud.IsEnabled;
-            if (_starBuffLockToggle != null) _starBuffLockToggle.isOn = locked;
-            if (_starBuffCatMoveToggle != null) _starBuffCatMoveToggle.isOn = PlayerStarBuffHud.GetCategoryEnabled(StarBuffCategory.Move);
-            if (_starBuffCatHeroToggle != null) _starBuffCatHeroToggle.isOn = PlayerStarBuffHud.GetCategoryEnabled(StarBuffCategory.Hero);
-            if (_starBuffCatCombatToggle != null) _starBuffCatCombatToggle.isOn = PlayerStarBuffHud.GetCategoryEnabled(StarBuffCategory.Combat);
-            if (_starBuffCatDebuffToggle != null) _starBuffCatDebuffToggle.isOn = PlayerStarBuffHud.GetCategoryEnabled(StarBuffCategory.Debuff);
-            if (_starBuffCatEventToggle != null) _starBuffCatEventToggle.isOn = PlayerStarBuffHud.GetCategoryEnabled(StarBuffCategory.Event);
-            if (_starBuffCatOtherToggle != null) _starBuffCatOtherToggle.isOn = PlayerStarBuffHud.GetCategoryEnabled(StarBuffCategory.Other);
-            if (_starBuffScaleSlider != null && Mathf.Abs(_starBuffScaleSlider.value - scale) > 0.005f) _starBuffScaleSlider.value = scale;
-            if (_starBuffOffXSlider != null && Mathf.Abs(_starBuffOffXSlider.value - offX) > 0.5f) _starBuffOffXSlider.value = offX;
-            if (_starBuffOffYSlider != null && Mathf.Abs(_starBuffOffYSlider.value - offY) > 0.5f) _starBuffOffYSlider.value = offY;
-            if (_starBuffMaxSlider != null && Mathf.RoundToInt(_starBuffMaxSlider.value) != maxIcons) _starBuffMaxSlider.value = maxIcons;
-            _suppressCallbacks = prevSuppress;
-
-            if (_starBuffScaleText != null) _starBuffScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-            if (_starBuffOffXText != null) _starBuffOffXText.text = $"{Mathf.RoundToInt(offX)} px";
-            if (_starBuffOffYText != null) _starBuffOffYText.text = $"{Mathf.RoundToInt(offY)} px";
-            if (_starBuffMaxText != null) _starBuffMaxText.text = $"{maxIcons} 个";
-            if (_starBuffAnchorBtnTexts != null)
-            {
-                for (int i = 0; i < _starBuffAnchorBtnTexts.Length; i++)
-                {
-                    if (_starBuffAnchorBtnTexts[i] != null)
-                    {
-                        _starBuffAnchorBtnTexts[i].color = i == anchorMode ? XingShuUITheme.LimeAccent : XingShuUITheme.PrimaryText;
-                    }
-                }
-            }
-            if (_starBuffSummaryText != null)
-            {
-                _starBuffSummaryText.text = $"已开启 {PlayerStarBuffHud.EnabledCategoryCount}/6 类 Buff · 单项自定义 {PlayerStarBuffHud.OverrideCount} 项 · 可拖动/调偏移";
-            }
-            if (refreshCatalog || _lastStarBuffRevision != PlayerStarBuffHud.Revision)
-            {
-                _lastStarBuffRevision = PlayerStarBuffHud.Revision;
-                RefreshStarBuffCatalogRows(resetPage: false);
-            }
-        }
-
-        private void AddPercentSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial,
-            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
-        {
-            AddSliderRow(card, id, labelText, topY, min, max, initial, $"{Mathf.RoundToInt(initial * 100f)}%", onChanged, out slider, out valueText);
-        }
-
-        private void AddSliderRow(GameObject card, string id, string labelText, float topY, float min, float max, float initial, string initialValueText,
-            UnityEngine.Events.UnityAction<float> onChanged, out Slider slider, out Text valueText)
-        {
-            GameObject pair = XingShuUIFactory.CreateUIObject("MetricPair_" + id, card);
-            var pRt = pair.GetComponent<RectTransform>();
-            pRt.anchorMin = new Vector2(0f, 1f);
-            pRt.anchorMax = new Vector2(1f, 1f);
-            pRt.pivot = new Vector2(0.5f, 1f);
-            pRt.anchoredPosition = new Vector2(0f, -topY);
-            pRt.sizeDelta = new Vector2(-40f, 22f);
-            var hlg = pair.AddComponent<HorizontalLayoutGroup>();
-            hlg.spacing = 8f;
-            hlg.childControlWidth = true;
-            hlg.childControlHeight = true;
-            hlg.childForceExpandWidth = false;
-            hlg.childForceExpandHeight = true;
-
-            Text lbl = XingShuUIFactory.CreateText(pair, id + "Label", labelText, 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            var lblLe = lbl.gameObject.AddComponent<LayoutElement>();
-            lblLe.flexibleWidth = 1f;
-            lblLe.minWidth = 140f;
-
-            valueText = XingShuUIFactory.CreateText(pair, id + "Value", initialValueText, 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            var valLe = valueText.gameObject.AddComponent<LayoutElement>();
-            valLe.minWidth = 60f;
-            valLe.preferredWidth = 72f;
-            valLe.flexibleWidth = 0f;
-
-            slider = XingShuUIFactory.CreateSlider(card, id + "Slider", min, max, initial,
-                v => { if (!_suppressCallbacks) onChanged(v); });
-            var sRt = slider.GetComponent<RectTransform>();
-            sRt.anchorMin = new Vector2(0f, 1f);
-            sRt.anchorMax = new Vector2(1f, 1f);
-            sRt.pivot = new Vector2(0.5f, 1f);
-            sRt.anchoredPosition = new Vector2(0f, -(topY + 24f));
-            sRt.sizeDelta = new Vector2(-40f, 26f);
-        }
-
-        private void SyncMegathControls()
-        {
-            float scale = MegathSkillDamageHint.Scale;
-            float px = MegathSkillDamageHint.PosX;
-            float py = MegathSkillDamageHint.PosY;
-            bool locked = MegathSkillDamageHint.Locked;
-            _suppressCallbacks = true;
-            if (_megathEnabledToggle != null && _megathEnabledToggle.isOn != MegathSkillDamageHint.IsEnabled)
-                _megathEnabledToggle.isOn = MegathSkillDamageHint.IsEnabled;
-            if (_megathScaleSlider != null && Mathf.Abs(_megathScaleSlider.value - scale) > 0.005f)
-                _megathScaleSlider.value = scale;
-            if (_megathXSlider != null && Mathf.Abs(_megathXSlider.value - px) > 0.005f)
-                _megathXSlider.value = px;
-            if (_megathYSlider != null && Mathf.Abs(_megathYSlider.value - py) > 0.005f)
-                _megathYSlider.value = py;
-            if (_megathLockToggle != null && _megathLockToggle.isOn != locked)
-                _megathLockToggle.isOn = locked;
-            _suppressCallbacks = false;
-            if (_megathScaleText != null) _megathScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-            if (_megathXText != null) _megathXText.text = $"{Mathf.RoundToInt(px * 100f)}%";
-            if (_megathYText != null) _megathYText.text = $"{Mathf.RoundToInt(py * 100f)}%";
-        }
-
-        private void SyncPlayerCombatHudControls()
-        {
-            float scale = PlayerCombatStatusHud.Scale;
-            float offX = PlayerCombatStatusHud.OffsetX;
-            float offY = PlayerCombatStatusHud.OffsetY;
-            float headOffY = PlayerCombatStatusHud.HeadOffsetY;
-            bool locked = PlayerCombatStatusHud.Locked;
-            _suppressCallbacks = true;
-            if (_playerHudEnabledToggle != null && _playerHudEnabledToggle.isOn != PlayerCombatStatusHud.IsEnabled)
-                _playerHudEnabledToggle.isOn = PlayerCombatStatusHud.IsEnabled;
-            if (_playerHudHeadToggle != null && _playerHudHeadToggle.isOn != PlayerCombatStatusHud.ShowHead)
-                _playerHudHeadToggle.isOn = PlayerCombatStatusHud.ShowHead;
-            if (_playerHudAvatarToggle != null && _playerHudAvatarToggle.isOn != PlayerCombatStatusHud.ShowAvatar)
-                _playerHudAvatarToggle.isOn = PlayerCombatStatusHud.ShowAvatar;
-            if (_playerHudScaleSlider != null && Mathf.Abs(_playerHudScaleSlider.value - scale) > 0.005f)
-                _playerHudScaleSlider.value = scale;
-            if (_playerHudOffXSlider != null && Mathf.Abs(_playerHudOffXSlider.value - offX) > 0.5f)
-                _playerHudOffXSlider.value = offX;
-            if (_playerHudOffYSlider != null && Mathf.Abs(_playerHudOffYSlider.value - offY) > 0.5f)
-                _playerHudOffYSlider.value = offY;
-            if (_playerHudHeadOffYSlider != null && Mathf.Abs(_playerHudHeadOffYSlider.value - headOffY) > 0.5f)
-                _playerHudHeadOffYSlider.value = headOffY;
-            if (_playerHudLockToggle != null && _playerHudLockToggle.isOn != locked)
-                _playerHudLockToggle.isOn = locked;
-            if (_playerHudCdToggle != null && _playerHudCdToggle.isOn != PlayerCombatStatusHud.ShowCd)
-                _playerHudCdToggle.isOn = PlayerCombatStatusHud.ShowCd;
-            if (_playerHudHpToggle != null && _playerHudHpToggle.isOn != PlayerCombatStatusHud.ShowHp)
-                _playerHudHpToggle.isOn = PlayerCombatStatusHud.ShowHp;
-            if (_playerHudAtkDefToggle != null && _playerHudAtkDefToggle.isOn != PlayerCombatStatusHud.ShowAtkDef)
-                _playerHudAtkDefToggle.isOn = PlayerCombatStatusHud.ShowAtkDef;
-            if (_playerHudMoveToggle != null && _playerHudMoveToggle.isOn != PlayerCombatStatusHud.ShowMove)
-                _playerHudMoveToggle.isOn = PlayerCombatStatusHud.ShowMove;
-            _suppressCallbacks = false;
-            if (_playerHudScaleText != null) _playerHudScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-            if (_playerHudOffXText != null) _playerHudOffXText.text = $"{Mathf.RoundToInt(offX)} px";
-            if (_playerHudOffYText != null) _playerHudOffYText.text = $"{Mathf.RoundToInt(offY)} px";
-            if (_playerHudHeadOffYText != null) _playerHudHeadOffYText.text = $"{Mathf.RoundToInt(headOffY)} px";
-        }
-
-        private void SyncBattleCardControls()
-        {
-            float scale = BattleCardPointHint.Scale;
-            float marginX = Mathf.Clamp(BattleCardPointHint.AtkX, 0f, 0.45f);
-            float posY = BattleCardPointHint.AtkY;
-            bool locked = BattleCardPointHint.Locked;
-            _suppressCallbacks = true;
-            if (_battleCardScaleSlider != null && Mathf.Abs(_battleCardScaleSlider.value - scale) > 0.005f)
-                _battleCardScaleSlider.value = scale;
-            if (_battleCardMarginXSlider != null && Mathf.Abs(_battleCardMarginXSlider.value - marginX) > 0.005f)
-                _battleCardMarginXSlider.value = marginX;
-            if (_battleCardYSlider != null && Mathf.Abs(_battleCardYSlider.value - posY) > 0.005f)
-                _battleCardYSlider.value = posY;
-            if (_battleCardLockToggle != null && _battleCardLockToggle.isOn != locked)
-                _battleCardLockToggle.isOn = locked;
-            _suppressCallbacks = false;
-            if (_battleCardScaleText != null) _battleCardScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
-            if (_battleCardMarginXText != null) _battleCardMarginXText.text = $"{Mathf.RoundToInt(BattleCardPointHint.AtkX * 100f)}%";
-            if (_battleCardYText != null) _battleCardYText.text = $"{Mathf.RoundToInt(posY * 100f)}%";
-        }
-
-        private GameObject CreateCardContainer(GameObject parent, string name, float height)
-        {
-            GameObject cardGo = XingShuUIFactory.CreateUIObject(name, parent);
-            LayoutElement le = cardGo.AddComponent<LayoutElement>();
-            le.preferredHeight = height;
-            le.minHeight = height;
-            le.flexibleHeight = 0f;
-
-            Sprite cardSprite = XingShuUIAssetService.GetSprite("card_base.png");
-            Image cardBg = cardGo.AddComponent<Image>();
-            cardBg.sprite = cardSprite;
-            cardBg.type = Image.Type.Sliced;
-            cardBg.color = XingShuUIAssetService.IsFallbackSprite(cardSprite) ? XingShuUITheme.Card : Color.white;
-
-            return cardGo;
-        }
-
-        private Button CreateActionButton(GameObject parent, string name, string label, Action onClick, float width, float height, int fontSize = 13)
-        {
-            Sprite btnSec = XingShuUIAssetService.GetSprite("button_secondary.png");
-            Button btn = XingShuUIFactory.CreateButton(
-                parent,
-                name,
-                label,
-                btnSec,
-                Color.white,
-                XingShuUITheme.PrimaryText,
-                onClick,
-                fontSize
-            );
-            RectTransform rt = btn.GetComponent<RectTransform>();
-            rt.sizeDelta = new Vector2(width, height);
-            return btn;
         }
 
         private void BuildSwitchCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "SwitchCard", 96f);
+            GameObject cardGo = XingShuViewCardHelper.CreateCardContainer(parent, "SwitchCard", 96f);
 
             Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "击飞预测总开关", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform ctRt = cardTitle.rectTransform;
-            ctRt.anchorMin = new Vector2(0f, 1f);
-            ctRt.anchorMax = new Vector2(0f, 1f);
-            ctRt.pivot = new Vector2(0f, 1f);
-            ctRt.anchoredPosition = new Vector2(24f, -16f);
-            ctRt.sizeDelta = new Vector2(200f, 24f);
+            XingShuViewCardHelper.PlaceTopLeft(cardTitle.rectTransform, new Vector2(24f, -16f), new Vector2(220f, 24f));
 
             _statusText = XingShuUIFactory.CreateText(cardGo, "StatusText", "等待进入对局", 13, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
             RectTransform htRt = _statusText.rectTransform;
-            htRt.anchorMin = new Vector2(0f, 0f);
-            htRt.anchorMax = new Vector2(0f, 0f);
-            htRt.pivot = new Vector2(0f, 0f);
+            htRt.anchorMin = htRt.anchorMax = htRt.pivot = Vector2.zero;
             htRt.anchoredPosition = new Vector2(24f, 16f);
             htRt.sizeDelta = new Vector2(460f, 22f);
 
             _enableToggle = XingShuUIFactory.CreateToggle(cardGo, "EnableToggle", "预测功能", MonsterKillProbability.IsEnabled, OnEnableToggleChanged);
             RectTransform tgRt = _enableToggle.GetComponent<RectTransform>();
-            tgRt.anchorMin = new Vector2(1f, 0.5f);
-            tgRt.anchorMax = new Vector2(1f, 0.5f);
+            tgRt.anchorMin = tgRt.anchorMax = new Vector2(1f, 0.5f);
             tgRt.pivot = new Vector2(1f, 0.5f);
             tgRt.anchoredPosition = new Vector2(-24f, 0f);
             tgRt.sizeDelta = new Vector2(180f, 32f);
         }
 
-        private void BuildMonsterTargetCard(GameObject parent)
-        {
-            GameObject card = CreateCardContainer(parent, "MonsterTargetCard", 264f);
-            Text title = XingShuUIFactory.CreateText(card, "Title", "怪物索敌 · 最大10格", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            PlaceTargetControl(title.rectTransform, new Vector2(24f, -16f), new Vector2(360f, 28f));
-            _targetingToggle = XingShuUIFactory.CreateToggle(card, "TargetingToggle", "地图索敌", MonsterTargetRuntime.IsEnabled,
-                value => { if (!_suppressCallbacks) MonsterTargetRuntime.SetEnabled(value); });
-            RectTransform toggleRt = _targetingToggle.GetComponent<RectTransform>();
-            toggleRt.anchorMin = toggleRt.anchorMax = toggleRt.pivot = new Vector2(1f, 1f);
-            toggleRt.anchoredPosition = new Vector2(-24f, -16f);
-            toggleRt.sizeDelta = new Vector2(160f, 32f);
-            _arrowBoostToggle = XingShuUIFactory.CreateToggle(card, "ArrowBoostToggle", "放大怪物箭头", MonsterTargetRuntime.ArrowBoostEnabled,
-                value => { if (!_suppressCallbacks) MonsterTargetRuntime.SetArrowBoostEnabled(value); });
-            RectTransform boostRt = _arrowBoostToggle.GetComponent<RectTransform>();
-            boostRt.anchorMin = boostRt.anchorMax = boostRt.pivot = new Vector2(1f, 1f);
-            boostRt.anchoredPosition = new Vector2(-196f, -16f);
-            boostRt.sizeDelta = new Vector2(180f, 32f);
-            Text hint = XingShuUIFactory.CreateText(card, "Hint", "沿怪物箭头前进，不掉头；最大10格（先行1格＋剩余9格），技能加步暂不计入。", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            PlaceTargetControl(hint.rectTransform, new Vector2(24f, -52f), new Vector2(820f, 24f));
-            _targetingSummary = XingShuUIFactory.CreateText(card, "Summary", "等待进入 PVE 对局", 13, XingShuUITheme.PrimaryText, TextAnchor.UpperLeft);
-            _targetingSummary.supportRichText = false;
-            PlaceTargetControl(_targetingSummary.rectTransform, new Vector2(24f, -86f), new Vector2(820f, 116f));
-            Button previous = CreateActionButton(card, "PreviousMonster", "◀ 上个怪物", () => MonsterTargetRuntime.Select(-1), 132f, 30f);
-            Button next = CreateActionButton(card, "NextMonster", "下个怪物 ▶", () => MonsterTargetRuntime.Select(1), 132f, 30f);
-            PlaceTargetControl(previous.GetComponent<RectTransform>(), new Vector2(24f, -218f), new Vector2(132f, 30f));
-            PlaceTargetControl(next.GetComponent<RectTransform>(), new Vector2(172f, -218f), new Vector2(132f, 30f));
-        }
-
-        private static void PlaceTargetControl(RectTransform rt, Vector2 position, Vector2 size)
-        {
-            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0f, 1f);
-            rt.anchoredPosition = position;
-            rt.sizeDelta = size;
-        }
-
         private void BuildTargetCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "TargetCard", 180f);
+            GameObject cardGo = XingShuViewCardHelper.CreateCardContainer(parent, "TargetCard", 180f);
 
             Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "战局目标与卡牌预览", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform ctRt = cardTitle.rectTransform;
-            ctRt.anchorMin = new Vector2(0f, 1f);
-            ctRt.anchorMax = new Vector2(0f, 1f);
-            ctRt.pivot = new Vector2(0f, 1f);
-            ctRt.anchoredPosition = new Vector2(24f, -16f);
-            ctRt.sizeDelta = new Vector2(200f, 24f);
+            XingShuViewCardHelper.PlaceTopLeft(cardTitle.rectTransform, new Vector2(24f, -16f), new Vector2(220f, 24f));
 
-            _previewBtn = CreateActionButton(cardGo, "Btn_PreviewToggle", "拖动卡预览：开", OnPreviewToggleClicked, 140f, 30f, 12);
-            RectTransform prevRt = _previewBtn.GetComponent<RectTransform>();
-            prevRt.anchorMin = new Vector2(1f, 1f);
-            prevRt.anchorMax = new Vector2(1f, 1f);
-            prevRt.pivot = new Vector2(1f, 1f);
-            prevRt.anchoredPosition = new Vector2(-24f, -12f);
+            _previewBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_PreviewToggle", "拖动卡预览：开", OnPreviewToggleClicked, 140f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopRight(_previewBtn.GetComponent<RectTransform>(), new Vector2(-24f, -12f), new Vector2(140f, 30f));
             _previewBtnText = _previewBtn.GetComponentInChildren<Text>();
 
             _targetSummaryText = XingShuUIFactory.CreateText(cardGo, "TargetSummary", "当前无交战或可见怪物目标", 13, XingShuUITheme.PrimaryText, TextAnchor.UpperLeft);
-            RectTransform sumRt = _targetSummaryText.rectTransform;
-            sumRt.anchorMin = new Vector2(0f, 1f);
-            sumRt.anchorMax = new Vector2(1f, 1f);
-            sumRt.pivot = new Vector2(0f, 1f);
-            sumRt.anchoredPosition = new Vector2(24f, -50f);
-            sumRt.sizeDelta = new Vector2(-48f, 75f);
+            XingShuViewCardHelper.PlaceStretchTop(_targetSummaryText.rectTransform, 50f, 75f, 48f);
             _targetSummaryText.lineSpacing = 1.15f;
 
             float btnW = 120f;
@@ -1076,56 +135,34 @@ namespace XingShuRuntime.UI
             float startX = 24f;
             float gap = 12f;
 
-            _prevTargetBtn = CreateActionButton(cardGo, "Btn_PrevTarget", "◀ 上个目标", OnPrevTargetClicked, btnW, btnH, 12);
+            _prevTargetBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_PrevTarget", "◀ 上个目标", OnPrevTargetClicked, btnW, btnH, 12);
             RectTransform ptRt = _prevTargetBtn.GetComponent<RectTransform>();
-            ptRt.anchorMin = new Vector2(0f, 0f);
-            ptRt.anchorMax = new Vector2(0f, 0f);
-            ptRt.pivot = new Vector2(0f, 0f);
+            ptRt.anchorMin = ptRt.anchorMax = ptRt.pivot = Vector2.zero;
             ptRt.anchoredPosition = new Vector2(startX, 14f);
 
-            _detailPageBtn = CreateActionButton(cardGo, "Btn_DetailPage", "详情翻页", OnDetailPageClicked, btnW, btnH, 12);
+            _detailPageBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_DetailPage", "详情翻页", OnDetailPageClicked, btnW, btnH, 12);
             RectTransform dpRt = _detailPageBtn.GetComponent<RectTransform>();
-            dpRt.anchorMin = new Vector2(0f, 0f);
-            dpRt.anchorMax = new Vector2(0f, 0f);
-            dpRt.pivot = new Vector2(0f, 0f);
+            dpRt.anchorMin = dpRt.anchorMax = dpRt.pivot = Vector2.zero;
             dpRt.anchoredPosition = new Vector2(startX + btnW + gap, 14f);
 
-            _nextTargetBtn = CreateActionButton(cardGo, "Btn_NextTarget", "下个目标 ▶", OnNextTargetClicked, btnW, btnH, 12);
+            _nextTargetBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_NextTarget", "下个目标 ▶", OnNextTargetClicked, btnW, btnH, 12);
             RectTransform ntRt = _nextTargetBtn.GetComponent<RectTransform>();
-            ntRt.anchorMin = new Vector2(0f, 0f);
-            ntRt.anchorMax = new Vector2(0f, 0f);
-            ntRt.pivot = new Vector2(0f, 0f);
+            ntRt.anchorMin = ntRt.anchorMax = ntRt.pivot = Vector2.zero;
             ntRt.anchoredPosition = new Vector2(startX + (btnW + gap) * 2, 14f);
         }
 
         private void BuildStyleCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "StyleCard", 376f);
+            GameObject cardGo = XingShuViewCardHelper.CreateCardContainer(parent, "StyleCard", 376f);
 
             Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "局内战斗浮字外观", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform ctRt = cardTitle.rectTransform;
-            ctRt.anchorMin = new Vector2(0f, 1f);
-            ctRt.anchorMax = new Vector2(0f, 1f);
-            ctRt.pivot = new Vector2(0f, 1f);
-            ctRt.anchoredPosition = new Vector2(24f, -16f);
-            ctRt.sizeDelta = new Vector2(200f, 24f);
+            XingShuViewCardHelper.PlaceTopLeft(cardTitle.rectTransform, new Vector2(24f, -16f), new Vector2(220f, 24f));
 
             _styleSummaryText = XingShuUIFactory.CreateText(cardGo, "StyleSummary", "当前样式：字号 26  |  X: 50  |  Y: -32", 13, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
-            RectTransform stRt = _styleSummaryText.rectTransform;
-            stRt.anchorMin = new Vector2(1f, 1f);
-            stRt.anchorMax = new Vector2(1f, 1f);
-            stRt.pivot = new Vector2(1f, 1f);
-            stRt.anchoredPosition = new Vector2(-24f, -16f);
-            stRt.sizeDelta = new Vector2(340f, 24f);
+            XingShuViewCardHelper.PlaceTopRight(_styleSummaryText.rectTransform, new Vector2(-24f, -16f), new Vector2(340f, 24f));
 
-            // Miniature Multi Live Preview Box
             GameObject previewBox = XingShuUIFactory.CreateUIObject("LivePreviewBox", cardGo);
-            RectTransform pbRt = previewBox.GetComponent<RectTransform>();
-            pbRt.anchorMin = new Vector2(0f, 1f);
-            pbRt.anchorMax = new Vector2(1f, 1f);
-            pbRt.pivot = new Vector2(0f, 1f);
-            pbRt.anchoredPosition = new Vector2(24f, -44f);
-            pbRt.sizeDelta = new Vector2(-48f, 58f);
+            XingShuViewCardHelper.PlaceStretchTop(previewBox.GetComponent<RectTransform>(), 44f, 58f, 48f);
 
             Sprite pbSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
             Image pbBg = previewBox.AddComponent<Image>();
@@ -1135,118 +172,62 @@ namespace XingShuRuntime.UI
 
             _previewLine1Text = XingShuUIFactory.CreateText(previewBox, "PreviewLine1", "", 20, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold, HorizontalWrapMode.Overflow, VerticalWrapMode.Overflow);
             _previewLine1Text.supportRichText = true;
-            RectTransform l1Rt = _previewLine1Text.rectTransform;
-            l1Rt.anchorMin = new Vector2(0f, 1f);
-            l1Rt.anchorMax = new Vector2(1f, 1f);
-            l1Rt.pivot = new Vector2(0f, 1f);
-            l1Rt.anchoredPosition = new Vector2(14f, -6f);
-            l1Rt.sizeDelta = new Vector2(-28f, 22f);
+            XingShuViewCardHelper.PlaceStretchTop(_previewLine1Text.rectTransform, 6f, 22f, 28f);
 
             _previewLine2Text = XingShuUIFactory.CreateText(previewBox, "PreviewLine2", "", 20, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold, HorizontalWrapMode.Overflow, VerticalWrapMode.Overflow);
             _previewLine2Text.supportRichText = true;
-            RectTransform l2Rt = _previewLine2Text.rectTransform;
-            l2Rt.anchorMin = new Vector2(0f, 1f);
-            l2Rt.anchorMax = new Vector2(1f, 1f);
-            l2Rt.pivot = new Vector2(0f, 1f);
-            l2Rt.anchoredPosition = new Vector2(14f, -30f);
-            l2Rt.sizeDelta = new Vector2(-28f, 22f);
+            XingShuViewCardHelper.PlaceStretchTop(_previewLine2Text.rectTransform, 30f, 22f, 28f);
 
             float bW = 150f;
             float bH = 28f;
             float startX = 24f;
             float col2X = startX + bW + 16f;
 
-            // Row 1: Font Size (-2 / +2)
-            _fontMinusBtn = CreateActionButton(cardGo, "Btn_FontMinus", "字号 −2", delegate { MonsterKillProbability.AdjustStyle(-2, 0f, 0f); UpdateSync(force: true); }, bW, bH, 12);
-            RectTransform fmRt = _fontMinusBtn.GetComponent<RectTransform>();
-            fmRt.anchorMin = new Vector2(0f, 1f);
-            fmRt.anchorMax = new Vector2(0f, 1f);
-            fmRt.pivot = new Vector2(0f, 1f);
-            fmRt.anchoredPosition = new Vector2(startX, -112f);
+            _fontMinusBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_FontMinus", "字号 −2", delegate { MonsterKillProbability.AdjustStyle(-2, 0f, 0f); UpdateSync(force: true); }, bW, bH, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_fontMinusBtn.GetComponent<RectTransform>(), new Vector2(startX, -112f), new Vector2(bW, bH));
 
-            _fontPlusBtn = CreateActionButton(cardGo, "Btn_FontPlus", "字号 +2", delegate { MonsterKillProbability.AdjustStyle(2, 0f, 0f); UpdateSync(force: true); }, bW, bH, 12);
-            RectTransform fpRt = _fontPlusBtn.GetComponent<RectTransform>();
-            fpRt.anchorMin = new Vector2(0f, 1f);
-            fpRt.anchorMax = new Vector2(0f, 1f);
-            fpRt.pivot = new Vector2(0f, 1f);
-            fpRt.anchoredPosition = new Vector2(col2X, -112f);
+            _fontPlusBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_FontPlus", "字号 +2", delegate { MonsterKillProbability.AdjustStyle(2, 0f, 0f); UpdateSync(force: true); }, bW, bH, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_fontPlusBtn.GetComponent<RectTransform>(), new Vector2(col2X, -112f), new Vector2(bW, bH));
 
-            // Row 2: X Offset (-10 / +10)
-            _xLeftBtn = CreateActionButton(cardGo, "Btn_XLeft", "◀ 左移 10", delegate { MonsterKillProbability.AdjustStyle(0, -10f, 0f); UpdateSync(force: true); }, bW, bH, 12);
-            RectTransform xlRt = _xLeftBtn.GetComponent<RectTransform>();
-            xlRt.anchorMin = new Vector2(0f, 1f);
-            xlRt.anchorMax = new Vector2(0f, 1f);
-            xlRt.pivot = new Vector2(0f, 1f);
-            xlRt.anchoredPosition = new Vector2(startX, -146f);
+            _xLeftBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_XLeft", "◀ 左移 10", delegate { MonsterKillProbability.AdjustStyle(0, -10f, 0f); UpdateSync(force: true); }, bW, bH, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_xLeftBtn.GetComponent<RectTransform>(), new Vector2(startX, -146f), new Vector2(bW, bH));
 
-            _xRightBtn = CreateActionButton(cardGo, "Btn_XRight", "右移 10 ▶", delegate { MonsterKillProbability.AdjustStyle(0, 10f, 0f); UpdateSync(force: true); }, bW, bH, 12);
-            RectTransform xrRt = _xRightBtn.GetComponent<RectTransform>();
-            xrRt.anchorMin = new Vector2(0f, 1f);
-            xrRt.anchorMax = new Vector2(0f, 1f);
-            xrRt.pivot = new Vector2(0f, 1f);
-            xrRt.anchoredPosition = new Vector2(col2X, -146f);
+            _xRightBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_XRight", "右移 10 ▶", delegate { MonsterKillProbability.AdjustStyle(0, 10f, 0f); UpdateSync(force: true); }, bW, bH, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_xRightBtn.GetComponent<RectTransform>(), new Vector2(col2X, -146f), new Vector2(bW, bH));
 
-            // Row 3: Y Offset (-10 / +10)
-            _yUpBtn = CreateActionButton(cardGo, "Btn_YUp", "▲ 上移 10", delegate { MonsterKillProbability.AdjustStyle(0, 0f, -10f); UpdateSync(force: true); }, bW, bH, 12);
-            RectTransform yuRt = _yUpBtn.GetComponent<RectTransform>();
-            yuRt.anchorMin = new Vector2(0f, 1f);
-            yuRt.anchorMax = new Vector2(0f, 1f);
-            yuRt.pivot = new Vector2(0f, 1f);
-            yuRt.anchoredPosition = new Vector2(startX, -180f);
+            _yUpBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_YUp", "▲ 上移 10", delegate { MonsterKillProbability.AdjustStyle(0, 0f, -10f); UpdateSync(force: true); }, bW, bH, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_yUpBtn.GetComponent<RectTransform>(), new Vector2(startX, -180f), new Vector2(bW, bH));
 
-            _yDownBtn = CreateActionButton(cardGo, "Btn_YDown", "下移 10 ▼", delegate { MonsterKillProbability.AdjustStyle(0, 0f, 10f); UpdateSync(force: true); }, bW, bH, 12);
-            RectTransform ydRt = _yDownBtn.GetComponent<RectTransform>();
-            ydRt.anchorMin = new Vector2(0f, 1f);
-            ydRt.anchorMax = new Vector2(0f, 1f);
-            ydRt.pivot = new Vector2(0f, 1f);
-            ydRt.anchoredPosition = new Vector2(col2X, -180f);
+            _yDownBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_YDown", "下移 10 ▼", delegate { MonsterKillProbability.AdjustStyle(0, 0f, 10f); UpdateSync(force: true); }, bW, bH, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_yDownBtn.GetComponent<RectTransform>(), new Vector2(col2X, -180f), new Vector2(bW, bH));
 
-            // Row 4: Mode Selection & 100% Rainbow Highlight
             Text modeLbl = XingShuUIFactory.CreateText(cardGo, "Mode_Label", "概率颜色模式", 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform mlRt = modeLbl.rectTransform;
-            mlRt.anchorMin = new Vector2(0f, 1f);
-            mlRt.anchorMax = new Vector2(0f, 1f);
-            mlRt.pivot = new Vector2(0f, 1f);
-            mlRt.anchoredPosition = new Vector2(startX, -216f);
-            mlRt.sizeDelta = new Vector2(80f, 28f);
+            XingShuViewCardHelper.PlaceTopLeft(modeLbl.rectTransform, new Vector2(startX, -216f), new Vector2(80f, 28f));
 
-            _autoColorBtn = CreateActionButton(cardGo, "Btn_AutoColor", "自动分段", delegate
+            _autoColorBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_AutoColor", "自动分段", delegate
             {
                 MonsterKillProbability.AutoColorEnabled = true;
                 UpdateSync(force: true);
             }, 84f, 28f, 12);
             _autoColorBtnText = _autoColorBtn.GetComponentInChildren<Text>();
-            RectTransform acRt = _autoColorBtn.GetComponent<RectTransform>();
-            acRt.anchorMin = new Vector2(0f, 1f);
-            acRt.anchorMax = new Vector2(0f, 1f);
-            acRt.pivot = new Vector2(0f, 1f);
-            acRt.anchoredPosition = new Vector2(108f, -216f);
+            XingShuViewCardHelper.PlaceTopLeft(_autoColorBtn.GetComponent<RectTransform>(), new Vector2(108f, -216f), new Vector2(84f, 28f));
 
-            _manualColorBtn = CreateActionButton(cardGo, "Btn_ManualColor", "手动", delegate
+            _manualColorBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_ManualColor", "手动", delegate
             {
                 MonsterKillProbability.AutoColorEnabled = false;
                 UpdateSync(force: true);
             }, 64f, 28f, 12);
             _manualColorBtnText = _manualColorBtn.GetComponentInChildren<Text>();
-            RectTransform mcRt = _manualColorBtn.GetComponent<RectTransform>();
-            mcRt.anchorMin = new Vector2(0f, 1f);
-            mcRt.anchorMax = new Vector2(0f, 1f);
-            mcRt.pivot = new Vector2(0f, 1f);
-            mcRt.anchoredPosition = new Vector2(198f, -216f);
+            XingShuViewCardHelper.PlaceTopLeft(_manualColorBtn.GetComponent<RectTransform>(), new Vector2(198f, -216f), new Vector2(64f, 28f));
 
-            _rainbow100Btn = CreateActionButton(cardGo, "Btn_Rainbow100", "100%炫彩高亮：关", delegate
+            _rainbow100Btn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_Rainbow100", "100%炫彩高亮：关", delegate
             {
                 MonsterKillProbability.Rainbow100Enabled = !MonsterKillProbability.Rainbow100Enabled;
                 UpdateSync(force: true);
             }, 160f, 28f, 12);
             _rainbow100BtnText = _rainbow100Btn.GetComponentInChildren<Text>();
-            RectTransform rbRt = _rainbow100Btn.GetComponent<RectTransform>();
-            rbRt.anchorMin = new Vector2(0f, 1f);
-            rbRt.anchorMax = new Vector2(0f, 1f);
-            rbRt.pivot = new Vector2(0f, 1f);
-            rbRt.anchoredPosition = new Vector2(268f, -216f);
+            XingShuViewCardHelper.PlaceTopLeft(_rainbow100Btn.GetComponent<RectTransform>(), new Vector2(268f, -216f), new Vector2(160f, 28f));
 
-            // Row 5: Probability Color (Manual)
             CreateColorRow(
                 cardGo,
                 "ProbColor",
@@ -1260,10 +241,8 @@ namespace XingShuRuntime.UI
                 {
                     MonsterKillProbability.SetProbabilityColor(hex);
                     MonsterKillProbability.AutoColorEnabled = false;
-                }
-            );
+                });
 
-            // Row 6: Target Color (Fixed Name)
             CreateColorRow(
                 cardGo,
                 "TargetColor",
@@ -1273,22 +252,16 @@ namespace XingShuRuntime.UI
                 out _targetColorInput,
                 out _targetColorSwatch,
                 out _targetColorErrorText,
-                delegate(string hex) { MonsterKillProbability.SetTargetColor(hex); }
-            );
+                delegate(string hex) { MonsterKillProbability.SetTargetColor(hex); });
 
-            // Row 7: Reset Button
-            _resetStyleBtn = CreateActionButton(cardGo, "Btn_ResetStyle", "恢复默认文字与颜色样式 (字号26/X:50/Y:-32/自动分段)", delegate
+            _resetStyleBtn = XingShuViewCardHelper.CreateActionButton(cardGo, "Btn_ResetStyle", "恢复默认文字与颜色样式 (字号26/X:50/Y:-32/自动分段)", delegate
             {
                 MonsterKillProbability.AdjustStyle(0, 0f, 0f, reset: true);
                 if (_probColorErrorText != null) _probColorErrorText.text = "";
                 if (_targetColorErrorText != null) _targetColorErrorText.text = "";
                 UpdateSync(force: true);
             }, bW * 2 + 16f, 28f, 12);
-            RectTransform rstRt = _resetStyleBtn.GetComponent<RectTransform>();
-            rstRt.anchorMin = new Vector2(0f, 1f);
-            rstRt.anchorMax = new Vector2(0f, 1f);
-            rstRt.pivot = new Vector2(0f, 1f);
-            rstRt.anchoredPosition = new Vector2(startX, -326f);
+            XingShuViewCardHelper.PlaceTopLeft(_resetStyleBtn.GetComponent<RectTransform>(), new Vector2(startX, -326f), new Vector2(bW * 2 + 16f, 28f));
         }
 
         private void CreateColorRow(
@@ -1302,33 +275,19 @@ namespace XingShuRuntime.UI
             out Text errorText,
             Action<string> onColorApplied)
         {
-            // 1. Label
             Text label = XingShuUIFactory.CreateText(parent, rowName + "_Label", labelTitle, 13, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft);
-            RectTransform lblRt = label.rectTransform;
-            lblRt.anchorMin = new Vector2(0f, 1f);
-            lblRt.anchorMax = new Vector2(0f, 1f);
-            lblRt.pivot = new Vector2(0f, 1f);
-            lblRt.anchoredPosition = new Vector2(24f, yPos);
-            lblRt.sizeDelta = new Vector2(80f, 28f);
+            XingShuViewCardHelper.PlaceTopLeft(label.rectTransform, new Vector2(24f, yPos), new Vector2(80f, 28f));
 
-            // 2. Swatch Image
             GameObject swatchObj = XingShuUIFactory.CreateUIObject(rowName + "_Swatch", parent);
-            RectTransform swatchRt = swatchObj.GetComponent<RectTransform>();
-            swatchRt.anchorMin = new Vector2(0f, 1f);
-            swatchRt.anchorMax = new Vector2(0f, 1f);
-            swatchRt.pivot = new Vector2(0f, 1f);
-            swatchRt.anchoredPosition = new Vector2(108f, yPos);
-            swatchRt.sizeDelta = new Vector2(26f, 26f);
+            XingShuViewCardHelper.PlaceTopLeft(swatchObj.GetComponent<RectTransform>(), new Vector2(108f, yPos), new Vector2(26f, 26f));
 
             Sprite swatchSprite = XingShuUIAssetService.GetSprite("hotkey_badge.png") ?? XingShuUIAssetService.WhiteSprite;
             swatchImg = swatchObj.AddComponent<Image>();
             swatchImg.sprite = swatchSprite;
             swatchImg.type = (swatchSprite != null && swatchSprite.border != Vector4.zero) ? Image.Type.Sliced : Image.Type.Simple;
-            Color initCol;
-            MonsterKillProbability.TryParseHexColor(initialHex, out initCol, out _);
+            MonsterKillProbability.TryParseHexColor(initialHex, out Color initCol, out _);
             swatchImg.color = initCol;
 
-            // 3. InputField
             inputField = XingShuUIFactory.CreateInputField(
                 parent,
                 rowName + "_Input",
@@ -1337,19 +296,12 @@ namespace XingShuRuntime.UI
                 "Knockback." + rowName,
                 null,
                 null,
-                12
-            );
-            RectTransform inputRt = inputField.GetComponent<RectTransform>();
-            inputRt.anchorMin = new Vector2(0f, 1f);
-            inputRt.anchorMax = new Vector2(0f, 1f);
-            inputRt.pivot = new Vector2(0f, 1f);
-            inputRt.anchoredPosition = new Vector2(142f, yPos);
-            inputRt.sizeDelta = new Vector2(96f, 28f);
+                12);
+            XingShuViewCardHelper.PlaceTopLeft(inputField.GetComponent<RectTransform>(), new Vector2(142f, yPos), new Vector2(96f, 28f));
 
             InputField capturedInput = inputField;
             Image capturedSwatch = swatchImg;
 
-            // 4. Preset Swatch Buttons
             var presets = new[]
             {
                 new { Name = "金色", Hex = "#FFD85A", Col = new Color(1f, 0.847f, 0.353f, 1f) },
@@ -1359,14 +311,8 @@ namespace XingShuRuntime.UI
                 new { Name = "红色", Hex = "#F87171", Col = new Color(0.973f, 0.443f, 0.443f, 1f) }
             };
 
-            // 5. Error hint text
             errorText = XingShuUIFactory.CreateText(parent, rowName + "_Error", "", 11, XingShuUITheme.Danger, TextAnchor.MiddleLeft);
-            RectTransform errRt = errorText.rectTransform;
-            errRt.anchorMin = new Vector2(0f, 1f);
-            errRt.anchorMax = new Vector2(0f, 1f);
-            errRt.pivot = new Vector2(0f, 1f);
-            errRt.anchoredPosition = new Vector2(504f, yPos);
-            errRt.sizeDelta = new Vector2(180f, 28f);
+            XingShuViewCardHelper.PlaceTopLeft(errorText.rectTransform, new Vector2(504f, yPos), new Vector2(180f, 28f));
             Text capturedErr = errorText;
 
             float pStartX = 246f;
@@ -1375,7 +321,7 @@ namespace XingShuRuntime.UI
             for (int i = 0; i < presets.Length; i++)
             {
                 var p = presets[i];
-                Button pBtn = CreateActionButton(parent, $"{rowName}_Preset_{i}", p.Name, delegate
+                Button pBtn = XingShuViewCardHelper.CreateActionButton(parent, $"{rowName}_Preset_{i}", p.Name, delegate
                 {
                     capturedInput.text = p.Hex;
                     capturedSwatch.color = p.Col;
@@ -1383,19 +329,13 @@ namespace XingShuRuntime.UI
                     onColorApplied(p.Hex);
                     UpdateSync(force: true);
                 }, pWidth, 26f, 11);
-                RectTransform pRt = pBtn.GetComponent<RectTransform>();
-                pRt.anchorMin = new Vector2(0f, 1f);
-                pRt.anchorMax = new Vector2(0f, 1f);
-                pRt.pivot = new Vector2(0f, 1f);
-                pRt.anchoredPosition = new Vector2(pStartX + i * (pWidth + pGap), yPos);
+                XingShuViewCardHelper.PlaceTopLeft(pBtn.GetComponent<RectTransform>(), new Vector2(pStartX + i * (pWidth + pGap), yPos), new Vector2(pWidth, 26f));
             }
 
             capturedInput.onValueChanged.AddListener(delegate(string val)
             {
                 if (_suppressCallbacks) return;
-                Color col;
-                string canonical;
-                if (MonsterKillProbability.TryParseHexColor(val, out col, out canonical))
+                if (MonsterKillProbability.TryParseHexColor(val, out Color col, out string canonical))
                 {
                     capturedSwatch.color = col;
                     capturedErr.text = "";
@@ -1407,9 +347,7 @@ namespace XingShuRuntime.UI
             capturedInput.onEndEdit.AddListener(delegate(string val)
             {
                 if (_suppressCallbacks) return;
-                Color col;
-                string canonical;
-                if (MonsterKillProbability.TryParseHexColor(val, out col, out canonical))
+                if (MonsterKillProbability.TryParseHexColor(val, out Color col, out string canonical))
                 {
                     capturedInput.text = canonical;
                     capturedSwatch.color = col;
@@ -1427,25 +365,15 @@ namespace XingShuRuntime.UI
 
         private void BuildInfoCard(GameObject parent)
         {
-            GameObject cardGo = CreateCardContainer(parent, "InfoCard", 110f);
+            GameObject cardGo = XingShuViewCardHelper.CreateCardContainer(parent, "InfoCard", 110f);
 
             Text cardTitle = XingShuUIFactory.CreateText(cardGo, "CardTitle", "计算口径与说明", 14, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            RectTransform ctRt = cardTitle.rectTransform;
-            ctRt.anchorMin = new Vector2(0f, 1f);
-            ctRt.anchorMax = new Vector2(0f, 1f);
-            ctRt.pivot = new Vector2(0f, 1f);
-            ctRt.anchoredPosition = new Vector2(24f, -14f);
-            ctRt.sizeDelta = new Vector2(200f, 20f);
+            XingShuViewCardHelper.PlaceTopLeft(cardTitle.rectTransform, new Vector2(24f, -14f), new Vector2(200f, 20f));
 
             Text infoText = XingShuUIFactory.CreateText(cardGo, "InfoContent",
                 "• 一次攻击击飞，防御方按防御计算；双方普通 1–6 骰。\n• 概率按高低分色；主动技能冷却仅在地图上显示，战斗浮字不显示冷却。\n• 原版名字与血量保留；关闭功能中心不会停用后台预测。",
                 12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            RectTransform infoRt = infoText.rectTransform;
-            infoRt.anchorMin = new Vector2(0f, 1f);
-            infoRt.anchorMax = new Vector2(1f, 1f);
-            infoRt.pivot = new Vector2(0f, 1f);
-            infoRt.anchoredPosition = new Vector2(24f, -38f);
-            infoRt.sizeDelta = new Vector2(-48f, 64f);
+            XingShuViewCardHelper.PlaceStretchTop(infoText.rectTransform, 38f, 64f, 48f);
             infoText.lineSpacing = 1.2f;
         }
 
@@ -1482,29 +410,6 @@ namespace XingShuRuntime.UI
 
         internal void UpdateSync(bool force = false)
         {
-            _suppressCallbacks = true;
-            if (_defenseHintToggle != null) _defenseHintToggle.isOn = DefensePointHint.IsEnabled;
-            if (_battleCardHintToggle != null) _battleCardHintToggle.isOn = BattleCardPointHint.IsEnabled;
-            _suppressCallbacks = false;
-            SyncBattleCardControls();
-            SyncMegathControls();
-            SyncPlayerCombatHudControls();
-            SyncPlayerStarBuffControls(force);
-            // This module is independent from the kill-probability switch and status.
-            if (_targetingSummary != null && _targetingSummary.text != MonsterTargetRuntime.Summary)
-                _targetingSummary.text = MonsterTargetRuntime.Summary;
-            if (_targetingToggle != null && _targetingToggle.isOn != MonsterTargetRuntime.IsEnabled)
-            {
-                _suppressCallbacks = true;
-                _targetingToggle.isOn = MonsterTargetRuntime.IsEnabled;
-                _suppressCallbacks = false;
-            }
-            if (_arrowBoostToggle != null && _arrowBoostToggle.isOn != MonsterTargetRuntime.ArrowBoostEnabled)
-            {
-                _suppressCallbacks = true;
-                _arrowBoostToggle.isOn = MonsterTargetRuntime.ArrowBoostEnabled;
-                _suppressCallbacks = false;
-            }
             bool curEnabled = MonsterKillProbability.IsEnabled;
             bool curPreview = MonsterKillProbability.PreviewCards;
             int curFontSize = MonsterKillProbability.FightFontSize;
