@@ -190,6 +190,7 @@ internal sealed class MapCamera
 			Touch touch = Input.GetTouch(i);
 			bool flag = touch.phase == TouchPhase.Ended;
 			bool flag2 = touch.phase == TouchPhase.Canceled;
+			bool owned = _touch.Owns(touch.fingerId);
 			_touchSamples[i] = new MapTouchSample
 			{
 				Id = touch.fingerId,
@@ -197,7 +198,7 @@ internal sealed class MapCamera
 				Began = (touch.phase == TouchPhase.Began),
 				Ended = flag,
 				Cancelled = flag2,
-				Allowed = (flag || (!flag2 && _touchViewport.Contains(touch.position) && _touchSafeArea.Contains(touch.position) && !MapCameraNative.TouchBlocked(touch.fingerId, touch.position)))
+				Allowed = (flag || (!flag2 && _touchViewport.Contains(touch.position) && _touchSafeArea.Contains(touch.position) && (owned || !MapCameraNative.TouchBlocked(touch.fingerId, touch.position))))
 			};
 		}
 		float dpi = Screen.dpi;
@@ -216,7 +217,9 @@ internal sealed class MapCamera
 			Ray ray = _camera.ScreenPointToRay(new Vector3(motion.Previous.x, motion.Previous.y, 0f));
 			Ray ray2 = _camera.ScreenPointToRay(new Vector3(motion.Current.x, motion.Current.y, 0f));
 			float num2 = PortMath.ClampZoom(_zoom * motion.ZoomRatio);
-			if (!MapDragMath.TryTouchPose(_focus, _zoom, num2, ray.origin, ray.direction, ray2.origin, ray2.direction, _boardHeight, out var nextFocus))
+			float maxStep = Mathf.Max(60f, _zoom * 3.5f);
+			if (!MapDragMath.TryTouchPose(_focus, _zoom, num2, ray.origin, ray.direction, ray2.origin, ray2.direction, _boardHeight, out var nextFocus)
+				|| (nextFocus - _focus).magnitude > maxStep)
 			{
 				_touch.Cancel();
 				return;
@@ -414,7 +417,9 @@ internal sealed class MapCamera
 		{
 			Ray ray = _camera.ScreenPointToRay(new Vector3(previous.x, previous.y, 0f));
 			Ray ray2 = _camera.ScreenPointToRay(mousePosition);
-			if (MapDragMath.TryTranslation(ray.origin, ray.direction, ray2.origin, ray2.direction, _boardHeight, out var translation))
+			float maxStep = Mathf.Max(60f, _zoom * 3.5f);
+			if (MapDragMath.TryTranslation(ray.origin, ray.direction, ray2.origin, ray2.direction, _boardHeight, out var translation)
+				&& translation.magnitude <= maxStep)
 			{
 				_focus += translation;
 			}
@@ -499,6 +504,7 @@ internal sealed class MapCamera
 			if (_freeObject != null && (bool)_freeObject)
 			{
 				_freeObject.enabled = _freeWasEnabled;
+				MapCameraNative.CancelManualStatus(_freeObject);
 			}
 			ApplyPose();
 		}

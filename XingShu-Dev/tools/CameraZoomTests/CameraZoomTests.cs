@@ -58,12 +58,23 @@ internal static class CameraZoomTests
             Check(!brain.enabled, "finished native blend returns free camera ownership");
             Check(Near(fixture.Distance(), zoom), "resume keeps saved zoom");
 
+            // Magnifying glass / map marking (FreeCameraStatus.MapSignal = 3) must keep free camera ownership
+            // and never yield to CinemachineBrain or overwrite saved focus/zoom.
+            Vector3 currentFocus = fixture.Focus();
+            Vector3 farTarget = new Vector3(12f, 0f, -14f);
             MapTargetReader.Mode = CameraSelectionPolicy.Read(true, false, false, false, null, null, 3);
+            Check(MapTargetReader.Mode == CameraControlMode.Free, "map signal status keeps free camera ownership");
             map.Apply();
-            brain.Push(camera, target, 19, 10);
-            Check(Near(fixture.Distance(), zoom), "map marking preserves zoom and native target");
+            Check(!brain.enabled, "map signal keeps native brain disabled");
+            brain.Push(camera, farTarget, 19, 10);
+            Check(Near(fixture.Distance(), zoom) && Near((fixture.Focus() - currentFocus).magnitude, 0f), "map marking preserves focus and zoom");
             MapTargetReader.Mode = CameraControlMode.Free;
             map.Apply();
+            Check(!brain.enabled && Near((fixture.Focus() - currentFocus).magnitude, 0f), "exiting map marking does not jump focus");
+
+            // Hiding modal UI (fight LaunchPK / monster selection hidden via eye button -> fight=false, monster=false) keeps free control.
+            Check(CameraSelectionPolicy.Read(true, false, false, false, null, null, 0) == CameraControlMode.Free, "hidden modal windows keep free control");
+
             MapTargetReader.Mode = CameraControlMode.Selection;
             map.Apply();
             MapTargetReader.Mode = CameraControlMode.Free;
@@ -105,6 +116,7 @@ internal static class CameraZoomTests
             foreach (float zoom in new[] { 6f, 40f, 140f, 300f, 999f }) Run(orthographic, zoom);
         Check(CameraSelectionPolicy.Read(false, false, false, false, null, null, 2) == CameraControlMode.Unavailable, "missing contract yields");
         Check(CameraSelectionPolicy.Read(true, true, true, true, null, null, 2) == CameraControlMode.Combat, "combat overrides selection and native movement");
+        Check(CameraSelectionPolicy.Read(true, false, false, false, null, null, 3) == CameraControlMode.Free, "map signal keeps free control");
         Check(CameraSelectionPolicy.Read(true, false, false, false, null, null, 99) == CameraControlMode.System, "unknown status yields");
         Console.WriteLine("Camera zoom integration: " + (_checks - _failed) + "/" + _checks + " passed");
         return _failed == 0 ? 0 : 1;
@@ -258,6 +270,16 @@ namespace Cinemachine
 namespace Core { public class FreeCameraObject : Behaviour { } }
 namespace Core.Scene { public class BattleSceneController : UnityEngine.Object { public static BattleSceneController inst; public Camera mainCamera; public CinemachineBrain cinemachineBrain; public Core.FreeCameraObject freeObject; } }
 namespace XingShuRuntime.UI { public static class XingShuUIAssetService { public static void LogUIRuntime(string value) { } } }
+namespace XingShuRuntime.Core
+{
+    internal enum XingShuShortcut { CameraLeft, CameraRight, CameraUp, CameraDown, CameraCancelDrag }
+    internal static class XingShuHotkeys
+    {
+        internal struct Binding { public UnityEngine.KeyCode Key => default(UnityEngine.KeyCode); }
+        internal static Binding Get(XingShuShortcut shortcut) { return default(Binding); }
+        internal static bool IsHeld(XingShuShortcut shortcut) { return false; }
+    }
+}
 namespace XingShuRuntime.CameraPort
 {
     internal static class MapTargetReader { internal static CameraControlMode Mode; internal static bool IsRunning; internal static bool Running() { return IsRunning; } internal static CameraControlMode Read(BattleSceneController controller) { return Mode; } internal static bool IsMarking(BattleSceneController controller) { return false; } }

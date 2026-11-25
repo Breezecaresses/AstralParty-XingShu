@@ -1,3 +1,4 @@
+using System;
 using XingShuRuntime.Core;
 using XingShuRuntime.Utilities;
 using Cinemachine;
@@ -14,6 +15,63 @@ internal static class MapCameraNative
 	private const string PointerConsumer = "MapCamera";
 
 	internal static bool TouchInputOnly => XingShuMobileUIHelper.IsMobile;
+
+	internal static bool IsBlockingUiObject(GObject obj)
+	{
+		if (obj == null || !obj.touchable)
+		{
+			return false;
+		}
+		if (obj is GTextField && string.Equals(obj.name, "txt_HideTip", StringComparison.Ordinal))
+		{
+			return false;
+		}
+		bool sawInteractiveControl = false;
+		int depth = 0;
+		for (GObject cur = obj; cur != null && depth < 64; cur = cur.parent, depth++)
+		{
+			if (cur is GButton || cur is GSlider || cur is GScrollBar || cur is GTextInput || cur is GComboBox)
+			{
+				sawInteractiveControl = true;
+			}
+			string typeName = cur.GetType().Name;
+			if (IsHiddenModalComponent(cur, typeName))
+			{
+				return sawInteractiveControl;
+			}
+		}
+		return true;
+	}
+
+	private static bool IsHiddenModalComponent(GObject obj, string typeName)
+	{
+		if (!(obj is GComponent comp))
+		{
+			return false;
+		}
+		if (string.Equals(typeName, "UIFight_LaunchPK", StringComparison.Ordinal))
+		{
+			Controller hideCtrl = comp.GetController("Hide");
+			return !comp.opaque || (hideCtrl != null && hideCtrl.selectedIndex != 0);
+		}
+		if (string.Equals(typeName, "UILandDivinationWindow", StringComparison.Ordinal))
+		{
+			Controller hideUiCtrl = comp.GetController("HideUI");
+			return hideUiCtrl != null && hideUiCtrl.selectedIndex == 0;
+		}
+		if (string.Equals(typeName, "UIBattleSelectMonsterWindow", StringComparison.Ordinal)
+			|| string.Equals(typeName, "UIRelicWindow", StringComparison.Ordinal)
+			|| string.Equals(typeName, "UILandShopWindow", StringComparison.Ordinal)
+			|| string.Equals(typeName, "UILandRelicWindow", StringComparison.Ordinal)
+			|| string.Equals(typeName, "UILandPursuitWindow", StringComparison.Ordinal)
+			|| string.Equals(typeName, "UILandVendorWindow", StringComparison.Ordinal)
+			|| string.Equals(typeName, "UIATMWindow", StringComparison.Ordinal))
+		{
+			Controller hideCtrl = comp.GetController("Hide");
+			return hideCtrl != null && hideCtrl.selectedIndex != 0;
+		}
+		return false;
+	}
 
 	internal static void CancelTouchClick(int fingerId)
 	{
@@ -65,7 +123,7 @@ internal static class MapCameraNative
 		{
 			if (displayObject.gOwner != null)
 			{
-				return displayObject.gOwner.touchable;
+				return IsBlockingUiObject(displayObject.gOwner);
 			}
 			num++;
 			displayObject = displayObject.parent;
@@ -135,7 +193,7 @@ internal static class MapCameraNative
 		{
 			if (displayObject.gOwner != null)
 			{
-				return displayObject.gOwner.touchable;
+				return IsBlockingUiObject(displayObject.gOwner);
 			}
 			num++;
 			displayObject = displayObject.parent;

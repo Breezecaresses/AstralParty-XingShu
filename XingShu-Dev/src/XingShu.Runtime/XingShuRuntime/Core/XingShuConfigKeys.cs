@@ -516,4 +516,46 @@ internal static class XingShuConfigKeys
 	internal const bool PlayerCombatHudShowHpDefault = true;
 	internal const string PlayerCombatHudShowAtkDef = "XINGSHU_PLAYER_HUD_ATKDEF";
 	internal const bool PlayerCombatHudShowAtkDefDefault = true;
+	internal const string PlayerCombatHudShowMove = "XINGSHU_PLAYER_HUD_MOVE";
+	internal const bool PlayerCombatHudShowMoveDefault = true;
+
+	// 角色星级区域 Buff 显示 (PlayerStarBuffHud：独立模块 player-star-buffs)
+	internal const string PlayerStarBuffsEnabled = "XINGSHU_STAR_BUFFS_ENABLED";
+	internal const bool PlayerStarBuffsEnabledDefault = true;
+	internal const string PlayerStarBuffsAnchorMode = "XINGSHU_STAR_BUFFS_ANCHOR";
+	internal const int PlayerStarBuffsAnchorModeDefault = 0; // 0=星级右侧, 1=星级左侧, 2=星级下方
+	internal const string PlayerStarBuffsOffsetX = "XINGSHU_STAR_BUFFS_OFF_X";
+	internal const float PlayerStarBuffsOffsetXMin = -220f;
+	internal const float PlayerStarBuffsOffsetXMax = 260f;
+	internal const float PlayerStarBuffsOffsetXDefault = 4f;
+	internal const string PlayerStarBuffsOffsetY = "XINGSHU_STAR_BUFFS_OFF_Y";
+	internal const float PlayerStarBuffsOffsetYMin = -160f;
+	internal const float PlayerStarBuffsOffsetYMax = 160f;
+	internal const float PlayerStarBuffsOffsetYDefault = 0f;
+	internal const string PlayerStarBuffsScale = "XINGSHU_STAR_BUFFS_SCALE";
+	internal const float PlayerStarBuffsScaleMin = 0.50f;
+	internal const float PlayerStarBuffsScaleMax = 1.80f;
+	internal const float PlayerStarBuffsScaleDefault = 1.0f;
+	internal const string PlayerStarBuffsMaxIcons = "XINGSHU_STAR_BUFFS_MAX";
+	internal const int PlayerStarBuffsMaxIconsMin = 3;
+	internal const int PlayerStarBuffsMaxIconsMax = 16;
+	internal const int PlayerStarBuffsMaxIconsDefault = 8;
+	internal const string PlayerStarBuffsLocked = "XINGSHU_STAR_BUFFS_LOCKED";
+	internal const bool PlayerStarBuffsLockedDefault = false;
+	internal const string PlayerStarBuffsCatMove = "XINGSHU_STAR_BUFFS_CAT_MOVE";
+	internal const bool PlayerStarBuffsCatMoveDefault = true;
+	internal const string PlayerStarBuffsCatHero = "XINGSHU_STAR_BUFFS_CAT_HERO";
+	internal const bool PlayerStarBuffsCatHeroDefault = true;
+	internal const string PlayerStarBuffsCatCombat = "XINGSHU_STAR_BUFFS_CAT_COMBAT";
+	internal const bool PlayerStarBuffsCatCombatDefault = true;
+	internal const string PlayerStarBuffsCatDebuff = "XINGSHU_STAR_BUFFS_CAT_DEBUFF";
+	internal const bool PlayerStarBuffsCatDebuffDefault = true;
+	internal const string PlayerStarBuffsCatEvent = "XINGSHU_STAR_BUFFS_CAT_EVENT";
+	internal const bool PlayerStarBuffsCatEventDefault = true;
+	internal const string PlayerStarBuffsCatOther = "XINGSHU_STAR_BUFFS_CAT_OTHER";
+	internal const bool PlayerStarBuffsCatOtherDefault = true;
+	internal const string PlayerStarBuffsDisabledIds = "XINGSHU_STAR_BUFFS_DISABLED_IDS";
+	internal const string PlayerStarBuffsDisabledIdsDefault = "";
+	internal const string PlayerStarBuffsEnabledIds = "XINGSHU_STAR_BUFFS_ENABLED_IDS";
+	internal const string PlayerStarBuffsEnabledIdsDefault = "";
 }

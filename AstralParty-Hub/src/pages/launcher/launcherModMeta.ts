@@ -93,6 +93,7 @@ const MODULE_SPECS: Record<string, { group: ModSubGroup; Icon: LucideIcon }> = {
   'custom-lobby-bg': { group: 'media', Icon: Film },
   'megath-damage': { group: 'combat', Icon: Zap },
   'player-combat-hud': { group: 'info', Icon: Shield },
+  'player-star-buffs': { group: 'info', Icon: Sparkles },
 };
 
 export const OFFICIAL_SUB_GROUPS: Array<{ id: ModSubGroup; labelZh: string; labelEn: string }> = [

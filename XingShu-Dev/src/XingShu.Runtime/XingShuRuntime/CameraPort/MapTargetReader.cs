@@ -69,16 +69,43 @@ internal static class MapTargetReader
 		{
 			return CameraControlMode.System;
 		}
-		bool fight = value2 != null && ((Window)value2).parent != null;
-		bool monsterWindow = value != null && ((Window)value).parent != null;
+		bool fight = IsFightWindowBlocking(value2 as Window);
+		Window monsterWin = value as Window;
+		bool monsterWindowHidden = IsMonsterWindowHidden(monsterWin);
+		bool monsterWindow = !monsterWindowHidden && monsterWin != null && !monsterWin.isDisposed && monsterWin.parent != null;
 		Window cardWindow = value3 as Window;
 		bool card = cardWindow != null && !cardWindow.isDisposed && cardWindow.parent != null;
 		bool selectingLand = card && IsSelectingLand(cardWindow);
 		var action = SimpleSingletonProvider<GameLogicManager>.inst.action;
-		bool choosingTarget = !selectingLand && action != null && (action.playerAction == PlayerActionEnum.CHOOSETARGET_CARD
+		bool choosingTarget = !selectingLand && !monsterWindowHidden && action != null && (action.playerAction == PlayerActionEnum.CHOOSETARGET_CARD
 			|| action.playerAction == PlayerActionEnum.CHOOSETARGET_SKILL);
 		bool monster = monsterWindow || choosingTarget;
 		return CameraSelectionPolicy.Read(contract: true, fight, monster, card, null, null, (controller.freeObject == null) ? null : new int?((int)controller.freeObject.status), selectingLand);
+	}
+
+	private static bool IsFightWindowBlocking(Window fightWindow)
+	{
+		if (fightWindow == null || fightWindow.isDisposed || fightWindow.parent == null)
+		{
+			return false;
+		}
+		if (fightWindow.contentPane is UIFightWindow fightUi && !fightUi.isDisposed)
+		{
+			bool inLaunchStep = fightUi.step == null || fightUi.step.selectedIndex == 0;
+			UIFight_LaunchPK launchPk = fightUi.com_LaunchPK;
+			if (inLaunchStep && launchPk != null && !launchPk.isDisposed && (!launchPk.opaque || (launchPk.Hide != null && launchPk.Hide.selectedIndex != 0)))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static bool IsMonsterWindowHidden(Window monsterWindow)
+	{
+		return monsterWindow != null && !monsterWindow.isDisposed && monsterWindow.parent != null
+			&& monsterWindow.contentPane is UIBattleSelectMonsterWindow ui && !ui.isDisposed
+			&& ui.Hide != null && ui.Hide.selectedIndex != 0;
 	}
 
 	private static bool IsSelectingLand(Window cardWindow)

@@ -25,12 +25,12 @@ internal static class CameraSelectionPolicy
 		{
 			return CameraControlMode.Selection;
 		}
-		// The game's System (2) and MapSignal (3) states still move the
-		// board camera. They do not require discarding the user's zoom.
-		if (status == 2 || status == 3)
+		// Only the game's System (2) state pushes a board target camera.
+		// MapSignal (3, ping / magnifying glass) does not move the camera.
+		if (status == 2)
 		{
 			return CameraControlMode.NativeBoard;
 		}
-		return status == 0 || status == 1 ? CameraControlMode.Free : CameraControlMode.System;
+		return status == 0 || status == 1 || status == 3 ? CameraControlMode.Free : CameraControlMode.System;
 	}
 }

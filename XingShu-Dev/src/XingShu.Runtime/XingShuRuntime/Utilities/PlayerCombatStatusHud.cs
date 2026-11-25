@@ -45,6 +45,8 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 
     private readonly Dictionary<long, PillSlot> _headPills = new Dictionary<long, PillSlot>(4);
     private readonly Dictionary<long, PillSlot> _avatarPills = new Dictionary<long, PillSlot>(4);
+    private readonly HashSet<long> _playersWithServerAddMove = new HashSet<long>();
+    private readonly Dictionary<long, int> _lastRawExtraMove = new Dictionary<long, int>(4);
 
     private bool _enabled = XingShuConfigKeys.PlayerCombatHudEnabledDefault;
     private bool _showHead = XingShuConfigKeys.PlayerCombatHudShowHeadDefault;
@@ -57,6 +59,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
     private bool _showCd = XingShuConfigKeys.PlayerCombatHudShowCdDefault;
     private bool _showHp = XingShuConfigKeys.PlayerCombatHudShowHpDefault;
     private bool _showAtkDef = XingShuConfigKeys.PlayerCombatHudShowAtkDefDefault;
+    private bool _showMove = XingShuConfigKeys.PlayerCombatHudShowMoveDefault;
 
     private GComponent _attachedHeadLayer;
     private GComponent _attachedAvatarParent;
@@ -114,6 +117,10 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
     internal static bool ShowAtkDef => _instance != null
         ? _instance._showAtkDef
         : XingShuConfigService.GetBool(XingShuConfigKeys.PlayerCombatHudShowAtkDef, XingShuConfigKeys.PlayerCombatHudShowAtkDefDefault);
+
+    internal static bool ShowMove => _instance != null
+        ? _instance._showMove
+        : XingShuConfigService.GetBool(XingShuConfigKeys.PlayerCombatHudShowMove, XingShuConfigKeys.PlayerCombatHudShowMoveDefault);
 
     internal static void SetEnabled(bool value)
     {
@@ -246,6 +253,19 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         }
     }
 
+    internal static void SetShowMove(bool value)
+    {
+        XingShuConfigService.SetBool(XingShuConfigKeys.PlayerCombatHudShowMove, value);
+        XingShuConfigService.Save();
+        if (_instance != null)
+        {
+            _instance._showMove = value;
+            _instance._nextTextRefresh = 0f;
+            InvalidateText(_instance._headPills);
+            InvalidateText(_instance._avatarPills);
+        }
+    }
+
     internal static void ResetLayout()
     {
         XingShuConfigService.SetBool(XingShuConfigKeys.PlayerCombatHudEnabled, XingShuConfigKeys.PlayerCombatHudEnabledDefault);
@@ -259,6 +279,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         XingShuConfigService.SetBool(XingShuConfigKeys.PlayerCombatHudShowCd, XingShuConfigKeys.PlayerCombatHudShowCdDefault);
         XingShuConfigService.SetBool(XingShuConfigKeys.PlayerCombatHudShowHp, XingShuConfigKeys.PlayerCombatHudShowHpDefault);
         XingShuConfigService.SetBool(XingShuConfigKeys.PlayerCombatHudShowAtkDef, XingShuConfigKeys.PlayerCombatHudShowAtkDefDefault);
+        XingShuConfigService.SetBool(XingShuConfigKeys.PlayerCombatHudShowMove, XingShuConfigKeys.PlayerCombatHudShowMoveDefault);
         XingShuConfigService.Save();
         if (_instance != null)
         {
@@ -273,6 +294,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
             _instance._showCd = XingShuConfigKeys.PlayerCombatHudShowCdDefault;
             _instance._showHp = XingShuConfigKeys.PlayerCombatHudShowHpDefault;
             _instance._showAtkDef = XingShuConfigKeys.PlayerCombatHudShowAtkDefDefault;
+            _instance._showMove = XingShuConfigKeys.PlayerCombatHudShowMoveDefault;
             _instance._draggingAvatarPlayerId = 0L;
             _instance._nextTextRefresh = 0f;
             InvalidateText(_instance._headPills);
@@ -309,6 +331,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         _showCd = XingShuConfigService.GetBool(XingShuConfigKeys.PlayerCombatHudShowCd, XingShuConfigKeys.PlayerCombatHudShowCdDefault);
         _showHp = XingShuConfigService.GetBool(XingShuConfigKeys.PlayerCombatHudShowHp, XingShuConfigKeys.PlayerCombatHudShowHpDefault);
         _showAtkDef = XingShuConfigService.GetBool(XingShuConfigKeys.PlayerCombatHudShowAtkDef, XingShuConfigKeys.PlayerCombatHudShowAtkDefDefault);
+        _showMove = XingShuConfigService.GetBool(XingShuConfigKeys.PlayerCombatHudShowMove, XingShuConfigKeys.PlayerCombatHudShowMoveDefault);
     }
 
     private void LateUpdate()
@@ -325,7 +348,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 
     private void Tick()
     {
-        if (!_enabled || (!_showHead && !_showAvatar) || (!_showCd && !_showHp && !_showAtkDef)
+        if (!_enabled || (!_showHead && !_showAvatar) || (!_showCd && !_showHp && !_showAtkDef && !_showMove)
             || !SimpleSingletonProvider<SceneManager>.hasInstance
             || SimpleSingletonProvider<SceneManager>.inst.currentType == null
             || SimpleSingletonProvider<SceneManager>.inst.currentType.Value != SceneType.Battle
@@ -630,6 +653,14 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         }
 
         string line2 = _showAtkDef ? FormatAtkDefTokens(p) : "";
+        if (_showMove)
+        {
+            string movePart = FormatMoveToken(p);
+            if (!string.IsNullOrEmpty(movePart))
+            {
+                line2 = string.IsNullOrEmpty(line2) ? movePart : (line2 + " " + movePart);
+            }
+        }
 
         if (!string.IsNullOrEmpty(line1) && !string.IsNullOrEmpty(line2))
         {
@@ -650,6 +681,14 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
             string atkDef = FormatAtkDefTokens(p);
             result = string.IsNullOrEmpty(result) ? atkDef : (result + "  " + atkDef);
         }
+        if (_showMove)
+        {
+            string movePart = FormatMoveToken(p);
+            if (!string.IsNullOrEmpty(movePart))
+            {
+                result = string.IsNullOrEmpty(result) ? movePart : (result + " " + movePart);
+            }
+        }
         if (string.IsNullOrEmpty(result) && _showHp)
         {
             var hero = p.player.Hero;
@@ -659,6 +698,47 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
             result = $"[color={hpCol}]HP {hp}/{maxHp}[/color]";
         }
         return result;
+    }
+
+    private string FormatMoveToken(BattlePlayerData p)
+    {
+        if (p == null || p.player?.Hero == null) return "";
+        long pid = p.player.Id;
+        int extraAdd = p.Property?.ExtraAddMovePoint != null ? p.Property.ExtraAddMovePoint.Value : 0;
+        int extraMinus = p.Property?.ExtraMinusMovePoint != null ? p.Property.ExtraMinusMovePoint.Value : 0;
+        int rawNet = extraAdd - extraMinus;
+        if (_lastRawExtraMove.TryGetValue(pid, out int prevRaw) && prevRaw != rawNet)
+        {
+            _playersWithServerAddMove.Add(pid);
+        }
+        _lastRawExtraMove[pid] = rawNet;
+        if (extraAdd != 0 || extraMinus != 0)
+        {
+            _playersWithServerAddMove.Add(pid);
+        }
+        bool hasServerUpdate = _playersWithServerAddMove.Contains(pid);
+
+        int additionMoveSum = 0;
+        if (!hasServerUpdate && extraAdd == 0 && extraMinus == 0 && p.player.Hero.AdditionAttrs != null)
+        {
+            foreach (var kv in p.player.Hero.AdditionAttrs)
+            {
+                var attr = kv.Value;
+                if (attr != null)
+                {
+                    additionMoveSum += attr.MovePoint + attr.NextMovePoint + attr.SkillAppendMovePoint2;
+                }
+            }
+        }
+
+        int extraMove = PlayerCombatStatusPolicy.ResolveExtraMoveSpeed(
+            extraAdd,
+            extraMinus,
+            hasServerUpdate,
+            additionMoveSum,
+            p.player.Hero.AppendMovePoint1,
+            p.player.Hero.AppendMovePoint2);
+        return PlayerCombatStatusPolicy.FormatMoveSpeedToken(extraMove);
     }
 
     private static string FormatCdToken(BattlePlayerData p)
@@ -971,6 +1051,8 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
     private void ClearAll()
     {
         _draggingAvatarPlayerId = 0L;
+        _playersWithServerAddMove.Clear();
+        _lastRawExtraMove.Clear();
         DisposePool(_headPills);
         DisposePool(_avatarPills);
         _attachedHeadLayer = null;
