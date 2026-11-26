@@ -162,6 +162,15 @@ namespace XingShu.Tests
             Assert(CustomLobbyBgPolicy.BuildFileUri("") == "", "empty uri");
             string uri = CustomLobbyBgPolicy.BuildFileUri(@"E:\工作流\lobbybg\my video.mp4");
             Assert(uri.StartsWith("file:///") && uri.EndsWith("my%20video.mp4"), "file uri encoded: " + uri);
+
+            Assert(CustomLobbyBgPolicy.ContainsNonAsciiOrSpecial("video_「新宿决战」雨爱雄_0.mp4"), "CJK/bracket flagged");
+            Assert(!CustomLobbyBgPolicy.ContainsNonAsciiOrSpecial("bg_01.mp4"), "plain ASCII not flagged");
+            string androidStage0 = CustomLobbyBgPolicy.BuildVideoUrl("/storage/emulated/0/Android/data/com.feimo.astralparty/files/lobbybg/video_「新宿决战」雨爱雄_0.mp4", true, 0);
+            Assert(androidStage0 == "/storage/emulated/0/Android/data/com.feimo.astralparty/files/lobbybg/video_「新宿决战」雨爱雄_0.mp4", "android stage 0 uses raw path");
+            string androidStage1 = CustomLobbyBgPolicy.BuildVideoUrl("/storage/emulated/0/lobbybg/a.mp4", true, 1);
+            Assert(androidStage1.StartsWith("file:///") && androidStage1.EndsWith("/storage/emulated/0/lobbybg/a.mp4"), "android stage 1 uses file uri: " + androidStage1);
+            string asciiCache = CustomLobbyBgPolicy.BuildAndroidAsciiCacheFileName("/storage/emulated/0/lobbybg/video_「新宿决战」雨爱雄_0.mp4");
+            Assert(asciiCache.StartsWith("xingshu_lobbybg_") && asciiCache.EndsWith(".mp4") && !CustomLobbyBgPolicy.ContainsNonAsciiOrSpecial(asciiCache), "ascii cache name: " + asciiCache);
         }
 
         private static void TestAudioAndVanillaBgmPolicy()

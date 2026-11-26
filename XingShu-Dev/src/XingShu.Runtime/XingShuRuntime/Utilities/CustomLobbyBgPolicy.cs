@@ -238,6 +238,64 @@ namespace XingShuRuntime.Utilities
             }
         }
 
+        internal static bool ContainsNonAsciiOrSpecial(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c > 127 || c == '[' || c == ']' || c == '(' || c == ')' || c == '%' || c == '#' || c == '?')
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        internal static string BuildVideoUrl(string fullPath, bool isAndroid, int stage)
+        {
+            if (string.IsNullOrEmpty(fullPath))
+            {
+                return "";
+            }
+            if (!isAndroid || stage == 1)
+            {
+                return BuildFileUri(fullPath);
+            }
+            return fullPath.Replace('\\', '/');
+        }
+
+        internal static string BuildAndroidAsciiCacheFileName(string fullPath)
+        {
+            string input = fullPath ?? "";
+            uint hash = 2166136261u;
+            for (int i = 0; i < input.Length; i++)
+            {
+                hash ^= input[i];
+                hash *= 16777619u;
+            }
+            uint hash2 = 5381u;
+            for (int i = input.Length - 1; i >= 0; i--)
+            {
+                hash2 = ((hash2 << 5) + hash2) ^ input[i];
+            }
+            string ext = Path.GetExtension(input.Trim()).ToLowerInvariant();
+            switch (ext)
+            {
+                case ".mp4":
+                case ".webm":
+                case ".mov":
+                case ".m4v":
+                case ".wmv":
+                    break;
+                default:
+                    ext = ".mp4";
+                    break;
+            }
+            return "xingshu_lobbybg_" + hash.ToString("x8", CultureInfo.InvariantCulture)
+                + hash2.ToString("x8", CultureInfo.InvariantCulture) + ext;
+        }
+
         internal static string BuildFileUri(string fullPath)
         {
             if (string.IsNullOrEmpty(fullPath))
