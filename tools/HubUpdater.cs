@@ -23,6 +23,23 @@ internal static class HubUpdater {
     internal const string SignedRepository = "Breezecaresses/Xingshu-hub";
     internal static bool IsUpdateRepository(string repository) { return repository==Repo || repository==SignedRepository; }
     internal const string Releases = "https://github.com/" + Repo + "/releases";
+    internal const string OfficialMirrorHost = "astralparty-xingshu.lanxichaxu.cn";
+    internal const string OfficialMirrorReleases = "https://" + OfficialMirrorHost + "/xingshu-hub/assets/launcher-runtime/desktop-releases";
+    internal static string OfficialLatestUrl() { return OfficialMirrorReleases + "/latest.json"; }
+    internal static string OfficialAssetUrl(string tag,string assetName) {
+        return OfficialMirrorReleases + "/" + Uri.EscapeDataString(tag) + "/" + Uri.EscapeDataString(assetName);
+    }
+    internal static string TryOfficialMirrorAssetUrl(string directUrl) {
+        string prefix = Releases + "/download/";
+        if(String.IsNullOrEmpty(directUrl) || !directUrl.StartsWith(prefix,StringComparison.Ordinal))return null;
+        string tail = directUrl.Substring(prefix.Length);
+        int slash = tail.IndexOf('/');
+        if(slash<=0 || slash>=tail.Length-1 || tail.IndexOf('/',slash+1)>=0)return null;
+        string tag = Uri.UnescapeDataString(tail.Substring(0,slash));
+        string asset = Uri.UnescapeDataString(tail.Substring(slash+1));
+        if(String.IsNullOrEmpty(tag) || String.IsNullOrEmpty(asset))return null;
+        return OfficialAssetUrl(tag,asset);
+    }
     internal static readonly string[] DomesticMirrors = new[] {
         "https://gh-proxy.com/",
         "https://edgeone.gh-proxy.org/",
@@ -58,11 +75,14 @@ internal static class HubUpdater {
     internal static List<string> CandidateUrls(string directUrl,long assetId,bool preferDomestic) {
         var list=new List<string>();
         bool isGitHubRepo=directUrl!=null && directUrl.StartsWith("https://github.com/"+Repo+"/",StringComparison.Ordinal);
+        string officialMirror=TryOfficialMirrorAssetUrl(directUrl);
+        if(preferDomestic && officialMirror!=null)list.Add(officialMirror);
         if(preferDomestic && isGitHubRepo) {
             foreach(string mirror in DomesticMirrors)list.Add(mirror+directUrl);
         }
         if(assetId>0)list.Add("https://api.github.com/repos/"+Repo+"/releases/assets/"+assetId);
         if(!String.IsNullOrEmpty(directUrl))list.Add(directUrl);
+        if(!preferDomestic && officialMirror!=null)list.Add(officialMirror);
         if(!preferDomestic && isGitHubRepo) {
             foreach(string mirror in DomesticMirrors)list.Add(mirror+directUrl);
         }
@@ -210,7 +230,13 @@ internal static class HubUpdater {
     static bool IsDomesticHost(string host) {
         if(String.IsNullOrEmpty(host))return false;
         string h=host.ToLowerInvariant();
-        return DomesticMirrors.Any(m => new Uri(m).Host==h);
+        return h==OfficialMirrorHost || DomesticMirrors.Any(m => new Uri(m).Host==h);
+    }
+    static string FormatSourceLabel(string host,bool forCheck) {
+        if(!String.IsNullOrEmpty(host) && String.Equals(host,OfficialMirrorHost,StringComparison.OrdinalIgnoreCase))
+            return "官方国内镜像 ("+host+")";
+        if(IsDomesticHost(host))return "国内加速镜像 ("+host+")";
+        return (forCheck?"官方直连 (":"官方源 (")+host+")";
     }
     sealed class ReleaseCandidate {
         internal string Tag,Manifest;
@@ -284,9 +310,54 @@ internal static class HubUpdater {
         bestDesktopAssetId=check.DesktopAssetId; usedDomesticMirror=check.Domestic;
         return check.Result;
     }
+    static async Task<CheckResult> TryOfficialMirrorCheckAsync(long current,bool preview,MetadataFetcher fetch,CancellationToken budget) {
+        MetadataResponse<string> rawResp;
+        try {
+            rawResp=await FetchFastestAsync(new[]{OfficialLatestUrl()},350000,text => text,fetch,budget).ConfigureAwait(false);
+        } catch(TransportException) {
+            if(budget.IsCancellationRequested)throw new TransportException("更新通道响应超时，请检查网络后重试。",0,null);
+            return null;
+        } catch(OperationCanceledException ex) {
+            if(budget.IsCancellationRequested)throw new TransportException("更新通道响应超时，请检查网络后重试。",0,ex);
+            return null;
+        } catch(Exception) {
+            return null;
+        }
+
+        Dictionary<string,object> wrapper;
+        string tag;
+        bool prerelease=false;
+        string envelopeJson;
+        try {
+            wrapper=Object(rawResp.Text);
+            if(wrapper==null || !wrapper.ContainsKey("tag") || !wrapper.ContainsKey("envelope"))return null;
+            tag=S(wrapper,"tag");
+            if(wrapper.ContainsKey("prerelease") && wrapper["prerelease"]!=null)prerelease=Convert.ToBoolean(wrapper["prerelease"]);
+            if(prerelease && !preview)return null;
+            var envelopeObj=wrapper["envelope"];
+            envelopeJson=envelopeObj is string ? (string)envelopeObj : new JavaScriptSerializer { MaxJsonLength=2000000 }.Serialize(envelopeObj);
+        } catch(Exception) {
+            return null;
+        }
+
+        // Verification failures are fatal and must never silently fall back to an older GitHub release.
+        var manifest=Verify(envelopeJson,tag);
+        bool avail=N(manifest,"sequence")>current;
+        var result=new Dictionary<string,object> {
+            {"available",avail}, {"currentSequence",current},
+            {"release",manifest}, {"envelope",envelopeJson}, {"releaseUrl",Releases+"/tag/"+Uri.EscapeDataString(S(manifest,"tag"))},
+            {"downloadSource",FormatSourceLabel(OfficialMirrorHost,true)},
+            {"checkWarning",null},
+            {"message",avail?"发现可校验的新版本。":"没有比当前版本更新的可校验发布。"}
+        };
+        return new CheckResult { Result=result,DesktopAssetId=0,Domestic=true };
+    }
     static async Task<CheckResult> CheckAsync(long current,bool preview,MetadataFetcher fetch,int timeoutMs) {
       using(var deadline=new CancellationTokenSource(timeoutMs))
       using(var parallel=new SemaphoreSlim(4)) {
+        var mirrorHit=await TryOfficialMirrorCheckAsync(current,preview,fetch,deadline.Token).ConfigureAwait(false);
+        if(mirrorHit!=null)return mirrorHit;
+
         MetadataResponse<List<ReleaseCandidate>> discovery=null;
         string api="https://api.github.com/repos/"+Repo+"/releases?per_page=30";
         try {
@@ -308,7 +379,7 @@ internal static class HubUpdater {
         var manifest=best==null?null:best.Response.Value;
         string usedHost=best==null?discovery.Host:best.Response.Host;
         bool domestic=IsDomesticHost(usedHost);
-        string sourceLabel=domestic?("国内加速镜像 ("+usedHost+")"):("官方直连 ("+usedHost+")");
+        string sourceLabel=FormatSourceLabel(usedHost,true);
         var result=new Dictionary<string,object> {
             {"available",manifest!=null && N(manifest,"sequence")>current}, {"currentSequence",current},
             {"release",manifest}, {"envelope",best==null?null:best.Response.Text}, {"releaseUrl",manifest==null?Releases:Releases+"/tag/"+Uri.EscapeDataString(S(manifest,"tag"))},
@@ -699,7 +770,7 @@ internal static class HubUpdater {
                 string stage=Path.Combine(cache,"checked"); Directory.CreateDirectory(stage); Extract(Path.Combine(cache,"update.zip"),stage,m);
                 File.WriteAllText(Path.Combine(cache,"plan.json"),Json.Serialize(new { tag=S(m,"tag"),envelope=S(result,"envelope") }),new UTF8Encoding(false));
                 result["cache"]=cache;
-                result["downloadSource"]=IsDomesticHost(usedDlHost)?("国内加速镜像 ("+usedDlHost+")"):("官方源 ("+usedDlHost+")");
+                result["downloadSource"]=FormatSourceLabel(usedDlHost,false);
             }
             result.Remove("envelope"); Print(result); return 0;
         } catch(Exception e) {

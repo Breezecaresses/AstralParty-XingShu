@@ -118,7 +118,7 @@ class Harness { static int Main(string[] a) { try {
  else if(a[0]=="verify") HubUpdater.Verify(File.ReadAllText(a[1]),a[2]);
  else if(a[0]=="manifest") { Console.WriteLine(HubUpdater.ManifestName(a[1].Split(','))??"NONE");return 0; }
  else if(a[0]=="hosts") {
-  Console.WriteLine((HubUpdater.IsAllowedUpdateHost("api.github.com")&&HubUpdater.IsAllowedUpdateHost("github.com")&&HubUpdater.IsAllowedUpdateHost("gh-proxy.com")&&HubUpdater.IsAllowedUpdateHost("edgeone.gh-proxy.org")&&HubUpdater.IsAllowedUpdateHost("gh-proxy.org")&&HubUpdater.IsAllowedUpdateHost("ghfast.top")&&!HubUpdater.IsAllowedUpdateHost("evil.example")&&!HubUpdater.IsAllowedUpdateHost("gh-proxy.com.evil.example"))?"ALLOW_OK":"ALLOW_BAD");
+  Console.WriteLine((HubUpdater.IsAllowedUpdateHost("api.github.com")&&HubUpdater.IsAllowedUpdateHost("github.com")&&HubUpdater.IsAllowedUpdateHost("astralparty-xingshu.lanxichaxu.cn")&&HubUpdater.IsAllowedUpdateHost("gh-proxy.com")&&HubUpdater.IsAllowedUpdateHost("edgeone.gh-proxy.org")&&HubUpdater.IsAllowedUpdateHost("gh-proxy.org")&&HubUpdater.IsAllowedUpdateHost("ghfast.top")&&!HubUpdater.IsAllowedUpdateHost("evil.example")&&!HubUpdater.IsAllowedUpdateHost("gh-proxy.com.evil.example")&&!HubUpdater.IsAllowedUpdateHost("astralparty-xingshu.lanxichaxu.cn.evil.example"))?"ALLOW_OK":"ALLOW_BAD");
   var c1=HubUpdater.CandidateUrls("https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.3/a.zip",42,false);
   var c2=HubUpdater.CandidateUrls("https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.3/a.zip",42,true);
   Console.WriteLine(String.Join("|",c1));
@@ -318,8 +318,53 @@ class Harness { static int Main(string[] a) { try {
         c2 = out[2].split('|')
         self.assertTrue(c1[0].startswith('https://api.github.com/repos/Breezecaresses/AstralParty-XingShu/releases/assets/42'))
         self.assertIn('https://edgeone.gh-proxy.org/https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.3/a.zip', c1)
-        self.assertTrue(c2[0].startswith('https://gh-proxy.com/'))
+        self.assertEqual(c2[0], 'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.1.3/a.zip')
+        self.assertIn('https://gh-proxy.com/https://github.com/Breezecaresses/AstralParty-XingShu/releases/download/v0.1.3/a.zip', c2)
         self.assertEqual(out[3], 'v0.1.3')
+
+    def test_official_mirror_latest_json_wins_without_hitting_github(self):
+        folder, _, m = self.fixture()
+        m.update(version='0.0.1', tag='v0.0.1', sequence=1)
+        m['android']['versionCode'] = 1
+        env = json.loads(self.sign(folder, m).read_text())
+        latest_body = json.dumps({'tag': m['tag'], 'prerelease': False, 'envelope': env})
+        result = self.check_fixture([
+            {'match': '/desktop-releases/latest.json', 'host': 'astralparty-xingshu.lanxichaxu.cn', 'delay': 10, 'body': latest_body},
+        ])
+        self.assertTrue(result['result']['available'])
+        self.assertEqual(result['result']['release']['sequence'], 1)
+        self.assertIn('astralparty-xingshu.lanxichaxu.cn', result['result']['downloadSource'])
+        self.assertFalse(any('api.github.com' in u for u in result['calls']))
+
+    def test_official_mirror_tampered_signature_is_fatal(self):
+        releases, manifests, _ = self.release_fixtures(1)
+        folder, _, m = self.fixture()
+        m.update(version='0.0.2', tag='v0.0.2', sequence=2)
+        m['android']['versionCode'] = 2
+        env = json.loads(self.sign(folder, m).read_text())
+        env['payload'] = base64.b64encode(b'{}').decode()
+        bad_latest = json.dumps({'tag': m['tag'], 'prerelease': False, 'envelope': env})
+        output = self.check_fixture([
+            {'match': '/desktop-releases/latest.json', 'host': 'astralparty-xingshu.lanxichaxu.cn', 'delay': 10, 'body': bad_latest},
+            {'match': '/releases?', 'host': 'api.github.com', 'delay': 10, 'body': json.dumps(releases)},
+            *manifests,
+        ], ok=False)
+        self.assertIn('签名校验失败', output)
+
+    def test_official_mirror_prerelease_skipped_when_preview_disabled(self):
+        releases, manifests, _ = self.release_fixtures(1)
+        folder, _, m = self.fixture()
+        m.update(version='0.0.2-beta.1', tag='v0.0.2-beta.1', sequence=2)
+        m['android']['versionCode'] = 2
+        env = json.loads(self.sign(folder, m).read_text())
+        preview_latest = json.dumps({'tag': m['tag'], 'prerelease': True, 'envelope': env})
+        result = self.check_fixture([
+            {'match': '/desktop-releases/latest.json', 'host': 'astralparty-xingshu.lanxichaxu.cn', 'delay': 10, 'body': preview_latest},
+            {'match': '/releases?', 'host': 'api.github.com', 'delay': 20, 'body': json.dumps(releases)},
+            *manifests,
+        ], preview=False)
+        self.assertEqual(result['result']['release']['sequence'], 1)
+        self.assertEqual(result['result']['release']['tag'], 'v0.0.1')
 
     def release_fixtures(self, count=1):
         releases, rules, manifests = [], [], []

@@ -25,7 +25,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0">Download Desktop v0.2.0</a> ·
+  <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Hub_0.2.0_x64-setup.exe">⚡ EdgeOne CDN Direct Setup (v0.2.0)</a> ·
+  <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Desktop_0.2.0.zip">Portable ZIP</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0">GitHub Releases</a> ·
   <a href="https://github.com/Breezecaresses/AstralParty-XingShu-Android">📱 Android Standalone Repo</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">Web Edition</a> ·
   <a href="docs/README.md">Docs &amp; Validation Records</a> ·
@@ -33,19 +35,19 @@
 </p>
 
 > [!IMPORTANT]
-> **Android Edition has moved to its own standalone repository**: **[Breezecaresses/AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)** ([Download Android APK & Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)). This main repository focuses on **Windows Desktop Hub, in-game C# runtime, and Web Workshop**.
+> **Android Edition has moved to its own standalone repository**: **[Breezecaresses/AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)** ([⚡ EdgeOne CDN Direct APK v0.2.2](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-releases/v0.2.2/XingShu_Android_0.2.2.apk) · [GitHub Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)). This main repository focuses on **Windows Desktop Hub, in-game C# runtime, and Web Workshop**.
 
 ---
 
 ## Stable Release
 
-[Download stable v0.2.0](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0) ([release notes](docs/records/RELEASE_0.2.0.md)), targeting *Astral Party* `3.3.0` (`resource 160`).
+[⚡ Official EdgeOne CDN Direct Download v0.2.0 (Recommended)](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Hub_0.2.0_x64-setup.exe) · [GitHub Release v0.2.0](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0) ([release notes](docs/records/RELEASE_0.2.0.md)), targeting *Astral Party* `3.3.0` (`resource 160`).
 
 | Target | Package / Access | Highlights |
 | --- | --- | --- |
-| **Windows Desktop** | `XingShu_Hub_0.2.0_x64-setup.exe` / `XingShu_Desktop_0.2.0.zip` | One-click Windows installer or streamlined portable pure-launcher Hub with the **Universal Local Mod Compatibility Engine**: `CAB-*` fingerprint alignment, native `ResourceModLoader` (`mod.json`) patching, customizable frosted-glass UI skin, Game Customize workbench, remote `core-manifest.json` hot-updates, and **16 consolidated official modules** (`r8.59`). |
+| **Windows Desktop** | [⚡ CDN setup.exe](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Hub_0.2.0_x64-setup.exe) / [⚡ CDN Portable ZIP](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Desktop_0.2.0.zip) ([GitHub](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0)) | Self-hosted EdgeOne CDN direct mirror + one-click Windows installer or streamlined portable pure-launcher Hub with the **Universal Local Mod Compatibility Engine**, self-hosted first update routing, customizable frosted-glass UI skin, Game Customize workbench, remote `core-manifest.json` hot-updates, and **16 consolidated official modules** (`r8.59`). |
 | **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop**, character emote reactions, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
-| **Android Launcher (Standalone Repo)** | **[AstralParty-XingShu-Android · Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)** / [⚡ CDN Direct v0.2.2](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-releases/v0.2.2/XingShu_Android_0.2.2.apk) | Dedicated repository **[AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)** (`v0.2.2` / `android-preview8.60`): EdgeOne CDN + 4-way concurrent accelerated downloads, Workshop emote reactions, Custom Lobby Background & Game Customize workbench, 16 official modules + legacy cleaner, and Shizuku / Wireless ADB sync. See [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md). |
+| **Android Launcher (Standalone Repo)** | [⚡ CDN Direct v0.2.2 APK](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-releases/v0.2.2/XingShu_Android_0.2.2.apk) / [⚡ CDN ZIP](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-releases/v0.2.2/XingShu_Android_0.2.2.zip) / **[GitHub Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)** | Dedicated repository **[AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)** (`v0.2.2` / `android-preview8.60`): Self-hosted EdgeOne CDN + 4-way concurrent accelerated downloads, Workshop emote reactions, Custom Lobby Background & Game Customize workbench, 16 official modules + legacy cleaner, and Shizuku / Wireless ADB sync. See [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md). |
 
 > [!NOTE]
 > The Core Framework (`XingShu Official Plugin Mod`) is completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.10 release record](docs/records/RELEASE_0.1.10.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).

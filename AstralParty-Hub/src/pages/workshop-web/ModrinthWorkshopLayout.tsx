@@ -38,6 +38,13 @@ import { PROJECT_SOURCE } from '../../shared/projectSource';
 import { assetUrl } from '../../shared/runtime';
 import './modrinth.css';
 
+const DESKTOP_CDN_SETUP_URL =
+  'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Hub_0.2.0_x64-setup.exe';
+const DESKTOP_CDN_ZIP_URL =
+  'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/desktop-releases/v0.2.0/XingShu_Desktop_0.2.0.zip';
+const ANDROID_CDN_APK_URL =
+  'https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-releases/v0.2.2/XingShu_Android_0.2.2.apk';
+
 export const ModrinthWorkshopLayout: React.FC = () => {
   const { locale } = useTranslation();
   const zh = locale === 'zh-CN';
@@ -468,7 +475,9 @@ export const ModrinthWorkshopLayout: React.FC = () => {
             <ul>
               <li><Link to="/extensions/creator">{zh ? '投稿规范与审核' : 'Creator Guide'}</Link></li>
               <li><a href={PROJECT_SOURCE} target="_blank" rel="noreferrer">GitHub 源码 ↗</a></li>
-              <li><a href={`${PROJECT_SOURCE}/releases`} target="_blank" rel="noreferrer">{zh ? '桌面客户端下载 ↗' : 'Desktop Releases ↗'}</a></li>
+              <li><a href={DESKTOP_CDN_SETUP_URL} target="_blank" rel="noreferrer">{zh ? '桌面端国内直链 ↗' : 'Desktop CDN Direct ↗'}</a></li>
+              <li><a href={ANDROID_CDN_APK_URL} target="_blank" rel="noreferrer">{zh ? '安卓端国内直链 ↗' : 'Android CDN Direct ↗'}</a></li>
+              <li><a href={`${PROJECT_SOURCE}/releases`} target="_blank" rel="noreferrer">{zh ? 'GitHub 发布页 ↗' : 'GitHub Releases ↗'}</a></li>
             </ul>
           </div>
 
@@ -519,22 +528,49 @@ export const ModrinthWorkshopLayout: React.FC = () => {
 
                 <div className="mr-install-note">
                   {zh
-                    ? '在网页工坊下载任意 .xspkg 后，拖入桌面端「星枢启动器」即可安装；登录同一星枢平台账号后，已绑定游戏账号与收藏列表可全端互通。'
-                    : 'Drop any downloaded .xspkg onto XingShu Desktop App, or sign in with the same platform account on desktop to install directly.'}
+                    ? '推荐通过自有服务器 EdgeOne CDN 国内高速直链下载桌面端（或手机端 APK）；安装并在网页工坊下载任意 .xspkg 后，拖入启动器即可安装，登录同一星枢平台账号后游戏绑定与收藏全端互通。'
+                    : 'Download desktop or Android packages directly via our EdgeOne CDN mirror, or use GitHub Releases. Sign in with the same XingShu account to sync bindings and reactions across devices.'}
                 </div>
 
-                <footer className="mr-modal-foot">
+                <footer className="mr-modal-foot" style={{ flexWrap: 'wrap', gap: 8 }}>
                   <button type="button" className="mr-btn-outline" onClick={() => setLauncherModalOpen(false)}>
                     {zh ? '继续浏览' : 'Keep Browsing'}
                   </button>
                   <a
+                    href={DESKTOP_CDN_ZIP_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mr-btn-outline"
+                  >
+                    <Download size={14} />
+                    <span>{zh ? '便携 ZIP（国内直链）' : 'Portable ZIP (CDN)'}</span>
+                  </a>
+                  <a
+                    href={ANDROID_CDN_APK_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mr-btn-outline"
+                  >
+                    <Download size={14} />
+                    <span>{zh ? '安卓 APK（国内直链）' : 'Android APK (CDN)'}</span>
+                  </a>
+                  <a
                     href={`${PROJECT_SOURCE}/releases`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mr-btn-outline"
+                  >
+                    <ExternalLink size={14} />
+                    <span>{zh ? 'GitHub Releases' : 'GitHub Releases'}</span>
+                  </a>
+                  <a
+                    href={DESKTOP_CDN_SETUP_URL}
                     target="_blank"
                     rel="noreferrer"
                     className="mr-btn-emerald"
                   >
-                    <ExternalLink size={14} />
-                    <span>{zh ? '前往 GitHub Releases' : 'GitHub Releases'}</span>
+                    <Download size={14} />
+                    <span>{zh ? '桌面安装版（国内直链）' : 'Desktop Setup (CDN)'}</span>
                   </a>
                 </footer>
               </div>
