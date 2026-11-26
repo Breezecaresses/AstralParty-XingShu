@@ -291,7 +291,7 @@
   max-width: 1440px;
   margin: 0 auto;
   padding: 24px 28px 28px;
-  animation: pcl-route-enter 280ms var(--pcl-ease-out) both;
+  animation: pcl-route-enter 280ms var(--pcl-ease-out) backwards;
 }
 
 .launcher-frame.launcher-is-home .content-area {

@@ -219,8 +219,8 @@ const CHANNELS: &[ChannelSpec] = &[
     ChannelSpec { platform: "TAPTAP", app_id: "110001958", label: "TapTap" },
     ChannelSpec { platform: "BILIBILI", app_id: "110001957", label: "哔哩哔哩 (B站)" },
     ChannelSpec { platform: "WEGAME", app_id: "110001949", label: "WeGame" },
-    ChannelSpec { platform: "STEAM_CN", app_id: "110001933", label: "Steam 国服 (110001933)" },
-    ChannelSpec { platform: "STEAM_CN", app_id: "110001959", label: "Steam 国服 (110001959)" },
+    ChannelSpec { platform: "STEAM_CN", app_id: "110001933", label: "Steam 国服" },
+    ChannelSpec { platform: "STEAM_CN", app_id: "110001959", label: "Steam 国服" },
 ];
 
 fn validate_channel(platform: &str, app_id: &str) -> HubResult<&'static ChannelSpec> {
@@ -327,7 +327,17 @@ fn parse_qq_login_link(raw_url: &str) -> HubResult<(String, String)> {
 
 fn sort_detected_channels(items: &mut Vec<(u64, Value)>) -> Vec<Value> {
     items.sort_by(|a, b| b.0.cmp(&a.0));
-    items.drain(..).map(|(_, v)| v).collect()
+    let mut seen_platforms = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for (_, v) in items.drain(..) {
+        if let Some(platform) = v.get("platform").and_then(|p| p.as_str()).filter(|s| !s.is_empty()) {
+            if !seen_platforms.insert(platform.to_string()) {
+                continue;
+            }
+        }
+        result.push(v);
+    }
+    result
 }
 
 #[tauri::command]
@@ -611,13 +621,18 @@ mod tests {
         assert!(parse_qq_login_link("https://124.221.176.134/login#short.t").is_err());
     }
     #[test]
-    fn detected_channels_sort_newest_first_and_session_drop_predicate() {
+    fn detected_channels_sort_newest_first_deduplicate_and_hide_app_ids() {
+        for spec in CHANNELS {
+            assert!(!spec.label.contains("1100019"), "label must not expose raw app_id: {}", spec.label);
+        }
         let mut items = vec![
-            (100, json!({"appId": "110001958"})),
-            (500, json!({"appId": "110001933"})),
-            (250, json!({"appId": "110001957"})),
+            (100, json!({"platform": "TAPTAP", "appId": "110001958"})),
+            (500, json!({"platform": "STEAM_CN", "appId": "110001933"})),
+            (400, json!({"platform": "STEAM_CN", "appId": "110001959"})),
+            (250, json!({"platform": "BILIBILI", "appId": "110001957"})),
         ];
         let sorted = sort_detected_channels(&mut items);
+        assert_eq!(sorted.len(), 3);
         assert_eq!(sorted[0]["appId"], "110001933");
         assert_eq!(sorted[1]["appId"], "110001957");
         assert_eq!(sorted[2]["appId"], "110001958");

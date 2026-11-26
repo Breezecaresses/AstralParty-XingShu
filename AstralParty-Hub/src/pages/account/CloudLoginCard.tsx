@@ -1,4 +1,5 @@
 import {useEffect, useState} from 'react';
+import {createPortal} from 'react-dom';
 import {invoke} from '@tauri-apps/api/core';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {LogIn, LogOut, RefreshCw, X, ShieldCheck, Link2, Sparkles} from 'lucide-react';
@@ -82,6 +83,14 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
     finally { setBusy(false); }
   };
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setVisible(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [visible]);
   useEffect(() => {
     if (!polling) return;
     let cancelled = false;
@@ -168,7 +177,7 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
           <h3 style={{margin: '0 0 7px'}}>{isZh ? '星枢账号登录' : 'XingShu sign in'}</h3>
           <div style={{fontSize: 14, color: 'var(--text-secondary)'}}>
             {account ? <><strong style={{color: 'var(--text-primary)'}}>{account.nick}</strong> · UID {account.uid}</> :
-              isZh ? '支持手机号、Steam、B 站与 TapTap 登录；登录后自动同步合作对局云端手牌，QQ Bot 与 Hub 通用。' : 'Sign in with Phone, Steam, Bilibili, or TapTap; auto-pushes co-op cloud hands after sign-in.'}
+              isZh ? '支持手机号、Steam、B 站、TapTap、WeGame 及手机渠道（小米 / 4399）登录；登录后自动同步合作对局云端手牌，QQ Bot 与 Hub 通用。' : 'Sign in with Phone, Steam, Bilibili, TapTap, WeGame, or mobile channels; auto-pushes co-op cloud hands.'}
           </div>
         </div>
         {grant && <button className="btn btn-secondary" onClick={() => setVisible(true)}>{isZh ? '查看登录进度' : 'View login'}</button>}
@@ -242,18 +251,48 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
       )}
       {!loaded && busy && <span role="status" style={{fontSize: 12}}>{isZh ? '正在读取登录状态…' : 'Loading account…'}</span>}
     </section>
-    {visible && <div role="dialog" aria-modal="true" aria-label={isZh ? '手机号登录' : 'Phone sign in'} style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,.65)', zIndex: 1200, display: 'grid', placeItems: 'center', padding: 24}}>
-      <div className="card" style={{width: 'min(440px, 100%)', padding: 26, position: 'relative', textAlign: 'center'}}>
-        <button className="btn btn-secondary" onClick={() => setVisible(false)} aria-label={isZh ? '关闭' : 'Close'} style={{position: 'absolute', top: 12, right: 12, padding: 7}}><X size={17}/></button>
-        <h2 style={{fontSize: 21, margin: '10px 0 12px'}}>{isZh ? '扫码登录星枢' : 'Sign in to XingShu'}</h2>
-        {grant && stage === 'pending' ? <>
-          <img src={`data:image/png;base64,${grant.qrPng}`} width={250} height={250} alt={isZh ? '星枢手机号授权二维码' : 'Phone authorization QR code'} style={{maxWidth: '100%', height: 'auto', borderRadius: 12, background: 'white', padding: 8}}/>
-          <p style={{lineHeight: 1.7, color: 'var(--text-secondary)', fontSize: 13}}>{isZh ? '使用手机扫码，或在浏览器中用手机号、Steam、B 站、TapTap 完成授权。二维码有效期 2 分钟。' : 'Scan with your phone or authorize in browser with Phone, Steam, Bilibili, or TapTap. QR expires in 2 minutes.'}</p>
-          <button className="btn btn-primary" onClick={() => openUrl(grant.loginUrl).catch(() => setNotice(isZh ? '无法打开浏览器，请使用手机扫码。' : 'Unable to open browser. Please scan the QR.'))}>{isZh ? '在浏览器打开登录页' : 'Open login page'}</button>
-        </> : grant ? <p style={{padding: '50px 0', lineHeight: 1.8}}>{isZh ? '授权页已打开，请完成手机号登录。成功后此处将自动更新。' : 'Authorization page opened. Finish sign in to continue.'}</p> :
-          <p style={{lineHeight: 1.8}}>{notice}</p>}
-        {!grant && <button className="btn btn-primary" disabled={busy} onClick={start}>{isZh ? '重新生成二维码' : 'New QR code'}</button>}
-      </div>
-    </div>}
+    {visible && createPortal(
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={isZh ? '手机号登录' : 'Phone sign in'}
+        onClick={(e) => { if (e.target === e.currentTarget) setVisible(false); }}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.56)',
+          backdropFilter: 'blur(4px)',
+          WebkitBackdropFilter: 'blur(4px)',
+          zIndex: 1400,
+          display: 'grid',
+          placeItems: 'center',
+          padding: 24,
+        }}
+      >
+        <div
+          className="card"
+          style={{
+            width: 'min(440px, 100%)',
+            padding: 26,
+            position: 'relative',
+            textAlign: 'center',
+            background: 'var(--pcl-card-hover, var(--bg-card, #ffffff))',
+            color: 'var(--pcl-ink, var(--text-primary))',
+            boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)',
+          }}
+        >
+          <button className="btn btn-secondary" onClick={() => setVisible(false)} aria-label={isZh ? '关闭' : 'Close'} style={{position: 'absolute', top: 12, right: 12, padding: 7}}><X size={17}/></button>
+          <h2 style={{fontSize: 21, margin: '10px 0 12px'}}>{isZh ? '扫码登录星枢' : 'Sign in to XingShu'}</h2>
+          {grant && stage === 'pending' ? <>
+            <img src={`data:image/png;base64,${grant.qrPng}`} width={250} height={250} alt={isZh ? '星枢手机号授权二维码' : 'Phone authorization QR code'} style={{maxWidth: '100%', height: 'auto', borderRadius: 12, background: 'white', padding: 8}}/>
+            <p style={{lineHeight: 1.7, color: 'var(--text-secondary)', fontSize: 13}}>{isZh ? '使用手机扫码，或在浏览器中用手机号、Steam、B 站、TapTap、WeGame 及手机渠道完成授权。二维码有效期 2 分钟。' : 'Scan with your phone or authorize in browser with Phone, Steam, Bilibili, TapTap, WeGame, or mobile channels. QR expires in 2 minutes.'}</p>
+            <button className="btn btn-primary" onClick={() => openUrl(grant.loginUrl).catch(() => setNotice(isZh ? '无法打开浏览器，请使用手机扫码。' : 'Unable to open browser. Please scan the QR.'))}>{isZh ? '在浏览器打开登录页' : 'Open login page'}</button>
+          </> : grant ? <p style={{padding: '50px 0', lineHeight: 1.8}}>{isZh ? '授权页已打开，请完成手机号登录。成功后此处将自动更新。' : 'Authorization page opened. Finish sign in to continue.'}</p> :
+            <p style={{lineHeight: 1.8}}>{notice}</p>}
+          {!grant && <button className="btn btn-primary" disabled={busy} onClick={start}>{isZh ? '重新生成二维码' : 'New QR code'}</button>}
+        </div>
+      </div>,
+      document.querySelector('.launcher-frame') ?? document.body,
+    )}
   </>;
 }

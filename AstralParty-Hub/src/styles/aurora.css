@@ -1168,7 +1168,7 @@ summary:focus-visible {
 }
 
 .aurora-route-stage {
-  animation: xingshu-route-enter 0.42s var(--spring-ease) both;
+  animation: xingshu-route-enter 0.42s var(--spring-ease) backwards;
 }
 
 @keyframes xingshu-route-enter {
