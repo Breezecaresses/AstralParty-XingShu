@@ -45,7 +45,7 @@
 | --- | --- | --- |
 | **Windows 桌面端** | `XingShu_Hub_0.2.0_x64-setup.exe` / `XingShu_Desktop_0.2.0.zip` | **极简纯启动器 + 万能本地 Mod 自动适配引擎**：提供一键安装包与便携包（仅含 `Hub/xingshu-hub.exe` 与说明文档）。支持旧版 Mod Catalog 跨版本反查、中文改名包 `CAB-*` 指纹匹配与 RML（`mod.json`）原生解析、自定义毛玻璃皮肤与主题透明度、主页自定义工作台、`core-manifest.json` 独立热更新与 **16 项合并精简官方模块**（`r8.59`）。 |
 | **在线网页版** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | 免安装打开即用：Modrinth 风格社区**模组 / 卡牌 / 皮肤工坊**浏览下载与作者投稿、游戏角色表情回应、星枢平台账号体系、UID 战绩查询、`.rep` / 对局编号回放深度分析与离线全量图鉴。 |
-| **安卓手机端（独立仓库）** | **[AstralParty-XingShu-Android · Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)** | 手机端源码与更新已独立拆分至 **[AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)**（`v0.2.1+` / `android-preview8.60`）：支持直装 APK、工坊角色表情回应、自定义主页背景与调试工作台、16 项官方模块与旧残留一键清理、Shizuku / 无线 ADB 同步。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
+| **安卓手机端（独立仓库）** | **[AstralParty-XingShu-Android · Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)** / [⚡ 国内直链 v0.2.2](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/assets/launcher-runtime/android-releases/v0.2.2/XingShu_Android_0.2.2.apk) | 手机端源码与更新已独立拆分至 **[AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)**（`v0.2.2` / `android-preview8.60`）：内置 EdgeOne CDN + 4 路并发高速更新与工坊下载、角色表情回应、自定义主页背景与调试工作台、16 项官方模块与旧残留一键清理。详见[手机安装说明](docs/guides/ANDROID_PHONE_INSTALL.md)。 |
 
 > [!NOTE]
 > 自 `0.1.8` 起，核心框架（**星枢官方插件 Mod**）已彻底解耦并独立托管：未来发布新版核心插件或适配游戏新版本时，老版本电脑 Hub 与手机 APK 均可在「模组」页直接在线热更核心插件，无需重装启动器。详见[v0.1.10 发布记录](docs/records/RELEASE_0.1.10.md)与[发布打包说明](docs/guides/RELEASE_PACKAGING.md)。
