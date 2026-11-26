@@ -25,23 +25,27 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.10">Download v0.1.10</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0">Download Desktop v0.2.0</a> ·
+  <a href="https://github.com/Breezecaresses/AstralParty-XingShu-Android">📱 Android Standalone Repo</a> ·
   <a href="https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/">Web Edition</a> ·
   <a href="docs/README.md">Docs &amp; Validation Records</a> ·
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
 </p>
 
+> [!IMPORTANT]
+> **Android Edition has moved to its own standalone repository**: **[Breezecaresses/AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)** ([Download Android APK & Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)). This main repository focuses on **Windows Desktop Hub, in-game C# runtime, and Web Workshop**.
+
 ---
 
 ## Stable Release
 
-[Download stable v0.1.10](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.1.10) ([release notes](docs/records/RELEASE_0.1.10.md)). Both Windows and Android packages target *Astral Party* `3.3.0` (`resource 160`).
+[Download stable v0.2.0](https://github.com/Breezecaresses/AstralParty-XingShu/releases/tag/v0.2.0) ([release notes](docs/records/RELEASE_0.2.0.md)), targeting *Astral Party* `3.3.0` (`resource 160`).
 
 | Target | Package / Access | Highlights |
 | --- | --- | --- |
-| **Windows Desktop** | `XingShu_Hub_0.1.10_x64-setup.exe` / `XingShu_Desktop_0.1.10.zip` | One-click Windows installer or streamlined portable pure-launcher Hub with an upgraded **Universal Local Mod Compatibility Engine**: `CAB-*` fingerprint alignment for localized bundles, native `ResourceModLoader` (`mod.json`) parsing (`Redirect`, `.patch.bnk`, `.patch.proto`), cross-version `catalog_3.3.0.json` resolution, remote `core-manifest.json` hot-updates, and **21 modules** (`r8.47`). |
-| **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop** discovery & creator uploads, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
-| **Android Launcher** | `XingShu_Android_0.1.10.apk` / `XingShu_Android_0.1.10.zip` | Streamlined Kotlin + Jetpack Compose Material 3 pure launcher (`XingShu_Android_0.1.10.apk` directly, or ZIP containing only `星枢启动器.apk` + usage guide). Features refined layout density, symmetric `3×2` theme swatches, **21 official modules**, and remote `android-core-manifest.json` (`android-preview8.47`) over Shizuku & Wireless/USB ADB. |
+| **Windows Desktop** | `XingShu_Hub_0.2.0_x64-setup.exe` / `XingShu_Desktop_0.2.0.zip` | One-click Windows installer or streamlined portable pure-launcher Hub with the **Universal Local Mod Compatibility Engine**: `CAB-*` fingerprint alignment, native `ResourceModLoader` (`mod.json`) patching, customizable frosted-glass UI skin, Game Customize workbench, remote `core-manifest.json` hot-updates, and **16 consolidated official modules** (`r8.59`). |
+| **Web Edition** | [astralparty-xingshu.lanxichaxu.cn/xingshu-hub](https://astralparty-xingshu.lanxichaxu.cn/xingshu-hub/) | Instant browser access for Modrinth-style **Mod / Card / Skin Workshop**, character emote reactions, XingShu Platform accounts, UID lookup, `.rep` / match-ID replay analysis, and offline encyclopedia. |
+| **Android Launcher (Standalone Repo)** | **[AstralParty-XingShu-Android · Releases](https://github.com/Breezecaresses/AstralParty-XingShu-Android/releases)** | Dedicated repository **[AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)** (`v0.2.1+` / `android-preview8.60`): Kotlin + Jetpack Compose Material 3 pure launcher, Workshop emote reactions, Custom Lobby Background & Game Customize workbench, 16 official modules + legacy cleaner, and Shizuku / Wireless ADB sync. See [ANDROID_PHONE_INSTALL.md](docs/guides/ANDROID_PHONE_INSTALL.md). |
 
 > [!NOTE]
 > The Core Framework (`XingShu Official Plugin Mod`) is completely independent from both Desktop Hub and Android APKs—future core runtime or game-baseline updates install directly via remote manifests without upgrading the launcher. See the [v0.1.10 release record](docs/records/RELEASE_0.1.10.md) and [packaging guide](docs/guides/RELEASE_PACKAGING.md).
@@ -174,13 +178,10 @@ npx tauri build -- --locked --offline
 .\XingShu-Dev\tools\build.ps1 -Configuration Release
 ```
 
-### 3. Android Pure Launcher (Kotlin / Jetpack Compose)
+### 3. Android Edition (Moved to Standalone Repository)
 
+- Active Android development and mobile releases now live in **[Breezecaresses/AstralParty-XingShu-Android](https://github.com/Breezecaresses/AstralParty-XingShu-Android)**.
 - Prerequisites: JDK 17, Android SDK (`compileSdk 35`), Gradle 8.9.
-
-```powershell
-python tools/build_android_installer.py --help
-```
 
 ---
 
