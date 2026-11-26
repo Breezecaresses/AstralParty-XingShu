@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { RichGameName } from '../../components/common/RichGameName';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { PublicUidLookupCard } from '../../components/PublicUidLookupCard';
 import { characterName, gameCatalog, matchDate, matchDetailRefreshComplete, pickStaticEmoteAsset } from '../../shared/gameLibrary';
@@ -108,7 +109,7 @@ function MatchInspector({ record, state, account, close }: { record: PlayedMatch
         const own=p.playerId===pid;
         const playerResult=matchResult(p.rank,record.mapId,gameCatalog.modes);
         return <article className={`match-player${own ? ' own-player' : ''}`} key={`${p.playerId}:${p.slot}`}>
-          <div className="match-player-heading"><GameImage asset={pickStaticEmoteAsset(p.heroId, `sb:${p.playerId}:${p.slot}`)} name={characterName(p.heroId)} /><div><h3>{p.name || `玩家 ${p.playerId}`}{own&&<small>本人</small>}</h3><p>{characterName(p.heroId)} · 对局星级 {p.level}{p.giveUp ? ' · 已退出' : ''}</p></div><div className="match-player-score"><strong>{ratings[i]==null ? '—' : ratings[i]!.toFixed(2)}</strong><small>星枢评分 / 10</small>{ratings[i]!=null && ratings[i]===best && <em>MVP</em>}</div><b className={`match-place match-result-${playerResult.outcome}`}>{playerResult.label}</b></div>
+          <div className="match-player-heading"><GameImage asset={pickStaticEmoteAsset(p.heroId, `sb:${p.playerId}:${p.slot}`)} name={characterName(p.heroId)} /><div><h3><RichGameName text={p.name} fallback={`玩家 ${p.playerId}`} />{own&&<small>本人</small>}</h3><p>{characterName(p.heroId)} · 对局星级 {p.level}{p.giveUp ? ' · 已退出' : ''}</p></div><div className="match-player-score"><strong>{ratings[i]==null ? '—' : ratings[i]!.toFixed(2)}</strong><small>星枢评分 / 10</small>{ratings[i]!=null && ratings[i]===best && <em>MVP</em>}</div><b className={`match-place match-result-${playerResult.outcome}`}>{playerResult.label}</b></div>
           <dl className="match-metrics">{[['击杀',p.kills],['死亡',p.deaths],['输出',p.damage],['承伤',p.taken],['治疗',p.healing],['累计金币',p.coins],['转账',p.transfer],['对局轮数',p.turns],['移动步数',p.movement]].map(([name,value])=><div key={String(name)}><dt>{name}</dt><dd>{metric(value as number | undefined)}</dd></div>)}</dl>
         </article>;
       })}</div>

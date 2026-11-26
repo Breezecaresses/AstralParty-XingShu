@@ -76,6 +76,8 @@ namespace XingShu.Runtime
                 XingShu.SpectatorTelemetry.SpectatorEventInterceptor.Initialize(targetHost);
                 if (LauncherModules.CanLoad(nameof(XingShuRuntime.MatchPort.SettlementScreenshot)))
                     XingShuRuntime.MatchPort.SettlementScreenshot.Install(targetHost);
+                if (LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.CreditGuardRuntime)))
+                    XingShuRuntime.Utilities.CreditGuardRuntime.Install(targetHost);
                 LogLifecycle("[XingShuRuntimeHost.Initialize] SpectatorEventInterceptor 初始化完成");
             }
             catch (Exception ex)

@@ -589,4 +589,20 @@ internal static class XingShuConfigKeys
 	internal const float UiGlassCardAlphaMin = 0.35f;
 	internal const float UiGlassCardAlphaMax = 0.95f;
 	internal const float UiGlassCardAlphaDefault = 0.78f;
+
+	// 星枢社区信誉分与高信誉车队 (CreditGuardRuntime：独立模块 credit-guard)
+	internal const string CreditGuardEnabled = "XINGSHU_CREDIT_ENABLED";
+	internal const bool CreditGuardEnabledDefault = true;
+	internal const string CreditGuardHudStrip = "XINGSHU_CREDIT_HUD_STRIP";
+	internal const bool CreditGuardHudStripDefault = true;
+	internal const string CreditGuardMinCredit = "XINGSHU_CREDIT_MIN_SCORE";
+	internal const int CreditGuardMinCreditDefault = 85;
+	internal const string CreditGuardMaxGiveUpRate = "XINGSHU_CREDIT_MAX_GIVEUP";
+	internal const int CreditGuardMaxGiveUpRateDefault = 15;
+	internal const string CreditGuardBlockBlacklisted = "XINGSHU_CREDIT_BLOCK_BLACKLIST";
+	internal const bool CreditGuardBlockBlacklistedDefault = true;
+	internal const string CreditGuardAutoKick = "XINGSHU_CREDIT_AUTO_KICK";
+	internal const bool CreditGuardAutoKickDefault = false;
+	internal const string CreditGuardAutoReady = "XINGSHU_CREDIT_AUTO_READY";
+	internal const bool CreditGuardAutoReadyDefault = true;
 }

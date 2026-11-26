@@ -146,6 +146,7 @@ namespace XingShuRuntime.UI
         private XingShuFreeCameraView _freeCameraView;
         private XingShuActionGuardView _actionGuardView;
         private XingShuAutoSocialView _autoSocialView;
+        private XingShuCreditView _creditView;
         private XingShuSelectRoleMapView _selectRoleMapView;
         private XingShuBattleStatsView _battleStatsView;
         private XingShuAdvancedSettingsView _advancedSettingsView;
@@ -186,6 +187,7 @@ namespace XingShuRuntime.UI
             17, // 角色Buff显示
             6,  // 战局守护
             18, // 自动化社交 (合并快捷致谢/头像点赞/星币商店/结算截图)
+            19, // 信誉与车队
             22, // 选人地图
             7,  // 对局数据
             5,  // 自由镜头
@@ -217,7 +219,7 @@ namespace XingShuRuntime.UI
             "角色状态",       // 16
             "角色Buff显示",   // 17
             "自动化社交",     // 18
-            "",               // 19 (已并入 18)
+            "信誉与车队",     // 19 (独立模块 credit-guard)
             "",               // 20 (已并入 18)
             "",               // 21 (已并入 18)
             "选人地图"        // 22
@@ -1215,6 +1217,8 @@ namespace XingShuRuntime.UI
                 () => _actionGuardView?.UpdateSync());
             RegisterTabView(18, TabAvailable(18) ? (_autoSocialView = new XingShuAutoSocialView(_contentArea.transform)).Root : null,
                 () => _autoSocialView?.UpdateSync());
+            RegisterTabView(19, TabAvailable(19) ? (_creditView = new XingShuCreditView(_contentArea.transform)).Root : null,
+                () => _creditView?.UpdateSync());
             RegisterTabView(22, TabAvailable(22) ? (_selectRoleMapView = new XingShuSelectRoleMapView(_contentArea.transform)).Root : null,
                 () => _selectRoleMapView?.UpdateSync());
             RegisterTabView(7, TabAvailable(7) ? (_battleStatsView = new XingShuBattleStatsView(_contentArea.transform)).Root : null,
@@ -1315,7 +1319,7 @@ namespace XingShuRuntime.UI
                 case 16: return LauncherModules.CanLoad("PlayerCombatStatusHud");
                 case 17: return LauncherModules.CanLoad("PlayerStarBuffHud");
                 case 18: return LauncherModules.CanLoad("XingShuAutoThanks") || LauncherModules.CanLoad("XingShuAutoPraise") || LauncherModules.CanLoad("DailyStarCoinShop") || LauncherModules.CanLoad("SettlementScreenshot");
-                case 19:
+                case 19: return LauncherModules.CanLoad("CreditGuardRuntime");
                 case 20:
                 case 21: return false;
                 case 22: return LauncherModules.CanLoad("SelectRoleMapNameHint");

@@ -17,6 +17,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { RichGameName } from '../../components/common/RichGameName';
 import { PlatformUserAvatar } from '../../components/platform/PlatformUserAvatar';
 import { useTranslation } from '../../i18n';
 import {
@@ -663,7 +664,7 @@ export const ModrinthAdminPage: React.FC = () => {
                         <td>
                           <code>{entry.action}</code>
                         </td>
-                        <td>{entry.targetName || entry.targetId}</td>
+                        <td><RichGameName text={entry.targetName || entry.targetId} fallback={entry.targetId} /></td>
                         <td>{entry.detail || '—'}</td>
                       </tr>
                     ))}
@@ -937,7 +938,11 @@ export const ModrinthAdminPage: React.FC = () => {
               <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   <strong style={{ fontSize: 15 }}>
-                    {creditPlayerDetail.profile.nick || creditPlayerDetail.profile.uid} (UID {creditPlayerDetail.profile.uid})
+                    <RichGameName
+                      text={creditPlayerDetail.profile.nick}
+                      fallback={creditPlayerDetail.profile.uid}
+                    />{' '}
+                    (UID {creditPlayerDetail.profile.uid})
                   </strong>
                   <span className={`mr-pill mr-tabular ${creditTierPillClass(creditPlayerDetail.profile.tier)}`}>
                     信誉 {creditPlayerDetail.profile.score} · {creditPlayerDetail.profile.tierLabel}
@@ -1108,7 +1113,7 @@ export const ModrinthAdminPage: React.FC = () => {
                       <div>
                         <div className="mr-admin-queue-title">
                           <span style={{ fontWeight: 700, fontSize: 15.5 }}>
-                            {rep.targetNick || rep.targetUid} (UID {rep.targetUid})
+                            <RichGameName text={rep.targetNick} fallback={rep.targetUid} /> (UID {rep.targetUid})
                           </span>
                           <span className={`mr-pill ${stPill.cls}`}>{stPill.label}</span>
                           <span className="mr-pill is-versions">{rep.reasonLabel}</span>
@@ -1120,7 +1125,9 @@ export const ModrinthAdminPage: React.FC = () => {
                         </div>
                         <div className="mr-admin-queue-meta mr-tabular">
                           <span>工单号: {rep.id}</span>
-                          <span>反馈人: {rep.reporterNick || rep.reporterUid} (UID {rep.reporterUid})</span>
+                          <span>
+                            反馈人: <RichGameName text={rep.reporterNick} fallback={rep.reporterUid} /> (UID {rep.reporterUid})
+                          </span>
                           {rep.roomId && <span>房间号: {rep.roomId}</span>}
                           <span>提交时间: {formatEpochOrIso(rep.created, zh)}</span>
                         </div>

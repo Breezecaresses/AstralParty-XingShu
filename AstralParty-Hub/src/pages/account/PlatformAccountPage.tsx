@@ -21,6 +21,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { RichGameName } from '../../components/common/RichGameName';
 import { PlatformUserAvatar } from '../../components/platform/PlatformUserAvatar';
 import { useTranslation } from '../../i18n';
 import { isTauriRuntime } from '../../shared/runtime';
@@ -524,7 +525,7 @@ export const PlatformAccountPage: React.FC = () => {
                     <div key={b.id} className="xp-binding-row">
                       <div className="xp-binding-main">
                         <strong>
-                          <span>{b.gameNick || `UID ${b.gameUid}`}</span>
+                          <RichGameName text={b.gameNick} fallback={`UID ${b.gameUid}`} />
                           <span className="xp-pill">{b.platformLabel}</span>
                           {b.isPrimary && (
                             <span className="xp-pill is-accent">

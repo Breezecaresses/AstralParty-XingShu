@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { ExternalLink, LogOut, QrCode, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { RichGameName } from './common/RichGameName';
 import { deriveQqAuthorizedBanner } from '../pages/account/cloudLoginStatus';
 import {
   getWebCloudSnapshot,
@@ -118,8 +119,8 @@ export const WebCloudLoginCard: React.FC<{ isZh: boolean }> = ({ isZh }) => {
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.7 }}>
               {cloud.account
                 ? isZh
-                  ? `当前登录：${cloud.account.nick || cloud.account.uid}（UID ${cloud.account.uid}）。`
-                  : `Signed in as ${cloud.account.nick || cloud.account.uid} (UID ${cloud.account.uid}).`
+                  ? <>当前登录：<RichGameName text={cloud.account.nick} fallback={cloud.account.uid} />（UID {cloud.account.uid}）。</>
+                  : <>Signed in as <RichGameName text={cloud.account.nick} fallback={cloud.account.uid} /> (UID {cloud.account.uid}).</>
                 : isZh
                 ? '公开 UID 资料、历史战绩与回放深度解析已对网页版直接开放；仅角色持有、背包道具与主动刷新等私密数据需要扫码登录。'
                 : 'Public UID lookup, match history, and replay analysis work without signing in. Sign in only for private inventory and cloud sync.'}

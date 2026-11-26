@@ -4,6 +4,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {LogIn, LogOut, RefreshCw, X, ShieldCheck, Link2, Sparkles} from 'lucide-react';
 import {Link, useSearchParams} from 'react-router-dom';
+import {RichGameName} from '../../components/common/RichGameName';
 import {deriveQqAuthorizedBanner, type CloudAccount} from './cloudLoginStatus';
 
 type Account = CloudAccount;
@@ -176,7 +177,7 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
         <div style={{flex: 1, minWidth: 220}}>
           <h3 style={{margin: '0 0 7px'}}>{isZh ? '星枢账号登录' : 'XingShu sign in'}</h3>
           <div style={{fontSize: 14, color: 'var(--text-secondary)'}}>
-            {account ? <><strong style={{color: 'var(--text-primary)'}}>{account.nick}</strong> · UID {account.uid}</> :
+            {account ? <><strong style={{color: 'var(--text-primary)'}}><RichGameName text={account.nick} fallback={account.uid} /></strong> · UID {account.uid}</> :
               isZh ? '支持手机号、Steam、B 站、TapTap、WeGame 及手机渠道（小米 / 4399）登录；登录后自动同步合作对局云端手牌，QQ Bot 与 Hub 通用。' : 'Sign in with Phone, Steam, Bilibili, TapTap, WeGame, or mobile channels; auto-pushes co-op cloud hands.'}
           </div>
         </div>

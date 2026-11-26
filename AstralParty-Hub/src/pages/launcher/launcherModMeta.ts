@@ -95,6 +95,7 @@ const MODULE_SPECS: Record<string, { group: ModSubGroup; Icon: LucideIcon }> = {
   'megath-damage': { group: 'combat', Icon: Zap },
   'player-combat-hud': { group: 'info', Icon: Shield },
   'player-star-buffs': { group: 'info', Icon: Sparkles },
+  'credit-guard': { group: 'utility', Icon: ShieldCheck },
 };
 
 export const OFFICIAL_SUB_GROUPS: Array<{ id: ModSubGroup; labelZh: string; labelEn: string }> = [

@@ -72,6 +72,8 @@ namespace XingShu.Runtime
         private static string _lastUploadedReport;
         private static float _reportRetryAt;
 
+        internal static string ActiveSessionToken => _session;
+        internal static long AuthorizedUid => _authorizedUid;
         internal static CloudHandDiagnosticState CurrentHandDiagnostic =>
             _session == null ? CloudHandDiagnosticState.Unbound : _handDiagnostic;
         internal static string Status { get; private set; } = "一键同步「星枢手机助手」账号，进合作局自动推送队友手牌";
