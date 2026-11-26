@@ -876,6 +876,18 @@ export interface AdminOverviewResponse {
     publicPlayers: number;
     archivedMatches: number;
   };
+  credit?: {
+    pendingReports: number;
+    totalReports: number;
+    approvedReports: number;
+    rejectedReports: number;
+    activeSanctions: number;
+    fleetBannedCount: number;
+    totalLikes: number;
+    totalBlacklists: number;
+    activeFleetRooms: number;
+    activeSquads: number;
+  };
   auditLog: AdminAuditEntry[];
 }
 
@@ -952,6 +964,134 @@ export async function fetchAdminMods(query = ''): Promise<{ items: WorkshopModIt
 
 export async function fetchAdminAuditLog(limit = 80): Promise<{ items: AdminAuditEntry[] }> {
   return await apiJson<{ items: AdminAuditEntry[] }>(`/api/admin/audit-log?limit=${limit}`);
+}
+
+export interface CreditProfileSummary {
+  uid: string;
+  nick: string;
+  score: number;
+  tier: 'excellent' | 'good' | 'fair' | 'warning' | 'danger' | string;
+  tierLabel: string;
+  observing: boolean;
+  recordedMatches: number;
+  giveUpCount: number;
+  giveUpRate: number;
+  recent10Matches: number;
+  recent10GiveUps: number;
+  likesCount: number;
+  blacklistCount: number;
+  fleetBanned: boolean;
+  tags: string[];
+  breakdown?: {
+    base: number;
+    disconnectPenalty: number;
+    completionBonus: number;
+    likesBonus: number;
+    communityRiskPenalty: number;
+    adminDelta: number;
+  };
+}
+
+export interface AdminCreditReportItem {
+  id: string;
+  reporterUid: string;
+  reporterNick: string;
+  targetUid: string;
+  targetNick: string;
+  reason: string;
+  reasonLabel: string;
+  detail: string;
+  replayId: string;
+  roomId: string;
+  matchTime: number;
+  status: 'pending' | 'approved' | 'rejected' | string;
+  reviewNote: string;
+  reviewer: string;
+  scoreDelta: number;
+  badge: string;
+  fleetBan: boolean;
+  adjustmentId: string;
+  created: number;
+  reviewedAt: number;
+  targetProfile?: CreditProfileSummary;
+}
+
+export interface AdminCreditAdjustment {
+  id: string;
+  targetUid: string;
+  scoreDelta: number;
+  badge: string;
+  fleetBan: boolean;
+  reason: string;
+  actor: string;
+  reportId: string;
+  active: boolean;
+  created: number;
+  revokedAt: number;
+  revokedBy: string;
+}
+
+export interface AdminCreditPlayerDetail {
+  profile: CreditProfileSummary;
+  adjustments: AdminCreditAdjustment[];
+  recentReports: AdminCreditReportItem[];
+}
+
+export async function fetchAdminCreditReports(
+  status = 'pending',
+  query = '',
+): Promise<{ items: AdminCreditReportItem[]; total: number; stats?: AdminOverviewResponse['credit'] }> {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (query.trim()) params.set('q', query.trim());
+  const qs = params.toString();
+  return await apiJson<{ items: AdminCreditReportItem[]; total: number; stats?: AdminOverviewResponse['credit'] }>(
+    `/api/admin/credit/reports${qs ? `?${qs}` : ''}`,
+  );
+}
+
+export async function reviewAdminCreditReport(
+  reportId: string,
+  payload: {
+    action: 'approve' | 'reject';
+    reviewNote?: string;
+    scoreDelta?: number;
+    badge?: string;
+    fleetBan?: boolean;
+  },
+): Promise<{ ok: boolean; report: AdminCreditReportItem }> {
+  return await apiJson<{ ok: boolean; report: AdminCreditReportItem }>(
+    `/api/admin/credit/reports/${encodeURIComponent(reportId)}/review`,
+    { method: 'POST', body: payload },
+  );
+}
+
+export async function fetchAdminCreditPlayer(uid: string): Promise<AdminCreditPlayerDetail> {
+  return await apiJson<AdminCreditPlayerDetail>(
+    `/api/admin/credit/player/${encodeURIComponent(uid.trim())}`,
+  );
+}
+
+export async function createAdminCreditAdjustment(payload: {
+  targetUid: string;
+  scoreDelta?: number;
+  badge?: string;
+  fleetBan?: boolean;
+  reason?: string;
+}): Promise<{ ok: boolean } & AdminCreditPlayerDetail> {
+  return await apiJson<{ ok: boolean } & AdminCreditPlayerDetail>(
+    '/api/admin/credit/adjust',
+    { method: 'POST', body: payload },
+  );
+}
+
+export async function revokeAdminCreditAdjustment(
+  adjId: string,
+): Promise<{ ok: boolean } & AdminCreditPlayerDetail> {
+  return await apiJson<{ ok: boolean } & AdminCreditPlayerDetail>(
+    `/api/admin/credit/adjust/${encodeURIComponent(adjId)}/revoke`,
+    { method: 'POST', body: {} },
+  );
 }
 
 export async function downloadWorkshopArchiveAuthenticated(

@@ -5,8 +5,10 @@ import {
   Clock,
   Download,
   ExternalLink,
+  Flag,
   Package,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -18,16 +20,23 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { PlatformUserAvatar } from '../../components/platform/PlatformUserAvatar';
 import { useTranslation } from '../../i18n';
 import {
+  createAdminCreditAdjustment,
   downloadWorkshopArchiveAuthenticated,
+  fetchAdminCreditPlayer,
+  fetchAdminCreditReports,
   fetchAdminMods,
   fetchAdminOverview,
   fetchAdminSubmissions,
   fetchAdminUsers,
   isPlatformAdmin,
   openPlatformAuthModal,
+  reviewAdminCreditReport,
+  revokeAdminCreditAdjustment,
   submitAdminReview,
   updateAdminUserRole,
   usePlatformAccount,
+  type AdminCreditPlayerDetail,
+  type AdminCreditReportItem,
   type AdminOverviewResponse,
   type AdminUserEntry,
 } from '../../shared/platformAccountClient';
@@ -40,10 +49,26 @@ import {
 } from '../../shared/workshopClient';
 import './modrinth.css';
 
-type AdminTab = 'overview' | 'queue' | 'users' | 'mods';
+type AdminTab = 'overview' | 'queue' | 'credit' | 'users' | 'mods';
 type RoleChoice = 'member' | 'creator' | 'official' | 'admin' | 'banned';
 
-const VALID_ADMIN_TABS: readonly AdminTab[] = ['overview', 'queue', 'users', 'mods'];
+const VALID_ADMIN_TABS: readonly AdminTab[] = ['overview', 'queue', 'credit', 'users', 'mods'];
+
+function creditTierPillClass(tier?: string): string {
+  switch ((tier || '').toLowerCase()) {
+    case 'excellent':
+    case 'good':
+      return 'is-ok';
+    case 'fair':
+      return 'is-versions';
+    case 'warning':
+      return 'is-warn';
+    case 'danger':
+      return 'is-danger';
+    default:
+      return 'is-muted';
+  }
+}
 
 function formatEpochOrIso(val?: string | number | null, zh = true): string {
   if (val === null || val === undefined || val === '') return '—';
@@ -130,6 +155,20 @@ export const ModrinthAdminPage: React.FC = () => {
   const [roleDrafts, setRoleDrafts] = useState<Record<string, RoleChoice>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  const [creditReports, setCreditReports] = useState<AdminCreditReportItem[]>([]);
+  const [creditStatus, setCreditStatus] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [creditQuery, setCreditQuery] = useState('');
+  const [creditNoteDrafts, setCreditNoteDrafts] = useState<Record<string, string>>({});
+  const [creditDeltaDrafts, setCreditDeltaDrafts] = useState<Record<string, number>>({});
+  const [creditBadgeDrafts, setCreditBadgeDrafts] = useState<Record<string, string>>({});
+  const [creditBanDrafts, setCreditBanDrafts] = useState<Record<string, boolean>>({});
+  const [creditLookupUid, setCreditLookupUid] = useState('');
+  const [creditPlayerDetail, setCreditPlayerDetail] = useState<AdminCreditPlayerDetail | null>(null);
+  const [manualDelta, setManualDelta] = useState<number>(-10);
+  const [manualBadge, setManualBadge] = useState('');
+  const [manualFleetBan, setManualFleetBan] = useState(false);
+  const [manualReason, setManualReason] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [actionBusyKey, setActionBusyKey] = useState('');
   const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
@@ -183,6 +222,15 @@ export const ModrinthAdminPage: React.FC = () => {
     setAllMods(res.items || []);
   }, [isAdmin, modsQuery]);
 
+  const loadCreditReports = useCallback(async () => {
+    if (!isAdmin) return;
+    const res = await fetchAdminCreditReports(creditStatus, creditQuery);
+    setCreditReports(res.items || []);
+    if (res.stats) {
+      setOverview((prev) => (prev ? { ...prev, credit: { ...prev.credit, ...res.stats! } } : prev));
+    }
+  }, [creditQuery, creditStatus, isAdmin]);
+
   const refreshActiveTab = useCallback(async () => {
     if (!isAdmin) return;
     setLoading(true);
@@ -190,6 +238,7 @@ export const ModrinthAdminPage: React.FC = () => {
     try {
       await loadOverview();
       if (tab === 'queue') await loadQueue();
+      else if (tab === 'credit') await loadCreditReports();
       else if (tab === 'users') await loadUsers();
       else if (tab === 'mods') await loadAllMods();
     } catch (err) {
@@ -197,7 +246,7 @@ export const ModrinthAdminPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, loadAllMods, loadOverview, loadQueue, loadUsers, tab]);
+  }, [isAdmin, loadAllMods, loadCreditReports, loadOverview, loadQueue, loadUsers, tab]);
 
   useEffect(() => {
     if (isAdmin) {
@@ -268,6 +317,103 @@ export const ModrinthAdminPage: React.FC = () => {
     }
   };
 
+  const handleCreditLookup = async (uidOverride?: string) => {
+    const uid = (uidOverride ?? creditLookupUid).trim();
+    if (!/^\d{1,20}$/.test(uid)) {
+      setNotice({ kind: 'err', text: zh ? '请输入纯数字游戏 UID' : 'Enter numeric game UID' });
+      return;
+    }
+    setActionBusyKey(`credit:lookup:${uid}`);
+    setNotice(null);
+    try {
+      setCreditLookupUid(uid);
+      const detail = await fetchAdminCreditPlayer(uid);
+      setCreditPlayerDetail(detail);
+    } catch (err) {
+      setNotice({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setActionBusyKey('');
+    }
+  };
+
+  const handleCreditReportReview = async (rep: AdminCreditReportItem, action: 'approve' | 'reject') => {
+    setActionBusyKey(`credit:${rep.id}:${action}`);
+    setNotice(null);
+    try {
+      const res = await reviewAdminCreditReport(rep.id, {
+        action,
+        reviewNote: (creditNoteDrafts[rep.id] || '').trim(),
+        scoreDelta: action === 'approve' ? (creditDeltaDrafts[rep.id] ?? -10) : 0,
+        badge: action === 'approve' ? (creditBadgeDrafts[rep.id] || '').trim() : '',
+        fleetBan: action === 'approve' ? Boolean(creditBanDrafts[rep.id]) : false,
+      });
+      setNotice({
+        kind: 'ok',
+        text: zh
+          ? `已${action === 'approve' ? '采纳' : '驳回'}针对 UID ${res.report.targetUid} 的星枢反馈工单。`
+          : `Report ${action}d.`,
+      });
+      await Promise.all([loadOverview(), loadCreditReports()]);
+      if (creditPlayerDetail?.profile.uid === rep.targetUid) {
+        const refreshed = await fetchAdminCreditPlayer(rep.targetUid);
+        setCreditPlayerDetail(refreshed);
+      }
+    } catch (err) {
+      setNotice({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setActionBusyKey('');
+    }
+  };
+
+  const handleManualCreditAdjust = async () => {
+    const uid = (creditPlayerDetail?.profile.uid || creditLookupUid).trim();
+    if (!/^\d{1,20}$/.test(uid)) {
+      setNotice({ kind: 'err', text: zh ? '请先查询或输入目标玩家数字 UID' : 'Target UID required' });
+      return;
+    }
+    setActionBusyKey(`credit:adjust:${uid}`);
+    setNotice(null);
+    try {
+      const detail = await createAdminCreditAdjustment({
+        targetUid: uid,
+        scoreDelta: manualDelta,
+        badge: manualBadge.trim(),
+        fleetBan: manualFleetBan,
+        reason: manualReason.trim(),
+      });
+      setCreditPlayerDetail(detail);
+      setManualReason('');
+      setManualBadge('');
+      setNotice({
+        kind: 'ok',
+        text: zh ? `已写入对 UID ${uid} 的星枢信誉裁定。` : `Adjustment saved for ${uid}.`,
+      });
+      await loadOverview();
+    } catch (err) {
+      setNotice({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setActionBusyKey('');
+    }
+  };
+
+  const handleRevokeAdjustment = async (adjId: string) => {
+    setActionBusyKey(`credit:revoke:${adjId}`);
+    setNotice(null);
+    try {
+      const detail = await revokeAdminCreditAdjustment(adjId);
+      setCreditPlayerDetail(detail);
+      setNotice({
+        kind: 'ok',
+        text: zh ? `已撤销信誉裁定记录 ${adjId}。` : `Revoked adjustment ${adjId}.`,
+      });
+      await Promise.all([loadOverview(), loadCreditReports()]);
+    } catch (err) {
+      setNotice({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setActionBusyKey('');
+    }
+  };
+
   if (!platform.user) {
     return (
       <div className="mr-container mr-admin-page">
@@ -303,6 +449,7 @@ export const ModrinthAdminPage: React.FC = () => {
   }
 
   const pendingBadgeCount = overview?.workshop.pendingQueueTotal ?? 0;
+  const creditPendingCount = overview?.credit?.pendingReports ?? 0;
 
   return (
     <div className="mr-container mr-admin-page">
@@ -357,6 +504,19 @@ export const ModrinthAdminPage: React.FC = () => {
           <span>{zh ? '审核渠道' : 'Review Queue'}</span>
           {pendingBadgeCount > 0 && (
             <span className="mr-tab-badge mr-tabular">{pendingBadgeCount}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'credit'}
+          className={`mr-detail-tab ${tab === 'credit' ? 'is-active' : ''}`}
+          onClick={() => setTab('credit')}
+        >
+          <Flag size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+          <span>{zh ? '信誉审核' : 'Credit Review'}</span>
+          {creditPendingCount > 0 && (
+            <span className="mr-tab-badge mr-tabular">{creditPendingCount}</span>
           )}
         </button>
         <button
@@ -434,6 +594,18 @@ export const ModrinthAdminPage: React.FC = () => {
                   : `Official ${overview.workshop.totalSeed} · Downloads ${overview.workshop.totalDownloads}`}
               </span>
             </article>
+
+            {overview.credit && (
+              <article className={`mr-admin-kpi-card ${overview.credit.pendingReports > 0 ? 'is-highlight' : ''}`}>
+                <span className="mr-admin-kpi-label">{zh ? '星枢信誉与车队' : 'Credit & Fleets'}</span>
+                <strong className="mr-admin-kpi-value mr-tabular">{overview.credit.pendingReports}</strong>
+                <span className="mr-admin-kpi-sub mr-tabular">
+                  {zh
+                    ? `待审反馈 · 生效裁定 ${overview.credit.activeSanctions} · 在线车队 ${overview.credit.activeFleetRooms}`
+                    : `Pending · Sanctions ${overview.credit.activeSanctions} · Fleets ${overview.credit.activeFleetRooms}`}
+                </span>
+              </article>
+            )}
           </div>
 
           <section className="mr-admin-card">
@@ -721,6 +893,346 @@ export const ModrinthAdminPage: React.FC = () => {
                         </button>
                       </div>
                     </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'credit' && (
+        <div className="mr-admin-stack">
+          <section className="mr-admin-card">
+            <div className="mr-admin-card-head">
+              <div>
+                <h2>{zh ? '玩家信誉档案查询与手动裁定 / 申诉撤销' : 'UID Credit Lookup & Sanctions'}</h2>
+                <p>{zh ? '输入任意游戏 UID 核查实时信誉分、拔线统计，或执行星枢社区扣分 / 加分 / 限制高信誉车队与撤销。' : 'Inspect UID credit and apply or revoke adjustments.'}</p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="mr-admin-search-wrap">
+                  <Search size={14} />
+                  <input
+                    type="search"
+                    value={creditLookupUid}
+                    onChange={(e) => setCreditLookupUid(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleCreditLookup();
+                    }}
+                    placeholder={zh ? '输入游戏数字 UID…' : 'Game UID…'}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="mr-btn-emerald"
+                  disabled={Boolean(actionBusyKey)}
+                  onClick={() => void handleCreditLookup()}
+                >
+                  {zh ? '查询信誉档案' : 'Lookup UID'}
+                </button>
+              </div>
+            </div>
+
+            {creditPlayerDetail && (
+              <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                  <strong style={{ fontSize: 15 }}>
+                    {creditPlayerDetail.profile.nick || creditPlayerDetail.profile.uid} (UID {creditPlayerDetail.profile.uid})
+                  </strong>
+                  <span className={`mr-pill mr-tabular ${creditTierPillClass(creditPlayerDetail.profile.tier)}`}>
+                    信誉 {creditPlayerDetail.profile.score} · {creditPlayerDetail.profile.tierLabel}
+                  </span>
+                  <span className="mr-pill mr-tabular">
+                    已录 {creditPlayerDetail.profile.recordedMatches} 局 · 拔线 {creditPlayerDetail.profile.giveUpCount} ({creditPlayerDetail.profile.giveUpRate}%)
+                  </span>
+                  <span className="mr-pill mr-tabular">
+                    点赞 {creditPlayerDetail.profile.likesCount} · 社区避雷 {creditPlayerDetail.profile.blacklistCount}
+                  </span>
+                  {creditPlayerDetail.profile.tags.map((tag) => (
+                    <span key={tag} className="mr-pill is-versions">{tag}</span>
+                  ))}
+                </div>
+
+                <div className="mr-admin-review-bar">
+                  <select
+                    className="mr-inline-input"
+                    style={{ flex: '0 0 auto', minWidth: 140 }}
+                    value={manualDelta}
+                    onChange={(e) => setManualDelta(Number(e.target.value))}
+                  >
+                    <option value={-20}>分值 -20（严重违规）</option>
+                    <option value={-10}>分值 -10（中等违规）</option>
+                    <option value={-5}>分值 -5（轻度警示）</option>
+                    <option value={0}>分值 0（仅打标/限车）</option>
+                    <option value={5}>分值 +5（申诉补偿）</option>
+                    <option value={10}>分值 +10（表现嘉奖）</option>
+                  </select>
+                  <input
+                    type="text"
+                    className="mr-inline-input"
+                    style={{ maxWidth: 180 }}
+                    value={manualBadge}
+                    onChange={(e) => setManualBadge(e.target.value)}
+                    placeholder={zh ? '标签（如：恶意挂机）' : 'Optional badge'}
+                  />
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={manualFleetBan}
+                      onChange={(e) => setManualFleetBan(e.target.checked)}
+                    />
+                    <span>{zh ? '限制高信誉车队' : 'Fleet Ban'}</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="mr-inline-input"
+                    value={manualReason}
+                    onChange={(e) => setManualReason(e.target.value)}
+                    placeholder={zh ? '裁定原因 / 备注说明…' : 'Adjustment reason…'}
+                  />
+                  <button
+                    type="button"
+                    className="mr-btn-emerald"
+                    disabled={Boolean(actionBusyKey)}
+                    onClick={() => void handleManualCreditAdjust()}
+                  >
+                    {zh ? '写入裁定' : 'Apply'}
+                  </button>
+                </div>
+
+                {creditPlayerDetail.adjustments.length > 0 && (
+                  <div className="mr-admin-table-wrap">
+                    <table className="mr-admin-table">
+                      <thead>
+                        <tr>
+                          <th>{zh ? '时间' : 'Time'}</th>
+                          <th>{zh ? '分值' : 'Delta'}</th>
+                          <th>{zh ? '标签 / 限车' : 'Badge / Ban'}</th>
+                          <th>{zh ? '原因' : 'Reason'}</th>
+                          <th>{zh ? '操作员' : 'Actor'}</th>
+                          <th>{zh ? '状态 / 操作' : 'Status'}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {creditPlayerDetail.adjustments.map((adj) => (
+                          <tr key={adj.id}>
+                            <td className="mr-tabular">{formatEpochOrIso(adj.created, zh)}</td>
+                            <td className="mr-tabular">{adj.scoreDelta >= 0 ? `+${adj.scoreDelta}` : adj.scoreDelta}</td>
+                            <td>
+                              {adj.badge ? <span className="mr-pill is-warn">{adj.badge}</span> : '—'}
+                              {adj.fleetBan && <span className="mr-pill is-danger" style={{ marginLeft: 4 }}>限制车队</span>}
+                            </td>
+                            <td>{adj.reason || '—'}</td>
+                            <td>{adj.actor}</td>
+                            <td>
+                              {adj.active ? (
+                                <button
+                                  type="button"
+                                  className="mr-btn-outline"
+                                  style={{ padding: '4px 10px', fontSize: 12 }}
+                                  disabled={Boolean(actionBusyKey)}
+                                  onClick={() => void handleRevokeAdjustment(adj.id)}
+                                >
+                                  <RotateCcw size={12} />
+                                  <span>{zh ? '撤销裁定' : 'Revoke'}</span>
+                                </button>
+                              ) : (
+                                <span className="mr-pill is-muted">{zh ? '已撤销' : 'Revoked'}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          <div className="mr-admin-toolbar">
+            <div className="mr-admin-filter-pills">
+              {(
+                [
+                  { id: 'pending', label: zh ? '待审核工单' : 'Pending' },
+                  { id: 'approved', label: zh ? '已采纳' : 'Approved' },
+                  { id: 'rejected', label: zh ? '已驳回' : 'Rejected' },
+                  { id: 'all', label: zh ? '全部反馈' : 'All Reports' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className={`mr-facet-btn ${creditStatus === opt.id ? 'is-active' : ''}`}
+                  onClick={() => setCreditStatus(opt.id)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mr-admin-search-wrap">
+              <Search size={14} />
+              <input
+                type="search"
+                value={creditQuery}
+                onChange={(e) => setCreditQuery(e.target.value)}
+                placeholder={zh ? '搜索 UID / 昵称 / 录像编号 / 描述…' : 'Search reports…'}
+              />
+            </div>
+          </div>
+
+          {creditReports.length === 0 ? (
+            <div className="mr-empty">
+              <CheckCircle2 size={28} />
+              <h3>{zh ? '当前筛选下暂无星枢反馈工单' : 'No matching credit reports'}</h3>
+              <p>{zh ? '玩家从星枢 Mod 提交的局内/结算反馈工单会集中显示在此处，由管理员审核是否扣分或限制进高信誉车队。' : 'All reports cleared.'}</p>
+            </div>
+          ) : (
+            <div className="mr-admin-queue-list">
+              {creditReports.map((rep) => {
+                const tp = rep.targetProfile;
+                const penaltyVal = creditDeltaDrafts[rep.id] ?? -10;
+                const badgeVal = creditBadgeDrafts[rep.id] ?? '';
+                const banVal = Boolean(creditBanDrafts[rep.id]);
+                const stPill =
+                  rep.status === 'approved'
+                    ? { cls: 'is-ok', label: zh ? '已采纳' : 'Approved' }
+                    : rep.status === 'rejected'
+                      ? { cls: 'is-danger', label: zh ? '已驳回' : 'Rejected' }
+                      : { cls: 'is-warn', label: zh ? '待审核' : 'Pending' };
+
+                return (
+                  <article key={rep.id} className="mr-admin-card mr-admin-queue-card">
+                    <div className="mr-admin-queue-top">
+                      <div>
+                        <div className="mr-admin-queue-title">
+                          <span style={{ fontWeight: 700, fontSize: 15.5 }}>
+                            {rep.targetNick || rep.targetUid} (UID {rep.targetUid})
+                          </span>
+                          <span className={`mr-pill ${stPill.cls}`}>{stPill.label}</span>
+                          <span className="mr-pill is-versions">{rep.reasonLabel}</span>
+                          {tp && (
+                            <span className={`mr-pill mr-tabular ${creditTierPillClass(tp.tier)}`}>
+                              当前信誉 {tp.score} · 拔线率 {tp.giveUpRate}% ({tp.recordedMatches}局)
+                            </span>
+                          )}
+                        </div>
+                        <div className="mr-admin-queue-meta mr-tabular">
+                          <span>工单号: {rep.id}</span>
+                          <span>反馈人: {rep.reporterNick || rep.reporterUid} (UID {rep.reporterUid})</span>
+                          {rep.roomId && <span>房间号: {rep.roomId}</span>}
+                          <span>提交时间: {formatEpochOrIso(rep.created, zh)}</span>
+                        </div>
+                      </div>
+
+                      <div className="mr-admin-queue-links">
+                        <button
+                          type="button"
+                          className="mr-btn-outline"
+                          onClick={() => void handleCreditLookup(rep.targetUid)}
+                        >
+                          <Search size={13} />
+                          <span>{zh ? '查此 UID 档案' : 'Inspect UID'}</span>
+                        </button>
+                        {rep.replayId && (
+                          <Link to={`/replay?id=${encodeURIComponent(rep.replayId)}`} className="mr-btn-outline">
+                            <ExternalLink size={13} />
+                            <span>{zh ? `核验录像 ${rep.replayId}` : `Replay ${rep.replayId}`}</span>
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+
+                    <p className="mr-admin-queue-desc">{rep.detail || (zh ? '（未填写额外文字描述）' : '(No description)')}</p>
+
+                    {rep.status === 'pending' ? (
+                      <div className="mr-admin-review-bar">
+                        <select
+                          className="mr-inline-input"
+                          style={{ flex: '0 0 auto', minWidth: 130 }}
+                          value={penaltyVal}
+                          onChange={(e) =>
+                            setCreditDeltaDrafts((prev) => ({ ...prev, [rep.id]: Number(e.target.value) }))
+                          }
+                        >
+                          <option value={0}>仅记录 (0 分)</option>
+                          <option value={-5}>轻度警示 (-5 分)</option>
+                          <option value={-10}>核实违规 (-10 分)</option>
+                          <option value={-20}>严重违规 (-20 分)</option>
+                          <option value={-30}>恶意破坏 (-30 分)</option>
+                        </select>
+                        <input
+                          type="text"
+                          className="mr-inline-input"
+                          style={{ maxWidth: 150 }}
+                          value={badgeVal}
+                          onChange={(e) =>
+                            setCreditBadgeDrafts((prev) => ({ ...prev, [rep.id]: e.target.value }))
+                          }
+                          placeholder={zh ? '标签（可选）' : 'Badge'}
+                        />
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                          <input
+                            type="checkbox"
+                            checked={banVal}
+                            onChange={(e) =>
+                              setCreditBanDrafts((prev) => ({ ...prev, [rep.id]: e.target.checked }))
+                            }
+                          />
+                          <span>{zh ? '限制高信誉车队' : 'Fleet Ban'}</span>
+                        </label>
+                        <input
+                          type="text"
+                          className="mr-inline-input"
+                          value={creditNoteDrafts[rep.id] ?? ''}
+                          onChange={(e) =>
+                            setCreditNoteDrafts((prev) => ({ ...prev, [rep.id]: e.target.value }))
+                          }
+                          placeholder={zh ? '审核说明 / 核实结论…' : 'Review note…'}
+                        />
+                        <div className="mr-admin-review-btns">
+                          <button
+                            type="button"
+                            className="mr-btn-emerald"
+                            disabled={Boolean(actionBusyKey)}
+                            onClick={() => void handleCreditReportReview(rep, 'approve')}
+                          >
+                            <CheckCircle2 size={14} />
+                            <span>{zh ? '采纳并处理' : 'Approve'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="mr-btn-danger-sm"
+                            disabled={Boolean(actionBusyKey)}
+                            onClick={() => void handleCreditReportReview(rep, 'reject')}
+                          >
+                            <XCircle size={14} />
+                            <span>{zh ? '驳回' : 'Reject'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mr-admin-queue-target">
+                        {zh ? '审核结果：' : 'Outcome: '}
+                        <strong>{rep.reviewer}</strong> · 分值 {rep.scoreDelta >= 0 ? `+${rep.scoreDelta}` : rep.scoreDelta}
+                        {rep.badge ? ` · 标签「${rep.badge}」` : ''}
+                        {rep.fleetBan ? ' · 限制车队' : ''}
+                        {rep.reviewNote ? ` · 说明：${rep.reviewNote}` : ''}
+                        {rep.adjustmentId && (
+                          <button
+                            type="button"
+                            className="mr-btn-outline"
+                            style={{ marginLeft: 10, padding: '2px 8px', fontSize: 12 }}
+                            disabled={Boolean(actionBusyKey)}
+                            onClick={() => void handleRevokeAdjustment(rep.adjustmentId)}
+                          >
+                            <RotateCcw size={11} />
+                            <span>{zh ? '撤销处罚' : 'Revoke'}</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </article>
                 );
               })}
