@@ -15,8 +15,13 @@ namespace XingShuRuntime.Utilities
 
         private static bool _nativeClockUnavailable;
 #endif
+        private const float MinScale = 1f;
+        private const float MaxScale = 20f;
+        internal static Func<float> DefaultScaleProvider;
+
         private readonly Func<double> _now;
-        private readonly float _from, _to;
+        private readonly Func<float> _scaleProvider;
+        private readonly float _from, _to, _createdScale;
         private readonly Action _complete, _cancelled;
         private readonly Action<float> _update;
         private Action _stop;
@@ -27,14 +32,28 @@ namespace XingShuRuntime.Utilities
         public readonly Action<float> Tick;
 
         public ThinkingClock(float from, float to, Action complete, Action cancelled, Action<float> update)
-            : this(from, to, complete, cancelled, update, RealSeconds) { }
+            : this(from, to, complete, cancelled, update, RealSeconds, DefaultScaleProvider) { }
 
         internal ThinkingClock(float from, float to, Action complete, Action cancelled,
             Action<float> update, Func<double> now)
+            : this(from, to, complete, cancelled, update, now, null) { }
+
+        internal ThinkingClock(float from, float to, Action complete, Action cancelled,
+            Action<float> update, Func<double> now, Func<float> scaleProvider)
         {
             _from = from; _to = to; _complete = complete; _cancelled = cancelled;
-            _update = update; _now = now; _last = now();
+            _update = update; _now = now; _scaleProvider = scaleProvider;
+            _createdScale = scaleProvider != null ? ClampScale(scaleProvider()) : 1f;
+            _last = now();
             Cancelled = Cancel; Tick = Advance;
+        }
+
+        private static float ClampScale(float s)
+        {
+            if (float.IsNaN(s) || float.IsInfinity(s)) return 1f;
+            if (s < MinScale) return MinScale;
+            if (s > MaxScale) return MaxScale;
+            return s;
         }
 
         public void AttachStop(Action stop) { _stop = stop; }
@@ -68,8 +87,12 @@ namespace XingShuRuntime.Utilities
         {
             if (_finished) return;
             double now = _now();
-            // Keep elapsed time monotonic if the fallback wall clock is adjusted.
-            _elapsed += Math.Max(0, now - _last); _last = Math.Max(_last, now);
+            // Keep elapsed time monotonic if the fallback wall clock is adjusted,
+            // and dynamically scale advance rate when ThinkingTime.ScaleMultiplier changes mid-turn.
+            double dtReal = Math.Max(0, now - _last);
+            _last = Math.Max(_last, now);
+            float currentScale = _scaleProvider != null ? ClampScale(_scaleProvider()) : _createdScale;
+            _elapsed += dtReal * (_createdScale / currentScale);
             float value = (float)Math.Min(_to, _from + _elapsed);
             _update?.Invoke(value);
             if (_finished || value < _to) return;

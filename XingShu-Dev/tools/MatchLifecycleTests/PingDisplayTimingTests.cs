@@ -64,6 +64,40 @@ internal static class PingDisplayTimingTests
         state.Tick(200.0f);
         Check(cancels == 1 && completes == 0 && stops == 0, "Cancelled ping never completes later");
 
+        // 5. Magnifying-glass map tile step numbers: real-clock hold & extension
+        bool distTracking = false;
+        double distDeadline = 0d;
+        float lastApplied = 0f;
+        float nextHideAt;
+
+        // 5a. Accelerated: unscaledTime jumps 10x (from 500 to 535 in 3.5 real seconds), hold stays alive past 8s
+        bool updated = MapDistanceTimingState.ComputeHold(true, 503f, lastApplied, 500f, 1000.0, 3f, true, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && distTracking && nextHideAt > 550f, "First tick holds map distance numbers via real deadline");
+        lastApplied = nextHideAt;
+
+        updated = MapDistanceTimingState.ComputeHold(true, lastApplied, lastApplied, 535f, 1003.5, 3f, true, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && distTracking && nextHideAt > 590f, "10x unscaledTime jump at 3.5 real sec still holds extended tile steps");
+        lastApplied = nextHideAt;
+
+        updated = MapDistanceTimingState.ComputeHold(true, lastApplied, lastApplied, 581f, 1008.1, 3f, true, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && !distTracking && nextHideAt < 581f, "Expires after base 3s + 5s extra = 8s real time");
+
+        // 5b. Normal speed uses base 3s real clock (plus clicking a new tile resets deadline)
+        updated = MapDistanceTimingState.ComputeHold(true, 603f, lastApplied, 600f, 1020.0, 3f, false, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && distTracking, "New tile click at normal speed restarts tracking");
+        lastApplied = nextHideAt;
+        updated = MapDistanceTimingState.ComputeHold(true, lastApplied, lastApplied, 602.5f, 1022.5, 3f, false, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && distTracking, "Normal speed keeps showing before 3s real time");
+        lastApplied = nextHideAt;
+        updated = MapDistanceTimingState.ComputeHold(true, lastApplied, lastApplied, 603.1f, 1023.1, 3f, false, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && !distTracking && nextHideAt < 603.1f, "Normal speed hides at 3s real time without extension");
+
+        // 5c. Manual hide clears tracking cleanly
+        updated = MapDistanceTimingState.ComputeHold(true, 703f, lastApplied, 700f, 1050.0, 3f, true, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(updated && distTracking, "Re-open tracks cleanly");
+        updated = MapDistanceTimingState.ComputeHold(false, 0f, nextHideAt, 701f, 1050.1, 3f, true, 5f, ref distTracking, ref distDeadline, out nextHideAt);
+        Check(!updated && !distTracking, "Hiding clears distance tracking");
+
         Console.WriteLine("PASS: " + _checks + " ping display timing checks");
     }
 }

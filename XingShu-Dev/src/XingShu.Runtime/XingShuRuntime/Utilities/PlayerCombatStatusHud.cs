@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Core;
+using Core.Net;
 using Core.Scene;
 using Core.Unit;
 using FairyGUI;
@@ -11,6 +12,8 @@ using UnityEngine;
 using XingShuRuntime.CameraPort;
 using XingShuRuntime.Core;
 using XingShuRuntime.UI;
+using party.model;
+using party.protocol;
 
 namespace XingShuRuntime.Utilities;
 
@@ -41,7 +44,24 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         internal bool ActiveInFrame;
     }
 
+    private sealed class HeroCdEntry
+    {
+        internal int SkillId;
+        internal int Cd = -1;
+        internal int Round = -1;
+        internal double ConfirmedAtReal = double.NegativeInfinity;
+        internal bool NeedsPveSync;
+    }
+
     private static PlayerCombatStatusHud _instance;
+    private static readonly Dictionary<long, HeroCdEntry> _heroCds = new Dictionary<long, HeroCdEntry>(8);
+    private static long _cdRoomId;
+    private static long _cdRoomStartTime;
+    private static int _cdRound = -1;
+    private static RPCAsyncResult _cdSyncRpc;
+    private static double _cdSyncDeadlineReal;
+    private static double _nextCdSyncReal;
+    private static int _cdSyncCursor;
 
     private readonly Dictionary<long, PillSlot> _headPills = new Dictionary<long, PillSlot>(4);
     private readonly Dictionary<long, PillSlot> _avatarPills = new Dictionary<long, PillSlot>(4);
@@ -382,6 +402,10 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 
         bool refreshText = Time.unscaledTime >= _nextTextRefresh;
         EnsureBuffSignalBound(logic);
+        if (_showCd)
+        {
+            TickPveTeammateCdSync(logic, players);
+        }
         if (refreshText)
         {
             _nextTextRefresh = Time.unscaledTime + TextRefreshIntervalSeconds;
@@ -908,7 +932,6 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
     private static string FormatCdToken(BattlePlayerData p)
     {
         int skillId = p.player.GetBattleActiveSkillId();
-        int curCd = p.Property?.activeSkillCD != null ? p.Property.activeSkillCD.Value : p.SkillCD;
         int maxCd = 0;
         if (skillId > 0 && StaticConfigure.Skill?.InfoDict != null
             && StaticConfigure.Skill.InfoDict.TryGetValue(skillId, out var scfg) && scfg != null)
@@ -917,10 +940,283 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         }
         if (skillId > 0 && maxCd > 0)
         {
+            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
+            long pid = p.player.Id;
+            bool isSelf = logic?.account != null && logic.account.IsSelf(pid);
+            bool isWatchedSelf = logic?.watch != null && logic.watch.PlayerIsWatcher() && pid == logic.watch.SubscribePlayerId.Value;
+            var room = logic?.room?.curRoomInfo;
+            bool isPve = room != null && room.IsPVE();
+            int currentRound = room != null ? Math.Max(_cdRound, room.Round) : _cdRound;
+
+            bool hasTracked = _heroCds.TryGetValue(pid, out var entry) && entry.SkillId == skillId && entry.Cd >= 0;
+            int trackedCd = hasTracked ? PlayerCombatStatusPolicy.ProjectRoundCooldown(entry.Cd, entry.Round, currentRound) : -1;
+            int propCd = p.Property?.activeSkillCD != null ? p.Property.activeSkillCD.Value : -1;
+            int curCd = PlayerCombatStatusPolicy.ResolveHeroActiveSkillCd(
+                isSelf || isWatchedSelf,
+                propCd,
+                hasTracked,
+                trackedCd,
+                isPve,
+                p.SkillCD);
             string cdCol = curCd <= 0 ? "#7CFF9B" : "#FFC857";
             return $"[color={cdCol}]CD {curCd}/{maxCd}[/color]";
         }
         return "[color=#B8C8DC]被动[/color]";
+    }
+
+    private static bool SyncCdSession(RoomInfo room)
+    {
+        if (room?.info == null || room.info.Id <= 0 || room.info.StartTime <= 0) return false;
+        if (_cdRoomId != room.info.Id || _cdRoomStartTime != room.info.StartTime)
+        {
+            _heroCds.Clear();
+            _cdRoomId = room.info.Id;
+            _cdRoomStartTime = room.info.StartTime;
+            _cdRound = room.Round;
+            _cdSyncRpc = null;
+            _cdSyncDeadlineReal = 0d;
+            _nextCdSyncReal = 0d;
+            _cdSyncCursor = 0;
+        }
+        else if (room.Round > _cdRound)
+        {
+            _cdRound = room.Round;
+            foreach (var entry in _heroCds.Values)
+            {
+                entry.NeedsPveSync = true;
+            }
+        }
+        return true;
+    }
+
+    private static HeroCdEntry EnsureHeroCdEntry(long playerId, int skillId)
+    {
+        if (!_heroCds.TryGetValue(playerId, out var entry) || entry.SkillId != skillId)
+        {
+            entry = new HeroCdEntry { SkillId = skillId };
+            _heroCds[playerId] = entry;
+        }
+        return entry;
+    }
+
+    private static void RecordHeroCd(long playerId, int skillId, int cd, int round, double nowReal, bool needsPveSync)
+    {
+        if (playerId <= 0 || skillId <= 0 || cd < 0) return;
+        var entry = EnsureHeroCdEntry(playerId, skillId);
+        entry.Cd = cd;
+        entry.Round = round;
+        entry.ConfirmedAtReal = nowReal;
+        entry.NeedsPveSync = needsPveSync;
+        if (_instance != null) _instance._nextTextRefresh = 0f;
+    }
+
+    private static void TickPveTeammateCdSync(GameLogicManager logic, List<BattlePlayerData> players)
+    {
+        var room = logic?.room?.curRoomInfo;
+        var battle = logic?.battle;
+        if (room == null || battle == null || !SyncCdSession(room)) return;
+
+        double nowReal = ThinkingClock.RealSeconds();
+        for (int i = 0; i < players.Count; i++)
+        {
+            var p = players[i];
+            if (p == null || p.player?.Hero == null || p.characterType != CharacterType.Hero) continue;
+            long pid = p.player.Id;
+            if (logic.account != null && logic.account.IsSelf(pid)) continue;
+            int skillId = p.player.GetBattleActiveSkillId();
+            if (skillId <= 0) continue;
+            if (!_heroCds.TryGetValue(pid, out var existing) || existing.SkillId != skillId)
+            {
+                if (p.player.Hero.SkillCds != null && p.player.Hero.SkillCds.TryGetValue(skillId, out int snapCd) && snapCd > 0)
+                {
+                    RecordHeroCd(pid, skillId, snapCd, Math.Max(_cdRound, room.Round), nowReal, needsPveSync: true);
+                }
+            }
+        }
+
+        if (!room.IsPVE() || room.MapType == 2
+            || logic.replay?.Session?.IsReplay == true
+            || logic.room?.roomController?.roomStateType != RoomStateType.RUNNING
+            || !MonoSingletonProvider<NetManager>.hasInstance
+            || !MonoSingletonProvider<NetManager>.inst.IsConnected)
+        {
+            return;
+        }
+
+        if (_cdSyncRpc != null)
+        {
+            if (_cdSyncRpc.keepWaiting && nowReal < _cdSyncDeadlineReal) return;
+            _cdSyncRpc = null;
+        }
+        if (nowReal < _nextCdSyncReal) return;
+
+        long targetPid = 0L;
+        int bestTier = int.MaxValue;
+        int count = players.Count;
+        if (count == 0) return;
+
+        for (int step = 0; step < count; step++)
+        {
+            int idx = (_cdSyncCursor + step) % count;
+            var p = players[idx];
+            if (p == null || p.player?.Hero == null || p.characterType != CharacterType.Hero) continue;
+            long pid = p.player.Id;
+            if (logic.account != null && logic.account.IsSelf(pid)) continue;
+            int skillId = p.player.GetBattleActiveSkillId();
+            if (skillId <= 0) continue;
+
+            int tier;
+            if (!_heroCds.TryGetValue(pid, out var entry) || entry.SkillId != skillId || entry.Cd < 0)
+            {
+                tier = 0;
+            }
+            else if (entry.NeedsPveSync)
+            {
+                tier = 1;
+            }
+            else if ((nowReal - entry.ConfirmedAtReal) >= 12.0d)
+            {
+                tier = 2;
+            }
+            else
+            {
+                continue;
+            }
+
+            if (tier < bestTier)
+            {
+                bestTier = tier;
+                targetPid = pid;
+                _cdSyncCursor = (idx + 1) % count;
+                if (tier == 0) break;
+            }
+        }
+
+        if (targetPid <= 0) return;
+        _cdSyncRpc = battle.RequestGetHeroInfoC2S(targetPid);
+        _cdSyncDeadlineReal = nowReal + 10.0d;
+        _nextCdSyncReal = nowReal + 1.5d;
+    }
+
+    internal static void ObserveHeroInfo(GetHeroInfoS2C model)
+    {
+        try
+        {
+            if (model == null || model.PlayerId <= 0 || model.Cd < 0) return;
+            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
+            var room = logic?.room?.curRoomInfo;
+            var battle = logic?.battle;
+            if (room == null || battle == null || !SyncCdSession(room)) return;
+            var p = battle.GetPlayerDataById(model.PlayerId);
+            if (p == null || p.player?.Hero == null || p.characterType != CharacterType.Hero) return;
+            int skillId = p.player.GetBattleActiveSkillId();
+            if (skillId <= 0) return;
+
+            bool isPve = room.IsPVE();
+            int currentRound = Math.Max(_cdRound, room.Round);
+            bool hasExisting = _heroCds.TryGetValue(model.PlayerId, out var existing) && existing.SkillId == skillId && existing.Cd >= 0;
+            int existingProjected = hasExisting ? PlayerCombatStatusPolicy.ProjectRoundCooldown(existing.Cd, existing.Round, currentRound) : -1;
+            if (!PlayerCombatStatusPolicy.ShouldAcceptHeroInfoCd(isPve, model.Cd, hasExisting, existingProjected)) return;
+
+            RecordHeroCd(model.PlayerId, skillId, model.Cd, currentRound, ThinkingClock.RealSeconds(), needsPveSync: false);
+        }
+        catch (Exception) { }
+    }
+
+    internal static void ObserveAttributes(UpdateHeroAttrS2C model)
+    {
+        try
+        {
+            if (model?.EffectDatas == null) return;
+            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
+            var room = logic?.room?.curRoomInfo;
+            var battle = logic?.battle;
+            if (room == null || battle == null || !SyncCdSession(room)) return;
+            double nowReal = ThinkingClock.RealSeconds();
+            int currentRound = Math.Max(_cdRound, room.Round);
+            for (int i = 0; i < model.EffectDatas.Count; i++)
+            {
+                var effect = model.EffectDatas[i];
+                var cd = effect?.Cd;
+                if (cd == null || cd.Cd < 0) continue;
+                if (cd.PlayerId != 0 && effect.PlayerId != 0 && cd.PlayerId != effect.PlayerId) continue;
+                long pid = cd.PlayerId != 0 ? cd.PlayerId : effect.PlayerId;
+                if (pid <= 0) continue;
+                var p = battle.GetPlayerDataById(pid);
+                if (p == null || p.player?.Hero == null || p.characterType != CharacterType.Hero) continue;
+                int skillId = p.player.GetBattleActiveSkillId();
+                if (skillId <= 0) continue;
+                RecordHeroCd(pid, skillId, cd.Cd, currentRound, nowReal, needsPveSync: false);
+            }
+        }
+        catch (Exception) { }
+    }
+
+    internal static void ObserveUse(UseEffectCardS2C model)
+    {
+        try
+        {
+            if (model == null || !model.UseSkill || model.PlayerId <= 0) return;
+            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
+            var room = logic?.room?.curRoomInfo;
+            var battle = logic?.battle;
+            if (room == null || battle == null || !SyncCdSession(room)) return;
+            var p = battle.GetPlayerDataById(model.PlayerId);
+            if (p == null || p.player?.Hero == null || p.characterType != CharacterType.Hero) return;
+            int skillId = p.player.GetBattleActiveSkillId();
+            if (skillId <= 0) return;
+
+            double nowReal = ThinkingClock.RealSeconds();
+            int currentRound = Math.Max(_cdRound, room.Round);
+            if (model.SkillCds != null && model.SkillCds.TryGetValue(skillId, out int explicitCd) && explicitCd >= 0)
+            {
+                RecordHeroCd(model.PlayerId, skillId, explicitCd, currentRound, nowReal, needsPveSync: false);
+            }
+            else if (model.SkillId == skillId
+                && StaticConfigure.Skill?.InfoDict != null
+                && StaticConfigure.Skill.InfoDict.TryGetValue(skillId, out var scfg)
+                && scfg != null && scfg.Round > 0)
+            {
+                RecordHeroCd(model.PlayerId, skillId, scfg.Round, currentRound, nowReal, needsPveSync: room.IsPVE());
+            }
+        }
+        catch (Exception) { }
+    }
+
+    internal static void ObserveRound(RoundStartS2C model)
+    {
+        try
+        {
+            if (model == null) return;
+            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
+            var room = logic?.room?.curRoomInfo;
+            var battle = logic?.battle;
+            if (room == null || battle == null || !SyncCdSession(room)) return;
+
+            if (model.Round > _cdRound)
+            {
+                _cdRound = model.Round;
+                foreach (var entry in _heroCds.Values)
+                {
+                    entry.NeedsPveSync = true;
+                }
+            }
+            int currentRound = Math.Max(_cdRound, room.Round);
+            if (model.PlayerId > 0 && model.SkillCds != null)
+            {
+                var p = battle.GetPlayerDataById(model.PlayerId);
+                if (p != null && p.player?.Hero != null && p.characterType == CharacterType.Hero)
+                {
+                    int skillId = p.player.GetBattleActiveSkillId();
+                    if (skillId > 0 && model.SkillCds.TryGetValue(skillId, out int scopedCd) && scopedCd >= 0)
+                    {
+                        RecordHeroCd(model.PlayerId, skillId, scopedCd, currentRound, ThinkingClock.RealSeconds(), needsPveSync: false);
+                    }
+                }
+            }
+            if (_instance != null) _instance._nextTextRefresh = 0f;
+        }
+        catch (Exception) { }
     }
 
     private static string FormatAtkDefTokens(BattlePlayerData p)
@@ -1224,6 +1520,7 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 
     private void OnDestroy()
     {
+        _cdSyncRpc = null;
         ClearAll();
         if (_instance == this) _instance = null;
     }

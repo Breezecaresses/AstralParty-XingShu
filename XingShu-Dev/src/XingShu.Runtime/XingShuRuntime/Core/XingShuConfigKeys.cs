@@ -52,6 +52,15 @@ internal static class XingShuConfigKeys
 
 	internal const float PingAccelExtendSecondsMax = 15.0f;
 
+	// 思考时间倍数 (1.0x 原速 ~ 20.0x，默认 10.0x)
+	internal const string ThinkingTimeScale = "XINGSHU_THINKING_TIME_SCALE";
+
+	internal const float ThinkingTimeScaleMin = 1.0f;
+
+	internal const float ThinkingTimeScaleMax = 20.0f;
+
+	internal const float ThinkingTimeScaleDefault = 10.0f;
+
 	internal const string NativeSpeedEnabled = "XINGSHU_NATIVE_SPEED_ENABLED";
 
 	internal const bool NativeSpeedEnabledDefault = false;
@@ -395,6 +404,24 @@ internal static class XingShuConfigKeys
 	internal const bool AutoSettlementScreenshotEnabledDefault = true;
 
 	internal const string AutoSettlementScreenshotLastPath = "XINGSHU_AUTO_SETTLEMENT_SCREENSHOT_LAST_PATH";
+
+	// 彩色动态名字适配 (XingShuColorName)
+	internal const string ColorNameEnabled = "XINGSHU_COLOR_NAME_ENABLED";
+	internal const bool ColorNameEnabledDefault = true;
+	internal const string ColorNameScope = "XINGSHU_COLOR_NAME_SCOPE";
+	internal const int ColorNameScopeDefault = 0; // 0 = 仅自己, 1 = 房间与局内全员
+	internal const string ColorNamePreset = "XINGSHU_COLOR_NAME_PRESET";
+	internal const int ColorNamePresetDefault = 0; // 0..4
+	internal const string ColorNameSpeed = "XINGSHU_COLOR_NAME_SPEED";
+	internal const float ColorNameSpeedMin = 0.2f;
+	internal const float ColorNameSpeedMax = 3.0f;
+	internal const float ColorNameSpeedDefault = 1.0f;
+	internal const string ColorNameBold = "XINGSHU_COLOR_NAME_BOLD";
+	internal const bool ColorNameBoldDefault = false;
+	internal const string ColorNameItalic = "XINGSHU_COLOR_NAME_ITALIC";
+	internal const bool ColorNameItalicDefault = false;
+	internal const string ColorNameUnderline = "XINGSHU_COLOR_NAME_UNDERLINE";
+	internal const bool ColorNameUnderlineDefault = false;
 
 	// 选人界面右侧地图名称提示 (SelectRoleMapNameHint)
 	internal const string SelectRoleMapNameEnabled = "XINGSHU_SELECT_ROLE_MAP_NAME";

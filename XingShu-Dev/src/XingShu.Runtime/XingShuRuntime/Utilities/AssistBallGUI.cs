@@ -388,11 +388,23 @@ internal sealed class AssistBallGUI : MonoBehaviour
 
 	private bool _suppressQuickToggle;
 
+	private int _quickMenuBuiltStyle = -1;
+
+	private int _quickMenuGlassRevision = -1;
+
 	public static AssistBallGUI Instance { get; private set; }
 
 	public bool IsVisible => _visible;
 
 	public bool IsMenuOpen => _menuOpen;
+
+	internal static void RefreshQuickMenuSkin()
+	{
+		if (Instance != null)
+		{
+			Instance.EnsureQuickMenuSkinMatches(forceRebuild: false);
+		}
+	}
 
 	internal static void RefreshFromConfig()
 	{
@@ -822,13 +834,80 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		XingShuDetailLayout.Fill(_nativeSpeedBadgeText.rectTransform, 2f, 0f, 2f, 0f);
 		XingShuUIFactory.AddOutline(_nativeSpeedBadgeText.gameObject, new Color(0.25f, 0.02f, 0.12f, 1f), new Vector2(1f, -1f));
 
-		// 2. 快捷控制气泡 Canvas（半透明磨砂暗底 + 半透卡片，透出背后游戏画面）
+		// 2. 快捷控制气泡 Canvas（按当前 UI 中心皮肤区分：毛玻璃皮肤 vs 原版游戏皮肤）
+		BuildProgrammaticQuickMenu(XingShuUICenter.IsGlassActive);
+	}
+
+	private void EnsureQuickMenuSkinMatches(bool forceRebuild)
+	{
+		if (!_usingNativeBallUI) return;
+		bool wantGlass = XingShuUICenter.IsGlassActive;
+		int targetStyle = wantGlass ? 1 : 0;
+		if (wantGlass && XingShuGlassSkin.PaletteRevision == 0)
+		{
+			XingShuGlassSkin.RefreshPaletteFromConfig();
+		}
+		bool needsRebuild = forceRebuild
+			|| _menuRootObj == null
+			|| _quickMenuBuiltStyle != targetStyle
+			|| (wantGlass && _quickMenuGlassRevision != XingShuGlassSkin.PaletteRevision);
+		if (!needsRebuild) return;
+
+		bool hadToast = _toastBannerObj != null
+			&& _toastBannerObj.activeSelf
+			&& Time.unscaledTime < _toastUntil
+			&& !string.IsNullOrEmpty(_toastMsg);
+
+		if (_menuRootObj != null)
+		{
+			XingShuNativeGameUI.ClearPendingBindingsUnder(_menuRootObj);
+			UnityEngine.Object.Destroy(_menuRootObj);
+			_menuRootObj = null;
+		}
+		_menuCg = null;
+		_windowPanelRt = null;
+		_closeBtn = null;
+		_quickSpeedToggle = null;
+		_quickSpeedValueText = null;
+		_quickKnockbackToggle = null;
+		_quickHandCardToggle = null;
+		_toastBannerObj = null;
+		_toastCg = null;
+		_toastText = null;
+
+		BuildProgrammaticQuickMenu(wantGlass);
+		ApplyMenuVisibility();
+		SyncNativeQuickMenuState();
+		if (_menuOpen)
+		{
+			UpdateMenuPosition();
+		}
+		if (hadToast && _toastText != null && _toastBannerObj != null)
+		{
+			_toastText.text = _toastMsg;
+			_toastBannerObj.SetActive(true);
+			if (_toastCg != null)
+			{
+				_toastCg.alpha = 1f;
+			}
+		}
+	}
+
+	private void BuildProgrammaticQuickMenu(bool glassStyle)
+	{
+		if (glassStyle && XingShuGlassSkin.PaletteRevision == 0)
+		{
+			XingShuGlassSkin.RefreshPaletteFromConfig();
+		}
+		_quickMenuBuiltStyle = glassStyle ? 1 : 0;
+		_quickMenuGlassRevision = glassStyle ? XingShuGlassSkin.PaletteRevision : -1;
+
 		_menuRootObj = new GameObject("XINGSHU_NativeAssistMenu", typeof(RectTransform));
 		UnityEngine.Object.DontDestroyOnLoad(_menuRootObj);
 		Canvas menuCanvas = _menuRootObj.AddComponent<Canvas>();
 		menuCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
 		menuCanvas.sortingOrder = 31021;
-		menuCanvas.pixelPerfect = true;
+		menuCanvas.pixelPerfect = !glassStyle;
 		CanvasScaler menuScaler = _menuRootObj.AddComponent<CanvasScaler>();
 		menuScaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
 		menuScaler.scaleFactor = EffectiveScale;
@@ -856,54 +935,94 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		_windowPanelRt.pivot = Vector2.one;
 		_windowPanelRt.sizeDelta = new Vector2(bubbleW, bubbleH);
 
-		Color translucentPanelColor = new Color(1f, 1f, 1f, 0.76f);
-		Color translucentFallbackColor = new Color(0.11f, 0.13f, 0.19f, 0.76f);
-		UnityEngine.UI.Image panelBg = windowGo.AddComponent<UnityEngine.UI.Image>();
-		Sprite darkFrame = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedDarkFrame) ?? XingShuUIAssetService.GetRoundedFallbackSprite(18);
-		panelBg.sprite = darkFrame;
-		panelBg.type = UnityEngine.UI.Image.Type.Sliced;
-		panelBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedDarkFrame) != null ? translucentPanelColor : translucentFallbackColor;
-		XingShuNativeGameUI.Bind(panelBg, XingShuNativeSprite.RoundedDarkFrame, UnityEngine.UI.Image.Type.Sliced, false, translucentPanelColor);
-		XingShuUIFactory.AddShadow(windowGo, new Color(0f, 0f, 0f, 0.30f), new Vector2(0f, -8f));
-
-		GameObject clipGo = XingShuUIFactory.CreateUIObject("Clip", windowGo);
-		XingShuDetailLayout.Fill(clipGo.GetComponent<RectTransform>(), 4f, 4f, 4f, 4f);
-		clipGo.AddComponent<RectMask2D>();
-		UnityEngine.UI.Image patternBg = XingShuUIFactory.CreateImage(clipGo, "DarkPattern", XingShuUIAssetService.WhiteSprite, new Color(1f, 1f, 1f, 0.01f));
-		XingShuDetailLayout.Fill(patternBg.rectTransform);
-		patternBg.raycastTarget = false;
-		XingShuNativeGameUI.Bind(patternBg, XingShuNativeSprite.DarkPattern, UnityEngine.UI.Image.Type.Tiled, false, new Color(1f, 1f, 1f, 0.34f));
-		GameObject quickStripes = XingShuUIFactory.CreateNativeDiagonalStripes(clipGo, 0.56f, 200f, 92f);
-		foreach (UnityEngine.UI.Image stripeImg in quickStripes.GetComponentsInChildren<UnityEngine.UI.Image>(true))
+		if (glassStyle)
 		{
-			Color sc = stripeImg.color;
-			stripeImg.color = new Color(sc.r, sc.g, sc.b, 0.36f);
+			UnityEngine.UI.Image panelBg = windowGo.AddComponent<UnityEngine.UI.Image>();
+			panelBg.sprite = XingShuGlassSkin.ShellSprite;
+			panelBg.type = UnityEngine.UI.Image.Type.Sliced;
+			panelBg.color = Color.white;
+			XingShuUIFactory.AddShadow(windowGo, new Color(0f, 0f, 0f, 0.42f), new Vector2(0f, -10f));
+			windowGo.AddComponent<RectMask2D>();
+
+			GameObject headerGo = XingShuUIFactory.CreateUIObject("GlassHeader", windowGo);
+			RectTransform hdrRt = headerGo.GetComponent<RectTransform>();
+			hdrRt.anchorMin = new Vector2(0f, 1f);
+			hdrRt.anchorMax = new Vector2(1f, 1f);
+			hdrRt.pivot = new Vector2(0.5f, 1f);
+			hdrRt.anchoredPosition = new Vector2(0f, -10f);
+			hdrRt.sizeDelta = new Vector2(-20f, 44f);
+			UnityEngine.UI.Image headerBg = headerGo.AddComponent<UnityEngine.UI.Image>();
+			headerBg.sprite = XingShuGlassSkin.GetRoundedPanelSprite(12, XingShuGlassSkin.HeaderFill, XingShuGlassSkin.DividerLine, 1f);
+			headerBg.type = UnityEngine.UI.Image.Type.Sliced;
+			headerBg.color = Color.white;
+
+			Text hdrTitle = XingShuUIFactory.CreateText(headerGo, "Title", "星枢快捷控制", isMobile ? 17 : 15, XingShuGlassSkin.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+			XingShuDetailLayout.Fill(hdrTitle.rectTransform, 14f, 2f, 46f, 2f);
+
+			_closeBtn = XingShuUIFactory.CreateButton(headerGo, "CloseButton", "×", XingShuGlassSkin.ButtonSprite,
+				Color.white, XingShuGlassSkin.TextPrimary, () => SetMenuOpen(false), isMobile ? 20 : 18);
+			RectTransform closeRt = _closeBtn.GetComponent<RectTransform>();
+			closeRt.anchorMin = closeRt.anchorMax = new Vector2(1f, 0.5f);
+			closeRt.pivot = new Vector2(1f, 0.5f);
+			closeRt.anchoredPosition = new Vector2(-8f, 0f);
+			closeRt.sizeDelta = isMobile ? new Vector2(32f, 30f) : new Vector2(28f, 26f);
 		}
+		else
+		{
+			Color translucentPanelColor = new Color(1f, 1f, 1f, 0.76f);
+			Color translucentFallbackColor = new Color(0.11f, 0.13f, 0.19f, 0.76f);
+			UnityEngine.UI.Image panelBg = windowGo.AddComponent<UnityEngine.UI.Image>();
+			Sprite darkFrame = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedDarkFrame) ?? XingShuUIAssetService.GetRoundedFallbackSprite(18);
+			panelBg.sprite = darkFrame;
+			panelBg.type = UnityEngine.UI.Image.Type.Sliced;
+			panelBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedDarkFrame) != null ? translucentPanelColor : translucentFallbackColor;
+			XingShuNativeGameUI.Bind(panelBg, XingShuNativeSprite.RoundedDarkFrame, UnityEngine.UI.Image.Type.Sliced, false, translucentPanelColor);
+			XingShuUIFactory.AddShadow(windowGo, new Color(0f, 0f, 0f, 0.30f), new Vector2(0f, -8f));
 
-		// 顶部栏
-		GameObject headerGo = XingShuUIFactory.CreateUIObject("Header", windowGo);
-		RectTransform hdrRt = headerGo.GetComponent<RectTransform>();
-		hdrRt.anchorMin = new Vector2(0f, 1f);
-		hdrRt.anchorMax = new Vector2(1f, 1f);
-		hdrRt.pivot = new Vector2(0.5f, 1f);
-		hdrRt.anchoredPosition = Vector2.zero;
-		hdrRt.sizeDelta = new Vector2(0f, 50f);
+			GameObject clipGo = XingShuUIFactory.CreateUIObject("Clip", windowGo);
+			XingShuDetailLayout.Fill(clipGo.GetComponent<RectTransform>(), 4f, 4f, 4f, 4f);
+			clipGo.AddComponent<RectMask2D>();
+			UnityEngine.UI.Image patternBg = XingShuUIFactory.CreateImage(clipGo, "DarkPattern", XingShuUIAssetService.WhiteSprite, new Color(1f, 1f, 1f, 0.01f));
+			XingShuDetailLayout.Fill(patternBg.rectTransform);
+			patternBg.raycastTarget = false;
+			XingShuNativeGameUI.Bind(patternBg, XingShuNativeSprite.DarkPattern, UnityEngine.UI.Image.Type.Tiled, false, new Color(1f, 1f, 1f, 0.34f));
+			GameObject quickStripes = XingShuUIFactory.CreateNativeDiagonalStripes(clipGo, 0.56f, 200f, 92f);
+			foreach (UnityEngine.UI.Image stripeImg in quickStripes.GetComponentsInChildren<UnityEngine.UI.Image>(true))
+			{
+				Color sc = stripeImg.color;
+				stripeImg.color = new Color(sc.r, sc.g, sc.b, 0.36f);
+			}
 
-		Text hdrTitle = XingShuUIFactory.CreateText(headerGo, "Title", "星枢快捷控制", isMobile ? 19 : 17, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
-		XingShuDetailLayout.Fill(hdrTitle.rectTransform, 16f, 4f, 54f, 4f);
-		XingShuUIFactory.AddOutline(hdrTitle.gameObject, new Color(0.08f, 0.08f, 0.12f, 0.95f), new Vector2(1.5f, -1.5f));
+			// 顶部栏
+			GameObject headerGo = XingShuUIFactory.CreateUIObject("Header", windowGo);
+			RectTransform hdrRt = headerGo.GetComponent<RectTransform>();
+			hdrRt.anchorMin = new Vector2(0f, 1f);
+			hdrRt.anchorMax = new Vector2(1f, 1f);
+			hdrRt.pivot = new Vector2(0.5f, 1f);
+			hdrRt.anchoredPosition = Vector2.zero;
+			hdrRt.sizeDelta = new Vector2(0f, 50f);
 
-		_closeBtn = XingShuUIFactory.CreateButton(headerGo, "CloseButton", "×", XingShuUIAssetService.GetSprite("close_normal.png"),
-			Color.white, Color.white, () => SetMenuOpen(false), isMobile ? 22 : 18);
-		RectTransform closeRt = _closeBtn.GetComponent<RectTransform>();
-		closeRt.anchorMin = closeRt.anchorMax = new Vector2(1f, 0.5f);
-		closeRt.pivot = new Vector2(1f, 0.5f);
-		closeRt.anchoredPosition = new Vector2(-12f, 0f);
-		closeRt.sizeDelta = Vector2.one * (isMobile ? 32f : 28f);
+			Text hdrTitle = XingShuUIFactory.CreateText(headerGo, "Title", "星枢快捷控制", isMobile ? 19 : 17, Color.white, TextAnchor.MiddleLeft, FontStyle.Bold);
+			XingShuDetailLayout.Fill(hdrTitle.rectTransform, 16f, 4f, 54f, 4f);
+			XingShuUIFactory.AddOutline(hdrTitle.gameObject, new Color(0.08f, 0.08f, 0.12f, 0.95f), new Vector2(1.5f, -1.5f));
+
+			_closeBtn = XingShuUIFactory.CreateButton(headerGo, "CloseButton", "×", XingShuUIAssetService.GetSprite("close_normal.png"),
+				Color.white, Color.white, () => SetMenuOpen(false), isMobile ? 22 : 18);
+			RectTransform closeRt = _closeBtn.GetComponent<RectTransform>();
+			closeRt.anchorMin = closeRt.anchorMax = new Vector2(1f, 0.5f);
+			closeRt.pivot = new Vector2(1f, 0.5f);
+			closeRt.anchoredPosition = new Vector2(-12f, 0f);
+			closeRt.sizeDelta = Vector2.one * (isMobile ? 32f : 28f);
+		}
 
 		// 中部快捷开关容器
 		GameObject quickBody = XingShuUIFactory.CreateUIObject("QuickBody", windowGo);
-		XingShuDetailLayout.Fill(quickBody.GetComponent<RectTransform>(), 14f, 54f, 14f, 70f);
+		XingShuDetailLayout.Fill(
+			quickBody.GetComponent<RectTransform>(),
+			glassStyle ? 12f : 14f,
+			glassStyle ? 62f : 54f,
+			glassStyle ? 12f : 14f,
+			glassStyle ? 66f : 70f);
 		VerticalLayoutGroup qVlg = quickBody.AddComponent<VerticalLayoutGroup>();
 		qVlg.spacing = isMobile ? 10f : 8f;
 		qVlg.childControlWidth = true;
@@ -913,11 +1032,11 @@ internal sealed class AssistBallGUI : MonoBehaviour
 
 		if (hasSpeed)
 		{
-			BuildQuickToggleRow(quickBody, "QuickSpeedRow", "全局变速", isMobile, ReadSpeedEnabled(), out _quickSpeedToggle, out _quickSpeedValueText, SetSpeedFromQuickToggle);
+			BuildQuickToggleRow(quickBody, "QuickSpeedRow", "全局变速", isMobile, glassStyle, ReadSpeedEnabled(), out _quickSpeedToggle, out _quickSpeedValueText, SetSpeedFromQuickToggle);
 		}
 		if (hasKnockback)
 		{
-			BuildQuickToggleRow(quickBody, "QuickKnockbackRow", "击飞预测", isMobile, MonsterKillProbability.IsEnabled, out _quickKnockbackToggle, out _, val =>
+			BuildQuickToggleRow(quickBody, "QuickKnockbackRow", "击飞预测", isMobile, glassStyle, MonsterKillProbability.IsEnabled, out _quickKnockbackToggle, out _, val =>
 			{
 				if (_suppressQuickToggle) return;
 				MonsterKillProbability.IsEnabled = val;
@@ -925,7 +1044,7 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		}
 		if (hasHand)
 		{
-			BuildQuickToggleRow(quickBody, "QuickHandRow", "手牌同步", isMobile, HandCardDisplayManager.IsEnabled, out _quickHandCardToggle, out _, val =>
+			BuildQuickToggleRow(quickBody, "QuickHandRow", "手牌同步", isMobile, glassStyle, HandCardDisplayManager.IsEnabled, out _quickHandCardToggle, out _, val =>
 			{
 				if (_suppressQuickToggle) return;
 				HandCardDisplayManager.IsEnabled = val;
@@ -941,34 +1060,61 @@ internal sealed class AssistBallGUI : MonoBehaviour
 			LayoutElement emptyLe = emptyRow.AddComponent<LayoutElement>();
 			emptyLe.minHeight = isMobile ? 64f : 56f;
 			emptyLe.preferredHeight = isMobile ? 64f : 56f;
-			Sprite emptySp = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) ?? XingShuUIAssetService.GetRoundedFallbackSprite(12);
 			UnityEngine.UI.Image emptyBg = emptyRow.AddComponent<UnityEngine.UI.Image>();
-			emptyBg.sprite = emptySp;
 			emptyBg.type = UnityEngine.UI.Image.Type.Sliced;
-			Color emptyTint = new Color(1f, 1f, 1f, 0.86f);
-			emptyBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) != null ? emptyTint : new Color(0.96f, 0.97f, 0.99f, 0.86f);
-			XingShuNativeGameUI.Bind(emptyBg, XingShuNativeSprite.RoundedLightCard, UnityEngine.UI.Image.Type.Sliced, false, emptyTint);
-			Text emptyTxt = XingShuUIFactory.CreateText(emptyRow, "Text", "当前仅加载星枢核心插件\n可在启动器「模组」页按需安装功能模块", isMobile ? 13 : 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleCenter);
+			if (glassStyle)
+			{
+				emptyBg.sprite = XingShuGlassSkin.CardSprite;
+				emptyBg.color = Color.white;
+			}
+			else
+			{
+				Sprite emptySp = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) ?? XingShuUIAssetService.GetRoundedFallbackSprite(12);
+				emptyBg.sprite = emptySp;
+				Color emptyTint = new Color(1f, 1f, 1f, 0.86f);
+				emptyBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) != null ? emptyTint : new Color(0.96f, 0.97f, 0.99f, 0.86f);
+				XingShuNativeGameUI.Bind(emptyBg, XingShuNativeSprite.RoundedLightCard, UnityEngine.UI.Image.Type.Sliced, false, emptyTint);
+			}
+			Text emptyTxt = XingShuUIFactory.CreateText(
+				emptyRow,
+				"Text",
+				"当前仅加载星枢核心插件\n可在启动器「模组」页按需安装功能模块",
+				isMobile ? 13 : 12,
+				glassStyle ? XingShuGlassSkin.TextSecondary : XingShuUITheme.PrimaryText,
+				TextAnchor.MiddleCenter);
 			XingShuDetailLayout.Fill(emptyTxt.rectTransform, 10f, 6f, 10f, 6f);
 		}
 
 		// 底部全宽「打开完整功能中心」按钮
-		Button openCenterBtn = XingShuUIFactory.CreateButton(windowGo, "OpenFullCenterBtn", "打开完整功能中心",
-			XingShuUIAssetService.GetSprite("button_primary.png"), Color.white, Color.white,
+		Button openCenterBtn = XingShuUIFactory.CreateButton(
+			windowGo,
+			"OpenFullCenterBtn",
+			"打开完整功能中心",
+			glassStyle ? XingShuGlassSkin.ButtonAccentSprite : XingShuUIAssetService.GetSprite("button_primary.png"),
+			Color.white,
+			glassStyle ? XingShuGlassSkin.TextPrimary : Color.white,
 			() =>
 			{
 				SetMenuOpen(false);
 				XingShuRuntime.UI.XingShuUICenter.Open();
-			}, isMobile ? 17 : 15);
+			},
+			isMobile ? (glassStyle ? 16 : 17) : (glassStyle ? 14 : 15));
 		RectTransform ocbRt = openCenterBtn.GetComponent<RectTransform>();
 		ocbRt.anchorMin = new Vector2(0f, 0f);
 		ocbRt.anchorMax = new Vector2(1f, 0f);
 		ocbRt.pivot = new Vector2(0.5f, 0f);
-		ocbRt.anchoredPosition = new Vector2(0f, 14f);
-		ocbRt.sizeDelta = new Vector2(-28f, isMobile ? 46f : 42f);
-		XingShuNativeGameUI.Bind(openCenterBtn.GetComponent<UnityEngine.UI.Image>(), XingShuNativeSprite.BtnLarge, UnityEngine.UI.Image.Type.Sliced, false, Color.white);
+		ocbRt.anchoredPosition = new Vector2(0f, glassStyle ? 12f : 14f);
+		ocbRt.sizeDelta = new Vector2(glassStyle ? -24f : -28f, isMobile ? (glassStyle ? 44f : 46f) : (glassStyle ? 40f : 42f));
 		Text ocbTxt = openCenterBtn.GetComponentInChildren<Text>();
-		if (ocbTxt != null) XingShuUIFactory.AddOutline(ocbTxt.gameObject, new Color(0.32f, 0.04f, 0.16f, 1f), new Vector2(1.4f, -1.4f));
+		if (glassStyle)
+		{
+			if (ocbTxt != null) ocbTxt.fontStyle = FontStyle.Bold;
+		}
+		else
+		{
+			XingShuNativeGameUI.Bind(openCenterBtn.GetComponent<UnityEngine.UI.Image>(), XingShuNativeSprite.BtnLarge, UnityEngine.UI.Image.Type.Sliced, false, Color.white);
+			if (ocbTxt != null) XingShuUIFactory.AddOutline(ocbTxt.gameObject, new Color(0.32f, 0.04f, 0.16f, 1f), new Vector2(1.4f, -1.4f));
+		}
 
 		// 隐藏但可用的 Toast 横幅
 		_toastBannerObj = XingShuUIFactory.CreateUIObject("ToastBanner", _menuRootObj);
@@ -978,14 +1124,23 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		tbRt.anchoredPosition = new Vector2(0f, -20f);
 		tbRt.sizeDelta = new Vector2(280f, 34f);
 		UnityEngine.UI.Image tbImg = _toastBannerObj.AddComponent<UnityEngine.UI.Image>();
-		tbImg.sprite = XingShuUIAssetService.GetRoundedFallbackSprite(10);
 		tbImg.type = UnityEngine.UI.Image.Type.Sliced;
-		tbImg.color = new Color(0.11f, 0.12f, 0.16f, 0.94f);
+		if (glassStyle)
+		{
+			tbImg.sprite = XingShuGlassSkin.CardAccentSprite;
+			tbImg.color = Color.white;
+		}
+		else
+		{
+			tbImg.sprite = XingShuUIAssetService.GetRoundedFallbackSprite(10);
+			tbImg.color = new Color(0.11f, 0.12f, 0.16f, 0.94f);
+		}
 		_toastCg = _toastBannerObj.AddComponent<CanvasGroup>();
-		_toastText = XingShuUIFactory.CreateText(_toastBannerObj, "ToastText", "", 13, Color.white, TextAnchor.MiddleCenter);
+		_toastText = XingShuUIFactory.CreateText(_toastBannerObj, "ToastText", "", 13, glassStyle ? XingShuGlassSkin.TextPrimary : Color.white, TextAnchor.MiddleCenter);
 		XingShuDetailLayout.Fill(_toastText.rectTransform, 10f, 2f, 10f, 2f);
 		_toastBannerObj.SetActive(false);
 
+		XingShuUITheme.RefreshFonts(_menuRootObj, glassMode: glassStyle);
 		ResizeMenu();
 	}
 
@@ -994,6 +1149,7 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		string name,
 		string title,
 		bool isMobile,
+		bool glassStyle,
 		bool initialValue,
 		out Toggle toggleOut,
 		out Text valueLabelOut,
@@ -1006,15 +1162,27 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		le.preferredHeight = rowH;
 		le.flexibleHeight = 0f;
 
-		Sprite cardSp = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) ?? XingShuUIAssetService.GetRoundedFallbackSprite(12);
 		UnityEngine.UI.Image rowBg = row.AddComponent<UnityEngine.UI.Image>();
-		rowBg.sprite = cardSp;
 		rowBg.type = UnityEngine.UI.Image.Type.Sliced;
-		Color quickRowTint = new Color(1f, 1f, 1f, 0.86f);
-		rowBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) != null ? quickRowTint : new Color(0.96f, 0.97f, 0.99f, 0.86f);
-		XingShuNativeGameUI.Bind(rowBg, XingShuNativeSprite.RoundedLightCard, UnityEngine.UI.Image.Type.Sliced, false, quickRowTint);
+		if (glassStyle)
+		{
+			rowBg.sprite = XingShuGlassSkin.CardSprite;
+			rowBg.color = Color.white;
+		}
+		else
+		{
+			Sprite cardSp = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) ?? XingShuUIAssetService.GetRoundedFallbackSprite(12);
+			rowBg.sprite = cardSp;
+			Color quickRowTint = new Color(1f, 1f, 1f, 0.86f);
+			rowBg.color = XingShuNativeGameUI.GetIfReady(XingShuNativeSprite.RoundedLightCard) != null ? quickRowTint : new Color(0.96f, 0.97f, 0.99f, 0.86f);
+			XingShuNativeGameUI.Bind(rowBg, XingShuNativeSprite.RoundedLightCard, UnityEngine.UI.Image.Type.Sliced, false, quickRowTint);
+		}
 
 		toggleOut = XingShuUIFactory.CreateToggleRow(row, name + "_Toggle", title, initialValue, onChanged);
+		if (glassStyle)
+		{
+			XingShuNativeGameUI.ClearPendingBindingsUnder(toggleOut.gameObject);
+		}
 		RectTransform tRt = toggleOut.GetComponent<RectTransform>();
 		tRt.anchorMin = Vector2.zero;
 		tRt.anchorMax = Vector2.one;
@@ -1025,23 +1193,61 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		{
 			lbl.fontSize = isMobile ? 16 : 14;
 			lbl.fontStyle = FontStyle.Bold;
-			lbl.color = XingShuUITheme.PrimaryText;
-			lbl.rectTransform.offsetMin = new Vector2(16f, 0f);
-			lbl.rectTransform.offsetMax = new Vector2(-118f, 0f);
+			lbl.color = glassStyle ? XingShuGlassSkin.TextPrimary : XingShuUITheme.PrimaryText;
+			lbl.rectTransform.offsetMin = new Vector2(glassStyle ? 14f : 16f, 0f);
+			lbl.rectTransform.offsetMax = new Vector2(glassStyle ? -116f : -118f, 0f);
 		}
 		Transform bgT = toggleOut.transform.Find("Background");
 		if (bgT != null)
 		{
 			RectTransform bgRt = bgT.GetComponent<RectTransform>();
 			bgRt.anchoredPosition = new Vector2(-14f, 0f);
-			bgRt.sizeDelta = new Vector2(32f, 32f);
+			if (glassStyle)
+			{
+				Outline bgOutline = bgT.GetComponent<Outline>();
+				if (bgOutline != null) UnityEngine.Object.Destroy(bgOutline);
+				UnityEngine.UI.Image bgImg = bgT.GetComponent<UnityEngine.UI.Image>();
+				if (bgImg != null)
+				{
+					bgImg.sprite = XingShuGlassSkin.ToggleBgSprite;
+					bgImg.type = UnityEngine.UI.Image.Type.Sliced;
+					bgImg.preserveAspect = false;
+					bgImg.color = Color.white;
+				}
+				bgRt.sizeDelta = new Vector2(28f, 28f);
+				Transform chkT = bgT.Find("Checkmark");
+				if (chkT != null)
+				{
+					UnityEngine.UI.Image chkImg = chkT.GetComponent<UnityEngine.UI.Image>();
+					if (chkImg != null)
+					{
+						chkImg.sprite = XingShuGlassSkin.ToggleCheckSprite;
+						chkImg.type = UnityEngine.UI.Image.Type.Sliced;
+						chkImg.preserveAspect = false;
+						chkImg.color = Color.white;
+					}
+					RectTransform chkRt = chkT.GetComponent<RectTransform>();
+					if (chkRt != null) chkRt.sizeDelta = new Vector2(18f, 18f);
+				}
+			}
+			else
+			{
+				bgRt.sizeDelta = new Vector2(32f, 32f);
+			}
 		}
 
-		valueLabelOut = XingShuUIFactory.CreateText(row, "ValueText", "", isMobile ? 13 : 12, XingShuUITheme.NumericAccent, TextAnchor.MiddleRight, FontStyle.Bold);
+		valueLabelOut = XingShuUIFactory.CreateText(
+			row,
+			"ValueText",
+			"",
+			isMobile ? 13 : 12,
+			glassStyle ? XingShuGlassSkin.AccentBlue : XingShuUITheme.NumericAccent,
+			TextAnchor.MiddleRight,
+			FontStyle.Bold);
 		RectTransform vRt = valueLabelOut.rectTransform;
 		vRt.anchorMin = vRt.anchorMax = new Vector2(1f, 0.5f);
 		vRt.pivot = new Vector2(1f, 0.5f);
-		vRt.anchoredPosition = new Vector2(-54f, 0f);
+		vRt.anchoredPosition = new Vector2(glassStyle ? -50f : -54f, 0f);
 		vRt.sizeDelta = new Vector2(76f, 24f);
 	}
 
@@ -2126,6 +2332,7 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		_menuOpen = open;
 		if (_menuOpen)
 		{
+			EnsureQuickMenuSkinMatches(forceRebuild: false);
 			SyncNativeQuickMenuState();
 			UpdateMenuPosition();
 		}
@@ -3465,7 +3672,7 @@ internal sealed class AssistBallGUI : MonoBehaviour
 		if (!(_windowPanelRt == null))
 		{
 			bool isMobile = XingShuMobileUIHelper.IsMobile;
-			if (_usingNativeBallUI)
+			if (_usingNativeBallUI || _quickMenuBuiltStyle >= 0)
 			{
 				int rows = 1;
 				Transform qb = _windowPanelRt.Find("QuickBody");
@@ -3473,7 +3680,10 @@ internal sealed class AssistBallGUI : MonoBehaviour
 				float rowH = isMobile ? 54f : 48f;
 				float gap = isMobile ? 10f : 8f;
 				float nw = isMobile ? 380f : 336f;
-				float nh = 54f + 70f + rows * rowH + Mathf.Max(0, rows - 1) * gap + 14f;
+				float topH = _quickMenuBuiltStyle == 1 ? 62f : 54f;
+				float botH = _quickMenuBuiltStyle == 1 ? 66f : 70f;
+				float extra = _quickMenuBuiltStyle == 1 ? 10f : 14f;
+				float nh = topH + botH + rows * rowH + Mathf.Max(0, rows - 1) * gap + extra;
 				Rect nRect = XingShuMobileUIHelper.FitRect(new Rect(0f, 0f, nw, nh), LayoutBounds);
 				_windowPanelRt.sizeDelta = nRect.size;
 				UpdateMenuPosition();

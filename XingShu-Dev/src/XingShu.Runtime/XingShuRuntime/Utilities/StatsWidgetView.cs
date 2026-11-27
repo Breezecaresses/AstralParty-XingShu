@@ -187,6 +187,7 @@ namespace XingShuRuntime.Utilities
                 _avatars[row] = avatar;
 
                 var nameText = XingShuDetailLayout.Text(rowRt, "P" + (row + 1) + " 等待中", 35f, 2f, 104f, 16f, 11);
+                nameText.supportRichText = true;
                 nameText.color = TextPrimaryLight;
                 nameText.verticalOverflow = VerticalWrapMode.Truncate;
                 nameText.fontStyle = FontStyle.Bold;

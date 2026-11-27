@@ -97,6 +97,15 @@ internal static class PlayerStarBuffTests
         PlayerStarBuffPolicy.ComputeAnchorPosition(2, 100f, 50f, 80f, 24f, 60f, 28f, 0f, 2f, out ax, out ay);
         Check(Math.Abs(ax - 100f) < 0.01f && Math.Abs(ay - 78f) < 0.01f, "anchor below stars");
 
+        // 6. Hero active skill CD resolution & round projection tests
+        Check(PlayerCombatStatusPolicy.ResolveHeroActiveSkillCd(true, 2, true, 1, true, 0) == 2, "local player uses Property.activeSkillCD even when SkillCD is 0");
+        Check(PlayerCombatStatusPolicy.ResolveHeroActiveSkillCd(false, 0, true, 1, true, 0) == 1, "teammate ignores Property.activeSkillCD==0 and uses tracked CD 1/3");
+        Check(PlayerCombatStatusPolicy.ResolveHeroActiveSkillCd(false, 0, false, -1, true, 2) == 2, "teammate falls back to authoritative PVE SkillCD before ledger entry arrives");
+        Check(PlayerCombatStatusPolicy.ProjectRoundCooldown(3, 6, 8) == 1, "round projection decrements 3 -> 1 across 2 rounds");
+        Check(PlayerCombatStatusPolicy.ProjectRoundCooldown(1, 6, 9) == 0, "round projection floors at 0");
+        Check(!PlayerCombatStatusPolicy.ShouldAcceptHeroInfoCd(false, 0, true, 2), "PVP masked 0 does not overwrite tracked active CD");
+        Check(PlayerCombatStatusPolicy.ShouldAcceptHeroInfoCd(true, 0, true, 2), "PVE authoritative 0 (ready) updates tracked CD");
+
         Console.WriteLine("PlayerStarBuff & MoveSpeed tests: " + (_checks - _failed) + "/" + _checks + " passed");
         return _failed == 0 ? 0 : 1;
     }

@@ -315,6 +315,39 @@ internal static class PlayerCombatStatusPolicy
         return false;
     }
 
+    internal static int ProjectRoundCooldown(int recordedCd, int recordedRound, int currentRound)
+    {
+        if (recordedCd < 0) return -1;
+        int elapsedRounds = currentRound > recordedRound ? (currentRound - recordedRound) : 0;
+        int projected = recordedCd - elapsedRounds;
+        return projected > 0 ? projected : 0;
+    }
+
+    internal static bool ShouldAcceptHeroInfoCd(bool isPve, int incomingCd, bool hasExistingTracked, int existingProjectedCd)
+    {
+        if (incomingCd < 0) return false;
+        return isPve || incomingCd > 0 || !hasExistingTracked || existingProjectedCd <= 0;
+    }
+
+    internal static int ResolveHeroActiveSkillCd(
+        bool isSelfOrWatchedSelf,
+        int propertyActiveCd,
+        bool hasTrackedCd,
+        int trackedCd,
+        bool isPve,
+        int cachedHeroInfoCd)
+    {
+        if (isSelfOrWatchedSelf)
+        {
+            if (propertyActiveCd >= 0) return propertyActiveCd;
+            if (hasTrackedCd && trackedCd >= 0) return trackedCd;
+            return cachedHeroInfoCd > 0 ? cachedHeroInfoCd : 0;
+        }
+        if (hasTrackedCd && trackedCd >= 0) return trackedCd;
+        if (isPve && cachedHeroInfoCd >= 0) return cachedHeroInfoCd;
+        return cachedHeroInfoCd > 0 ? cachedHeroInfoCd : 0;
+    }
+
     internal static string StripMarkup(string raw)
     {
         if (string.IsNullOrEmpty(raw)) return "";

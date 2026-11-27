@@ -1,7 +1,7 @@
 [
   {"id":"hand-monitor","name":"手牌监视","description":"局内手牌入口与已授权合作局队友同步","types":["HandCardDisplayManager","HandCardDock"]},
   {"id":"battle-stats","name":"对局统计","description":"局内统计挂件与对局数据","types":["BattleStatsOverlay"]},
-  {"id":"auto-social","name":"自动化社交","description":"整合局内快捷致谢、头像自动点赞、每日星币商店与结算自动截图","types":["XingShuAutoThanks","XingShuAutoPraise","DailyStarCoinShop","SettlementScreenshot"]},
+  {"id":"auto-social","name":"自动化社交","description":"整合局内快捷致谢、头像自动点赞、每日星币商店、结算自动截图与彩色动态名字","types":["XingShuAutoThanks","XingShuAutoPraise","DailyStarCoinShop","SettlementScreenshot","XingShuColorName"]},
   {"id":"defense-hint","name":"防御与卡牌点数提示","description":"本人防御/闪避所需点数参考，以及战斗卡牌打出后点数与加成明细","types":["DefensePointHint","BattleCardPointHint"]},
   {"id":"knockback-preview","name":"击飞预测","description":"局内击飞概率参考","types":["MonsterKillProbability"]},
   {"id":"monster-action","name":"怪物行动可视","description":"地图上实时显示怪物10格索敌推演、投掷点数、移动路径选择与主动技能冷却","types":["MonsterTargetRuntime","MonsterCooldownRuntime"]},

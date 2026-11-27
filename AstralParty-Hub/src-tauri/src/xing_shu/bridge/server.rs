@@ -954,8 +954,24 @@ impl BridgeServer {
         self.state.lock().unwrap().session_challenge.clone()
     }
 
-    pub fn write_session_challenge_file(&self) {
+    /// Writes the active session challenge to an explicit file path.
+    pub fn write_session_challenge_to_path(&self, path: &std::path::Path) {
         let challenge = self.session_challenge();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, challenge.as_bytes());
+    }
+
+    /// Writes the session challenge file for the live production server only.
+    /// Never overwrites the user's real %APPDATA% challenge from tests or unstarted instances.
+    pub fn write_session_challenge_file(&self) {
+        if cfg!(test) || self.security_policy().allow_test_runners {
+            return;
+        }
+        if !*self.is_server_started.lock().unwrap() {
+            return;
+        }
         let path = if let Ok(appdata) = std::env::var("APPDATA") {
             std::path::PathBuf::from(appdata).join("XingShu").join("Bridge").join("session_challenge.txt")
         } else if let Some(dir) = dirs::data_dir() {
@@ -964,15 +980,14 @@ impl BridgeServer {
             return;
         };
 
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&path, challenge.as_bytes());
+        self.write_session_challenge_to_path(&path);
     }
 
     pub fn set_session_challenge(&self, challenge: impl Into<String>) {
         self.state.lock().unwrap().session_challenge = challenge.into();
-        self.write_session_challenge_file();
+        if *self.is_server_started.lock().unwrap() {
+            self.write_session_challenge_file();
+        }
     }
 
     pub fn connection_state(&self) -> BridgeServerState {
@@ -5910,5 +5925,27 @@ mod tests {
         let stored_leave = server.get_runtime_match_context("conn_rt_ctx").expect("Match context exists");
         assert_eq!(stored_leave.room_id, 0);
         assert!(!stored_leave.in_match);
+    }
+
+    #[tokio::test]
+    async fn test_session_challenge_file_not_written_from_test_or_unstarted_server() {
+        let server = BridgeServer::new_test();
+        let real_path = std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| std::path::PathBuf::from(appdata).join("XingShu").join("Bridge").join("session_challenge.txt"));
+        let before_bytes = real_path.as_ref().and_then(|p| std::fs::read(p).ok());
+
+        server.set_session_challenge("test-isolated-challenge");
+        server.write_session_challenge_file();
+        server.start_with_pipe(r"\\.\pipe\XingShuBridge_test_challenge_guard");
+        server.stop();
+
+        let after_bytes = real_path.as_ref().and_then(|p| std::fs::read(p).ok());
+        assert_eq!(before_bytes, after_bytes, "test BridgeServer must never clobber real APPDATA challenge file");
+
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_file = dir.path().join("Bridge").join("session_challenge.txt");
+        server.write_session_challenge_to_path(&tmp_file);
+        assert_eq!(std::fs::read_to_string(&tmp_file).unwrap(), "test-isolated-challenge");
     }
 }

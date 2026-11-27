@@ -28,32 +28,7 @@ internal static class StatsWidgetPresenter
 
 	internal static string Name(string name)
 	{
-		if (string.IsNullOrEmpty(name))
-		{
-			return "—";
-		}
-		name = name.Replace('\n', ' ').Replace('\r', ' ');
-		int num = 0;
-		int num2 = 0;
-		int length = 0;
-		while (num2 < name.Length)
-		{
-			char c = name[num2++];
-			if (c >= '\ud800' && c <= '\udbff' && num2 < name.Length && name[num2] >= '\udc00' && name[num2] <= '\udfff')
-			{
-				num2++;
-			}
-			num++;
-			if (num == 6)
-			{
-				length = num2;
-			}
-			if (num > 7)
-			{
-				return name.Substring(0, length) + "…";
-			}
-		}
-		return name;
+		return XingShuRuntime.Social.ColorNamePolicy.FormatForUnityRichText(name, 7);
 	}
 
 	internal static StatsWidgetFrame Build(MatchLedger ledger, HashSet<long> live, bool enabled, DateTime since, string details)
@@ -117,7 +92,7 @@ internal static class StatsWidgetPresenter
 			if (row != null)
 			{
 				stringBuilder.Append("P").Append(i + 1).Append(' ')
-					.Append(row.Name)
+					.Append(XingShuRuntime.Social.ColorNamePolicy.StripRichTags(row.Name))
 					.Append("\n");
 				stringBuilder.Append(Exact(row.Kills, row.HpReady, row.KillsKnown)).Append(" / ").Append(Exact(row.Damage, row.HpReady, row.DamageKnown)).Append("(").Append(Exact(row.ActualDamage, row.ActualDamageReady, row.ActualDamageKnown)).Append(")")
 					.Append(" / ")

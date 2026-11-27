@@ -262,11 +262,10 @@ namespace XingShuRuntime.Utilities
         private int _fleetMapId = 82017;
         private int _fleetDifficulty = 2;
 
-        private Texture2D _hudBgTex;
-        private GUIStyle _hudBoxStyle;
         private GUIStyle _hudTitleStyle;
         private GUIStyle _hudRowStyle;
         private GUIStyle _hudWarnStyle;
+        private bool _guiInitFailed;
 
         internal bool IsEnabled
         {
@@ -2076,49 +2075,55 @@ namespace XingShuRuntime.Utilities
             _roomWarnText = null;
         }
 
-        // --- Lightweight top-right in-match credit strip (hidden when native room/hero card badges are shown) ---
+        // --- Lightweight room-only fallback strip (hidden in battle and whenever native room/hero card badges are shown) ---
+
+        private static bool IsInHomeScene()
+        {
+            return SimpleSingletonProvider<SceneManager>.hasInstance
+                && SimpleSingletonProvider<SceneManager>.inst?.currentType != null
+                && SimpleSingletonProvider<SceneManager>.inst.currentType.Value == SceneType.Home;
+        }
 
         private void OnGUI()
         {
-            if (!_enabled || !_hudStripEnabled || !_inRoom || _currentPeers.Count == 0 || _cardOverlayActive) return;
-            EnsureGuiStyles();
-
-            float rowH = 22f;
-            float w = 296f;
-            float h = 28f + _currentPeers.Count * rowH + 8f;
-            float x = Screen.width - w - 16f;
-            float y = 74f;
-            GUI.Box(new Rect(x, y, w, h), GUIContent.none, _hudBoxStyle);
-            GUI.Label(new Rect(x + 10f, y + 5f, w - 20f, 20f), "★ 星枢社区信誉监护", _hudTitleStyle);
-
-            for (int i = 0; i < _currentPeers.Count; i++)
+            if (!_enabled || !_hudStripEnabled || !_inRoom || _currentPeers.Count == 0 || _cardOverlayActive || _guiInitFailed || !IsInHomeScene()) return;
+            try
             {
-                RoomPeerModel peer = _currentPeers[i];
-                CreditProfileModel p = GetCachedProfile(peer.UidStr);
-                bool risky = IsPeerRisky(peer.UidStr, out string riskReason);
-                string name = string.IsNullOrEmpty(peer.PlainNick) ? peer.UidStr : peer.PlainNick;
-                if (name.Length > 10) name = name.Substring(0, 10);
-                string line = p != null
-                    ? string.Format(CultureInfo.InvariantCulture, "{0} · {1}分 拔{2:F0}%{3}",
-                        name, p.Score, p.GiveUpRate, risky && !string.IsNullOrEmpty(riskReason) ? " [" + riskReason + "]" : "")
-                    : name + " · 查询中…";
-                GUI.Label(new Rect(x + 10f, y + 26f + i * rowH, w - 20f, rowH), line, risky ? _hudWarnStyle : _hudRowStyle);
+                EnsureGuiStyles();
+
+                float rowH = 22f;
+                float w = 296f;
+                float h = 28f + _currentPeers.Count * rowH + 8f;
+                float x = Screen.width - w - 16f;
+                float y = 74f;
+                Color prevColor = GUI.color;
+                GUI.color = new Color(0.08f, 0.10f, 0.15f, 0.82f);
+                GUI.DrawTexture(new Rect(x, y, w, h), Texture2D.whiteTexture);
+                GUI.color = prevColor;
+                GUI.Label(new Rect(x + 10f, y + 5f, w - 20f, 20f), "★ 星枢社区信誉监护", _hudTitleStyle);
+
+                for (int i = 0; i < _currentPeers.Count; i++)
+                {
+                    RoomPeerModel peer = _currentPeers[i];
+                    CreditProfileModel p = GetCachedProfile(peer.UidStr);
+                    bool risky = IsPeerRisky(peer.UidStr, out string riskReason);
+                    string name = string.IsNullOrEmpty(peer.PlainNick) ? peer.UidStr : peer.PlainNick;
+                    if (name.Length > 10) name = name.Substring(0, 10);
+                    string line = p != null
+                        ? string.Format(CultureInfo.InvariantCulture, "{0} · {1}分 拔{2:F0}%{3}",
+                            name, p.Score, p.GiveUpRate, risky && !string.IsNullOrEmpty(riskReason) ? " [" + riskReason + "]" : "")
+                        : name + " · 查询中…";
+                    GUI.Label(new Rect(x + 10f, y + 26f + i * rowH, w - 20f, rowH), line, risky ? _hudWarnStyle : _hudRowStyle);
+                }
+            }
+            catch
+            {
+                _guiInitFailed = true;
             }
         }
 
         private void EnsureGuiStyles()
         {
-            if (_hudBgTex == null)
-            {
-                _hudBgTex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
-                _hudBgTex.SetPixel(0, 0, new Color(0.08f, 0.10f, 0.15f, 0.78f));
-                _hudBgTex.Apply();
-            }
-            if (_hudBoxStyle == null)
-            {
-                _hudBoxStyle = new GUIStyle(GUI.skin.box);
-                _hudBoxStyle.normal.background = _hudBgTex;
-            }
             if (_hudTitleStyle == null)
             {
                 _hudTitleStyle = new GUIStyle(GUI.skin.label)
@@ -2403,11 +2408,6 @@ namespace XingShuRuntime.Utilities
                 try { _httpInFlight[i].Request.Dispose(); } catch { }
             }
             _httpInFlight.Clear();
-            if (_hudBgTex != null)
-            {
-                Destroy(_hudBgTex);
-                _hudBgTex = null;
-            }
             if (_instance == this) _instance = null;
         }
     }

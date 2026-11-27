@@ -72,6 +72,7 @@ namespace XingShuRuntime.UI
             {
                 Instance.RebuildCenterUi();
             }
+            AssistBallGUI.RefreshQuickMenuSkin();
         }
 
         internal static bool IsGlassActive => Instance != null ? Instance._activeBuiltStyle == 1 : CenterStyle == 1;
@@ -79,7 +80,11 @@ namespace XingShuRuntime.UI
         internal static void ApplyGlassAppearanceLive()
         {
             XingShuGlassSkin.RefreshPaletteFromConfig();
-            if (Instance == null || Instance._activeBuiltStyle != 1) return;
+            if (Instance == null || Instance._activeBuiltStyle != 1)
+            {
+                AssistBallGUI.RefreshQuickMenuSkin();
+                return;
+            }
             if (Instance._glassBackdropImage != null) Instance._glassBackdropImage.color = XingShuGlassSkin.BackdropDim;
             if (Instance._glassShellImage != null) Instance._glassShellImage.sprite = XingShuGlassSkin.ShellSprite;
             if (Instance._glassRailImage != null) Instance._glassRailImage.sprite = XingShuGlassSkin.RailSprite;
@@ -106,6 +111,7 @@ namespace XingShuRuntime.UI
                     }
                 }
             }
+            AssistBallGUI.RefreshQuickMenuSkin();
         }
 
         private bool _isOpen;
@@ -1318,7 +1324,7 @@ namespace XingShuRuntime.UI
                 case 15: return LauncherModules.CanLoad("MegathSkillDamageHint");
                 case 16: return LauncherModules.CanLoad("PlayerCombatStatusHud");
                 case 17: return LauncherModules.CanLoad("PlayerStarBuffHud");
-                case 18: return LauncherModules.CanLoad("XingShuAutoThanks") || LauncherModules.CanLoad("XingShuAutoPraise") || LauncherModules.CanLoad("DailyStarCoinShop") || LauncherModules.CanLoad("SettlementScreenshot");
+                case 18: return LauncherModules.CanLoad("XingShuAutoThanks") || LauncherModules.CanLoad("XingShuAutoPraise") || LauncherModules.CanLoad("DailyStarCoinShop") || LauncherModules.CanLoad("SettlementScreenshot") || LauncherModules.CanLoad("XingShuColorName");
                 case 19: return LauncherModules.CanLoad("CreditGuardRuntime");
                 case 20:
                 case 21: return false;

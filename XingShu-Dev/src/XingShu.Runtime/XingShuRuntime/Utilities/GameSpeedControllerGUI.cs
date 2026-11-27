@@ -287,6 +287,7 @@ internal sealed class GameSpeedControllerGUI : MonoBehaviour
 	{
 		XingShuSpeedEngineCoordinator.Update();
 		ApplySpeedImmediate();
+		PingDisplayTiming.TickMapDistanceTips();
 
 		if (XingShuHotkeys.TryConsume(XingShuShortcut.Acceleration, "GameSpeedControllerGUI"))
 		{

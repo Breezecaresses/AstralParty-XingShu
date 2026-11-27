@@ -86,6 +86,50 @@ namespace XingShuRuntime.Utilities
         }
     }
 
+    internal static class MapDistanceTimingState
+    {
+        internal static bool ComputeHold(
+            bool visible,
+            float currentHideAt,
+            float lastAppliedHideAt,
+            float unscaledNow,
+            double realNow,
+            float baseDurationSeconds,
+            bool extendEnabled,
+            float extraSeconds,
+            ref bool tracking,
+            ref double realDeadline,
+            out float nextHideAt)
+        {
+            if (!visible)
+            {
+                tracking = false;
+                realDeadline = 0d;
+                nextHideAt = 0f;
+                return false;
+            }
+
+            if (!tracking || Math.Abs(currentHideAt - lastAppliedHideAt) > 1.0f)
+            {
+                float baseSec = baseDurationSeconds > 0.1f ? baseDurationSeconds : 3.0f;
+                float addSec = extendEnabled ? Math.Max(0f, extraSeconds) : 0f;
+                realDeadline = realNow + baseSec + addSec;
+                tracking = true;
+            }
+
+            if (realNow < realDeadline)
+            {
+                nextHideAt = unscaledNow + 60f;
+                return true;
+            }
+
+            tracking = false;
+            realDeadline = 0d;
+            nextHideAt = unscaledNow - 0.1f;
+            return true;
+        }
+    }
+
     internal static class PingClockTimingBridge
     {
         internal static Func<bool> IsAccelerated = () => false;

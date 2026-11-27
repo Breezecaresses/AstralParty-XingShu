@@ -295,6 +295,8 @@ namespace XingShu.Bridge
 
             while (_isRunning)
             {
+                bool handshakeCompletedThisSession = false;
+                bool backoffApplied = false;
                 try
                 {
                     try
@@ -310,8 +312,6 @@ namespace XingShu.Bridge
 
                     if (!_isRunning) break;
 
-                    // 连接成功，重置单调退避延迟
-                    currentBackoffMs = 1000;
                     _isConnected = true;
                     _isHandshakeComplete = false;
                     _sessionDoneEvent.Reset();
@@ -329,18 +329,26 @@ namespace XingShu.Bridge
 
                     // 运行独立 Reader 与 Writer/Heartbeat 会话
                     RunSession();
+                    handshakeCompletedThisSession = _isHandshakeComplete;
+                    if (handshakeCompletedThisSession)
+                    {
+                        currentBackoffMs = 1000;
+                    }
                 }
                 catch (IOException)
                 {
+                    backoffApplied = true;
                     ApplyBackoff(ref currentBackoffMs);
                 }
                 catch (TimeoutException)
                 {
+                    backoffApplied = true;
                     ApplyBackoff(ref currentBackoffMs);
                 }
                 catch (Exception ex)
                 {
                     Log(string.Format("[XingShuBridgeClient] 连接循环异常: {0} - {1}", ex.GetType().Name, ex.Message));
+                    backoffApplied = true;
                     ApplyBackoff(ref currentBackoffMs);
                 }
                 finally
@@ -352,6 +360,11 @@ namespace XingShu.Bridge
                         if (OnDisconnected != null) OnDisconnected.Invoke();
                     }
                     catch { }
+                }
+
+                if (_isRunning && !backoffApplied && !handshakeCompletedThisSession)
+                {
+                    ApplyBackoff(ref currentBackoffMs);
                 }
             }
         }
@@ -541,7 +554,13 @@ namespace XingShu.Bridge
         {
             if (!_isRunning) return;
 
-            Thread.Sleep(currentBackoffMs);
+            int remaining = currentBackoffMs;
+            while (_isRunning && remaining > 0)
+            {
+                int slice = remaining > 100 ? 100 : remaining;
+                Thread.Sleep(slice);
+                remaining -= slice;
+            }
 
             // 单调重连退避: 1000ms -> 2000ms -> 5000ms
             if (currentBackoffMs < 2000)
@@ -743,6 +762,17 @@ namespace XingShu.Bridge
                         if (_mainThreadMessages.Count >= 128) _mainThreadMessages.Dequeue();
                         _mainThreadMessages.Enqueue(env);
                     }
+                    break;
+
+                case BridgeProtocol.TypeError:
+                    string errCode = "";
+                    string errMsg = "";
+                    if (env.payload is Dictionary<string, object> errDict)
+                    {
+                        if (errDict.TryGetValue("code", out var ecObj) && ecObj != null) errCode = Convert.ToString(ecObj);
+                        if (errDict.TryGetValue("message", out var emObj) && emObj != null) errMsg = Convert.ToString(emObj);
+                    }
+                    Log(string.Format("[XingShuBridgeClient] 收到 Hub ERROR: code='{0}', message='{1}'", errCode, errMsg));
                     break;
 
                 default:

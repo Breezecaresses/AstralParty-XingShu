@@ -74,6 +74,7 @@ namespace XingShuRuntime.UI
         private static readonly Dictionary<int, CachedPageNodes> _pageNodeCache = new Dictionary<int, CachedPageNodes>();
 
         internal static bool IsActive => XingShuUICenter.IsGlassActive;
+        internal static int PaletteRevision => _paletteRevision;
 
         internal static void RefreshPaletteFromConfig()
         {
@@ -249,6 +250,14 @@ namespace XingShuRuntime.UI
         internal static Sprite ButtonSprite => GetRoundedPanelSprite(9, ButtonFill, new Color(1f, 1f, 1f, 0.22f), 1.2f);
         internal static Sprite ButtonAccentSprite => GetRoundedPanelSprite(9, ButtonAccentFill, new Color(0.75f, 0.90f, 1f, 0.45f), 1.2f);
         internal static Sprite PillBadgeSprite => GetRoundedPanelSprite(10, new Color(0.32f, 0.65f, 1f, 0.22f), new Color(0.52f, 0.80f, 1f, 0.42f), 1f);
+        internal static Sprite ToggleBgSprite
+        {
+            get { EnsureControlSprites(); return _cachedToggleBgSprite; }
+        }
+        internal static Sprite ToggleCheckSprite
+        {
+            get { EnsureControlSprites(); return _cachedToggleCheckSprite; }
+        }
 
         internal static void ApplySelectableButton(Button btn, bool selected)
         {

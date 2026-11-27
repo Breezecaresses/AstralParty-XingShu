@@ -44,6 +44,19 @@ namespace XingShuRuntime.UI
         private Text _tipText;
         private float _lastObservedPingExtend = -1f;
 
+        // 思考时间倍数卡片 (1x ~ 20x，默认 10x)
+        private Slider _thinkingTimeSlider;
+        private Text _thinkingTimeValueText;
+        private Text _thinkingLiveStatusText;
+        private string _lastThinkingLiveStatus;
+        private readonly List<Button> _thinkingPresetButtons = new List<Button>();
+        private readonly List<Image> _thinkingPresetImages = new List<Image>();
+        private readonly List<Text> _thinkingPresetTexts = new List<Text>();
+        private static readonly float[] THINKING_PRESET_VALUES = new float[] { 1.0f, 5.0f, 10.0f, 15.0f, 20.0f };
+        private static readonly string[] THINKING_PRESET_LABELS = new string[] { "1x 原速", "5x", "10x 默认", "15x", "20x 最高" };
+        private float _lastObservedThinkingScale = -1f;
+        private bool _lastObservedThinkingModule = false;
+
         private readonly List<Button> _presetButtons = new List<Button>();
         private readonly List<Image> _presetImages = new List<Image>();
         private readonly List<Text> _presetTexts = new List<Text>();
@@ -81,16 +94,16 @@ namespace XingShuRuntime.UI
             Sprite btnSecSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
             Sprite btnSelSprite = XingShuUIAssetService.GetSprite("button_selected.png");
 
+            XingShuViewCardHelper.CreatePageScroll(_root, "GameSpeedScrollView", out GameObject content);
+
             // ==========================================
-            // 0. 顶部引擎切换选择器 (Engine Selector Card: 48px, y: 0)
+            // 0. 顶部引擎切换选择器 (Engine Selector Card: 48px)
             // ==========================================
-            GameObject selectorCard = XingShuUIFactory.CreateUIObject("EngineSelectorCard", _root);
-            RectTransform selRt = selectorCard.GetComponent<RectTransform>();
-            selRt.anchorMin = new Vector2(0f, 1f);
-            selRt.anchorMax = new Vector2(1f, 1f);
-            selRt.pivot = new Vector2(0.5f, 1f);
-            selRt.anchoredPosition = new Vector2(0f, 0f);
-            selRt.sizeDelta = new Vector2(0f, 48f);
+            GameObject selectorCard = XingShuUIFactory.CreateUIObject("EngineSelectorCard", content);
+            LayoutElement selLe = selectorCard.AddComponent<LayoutElement>();
+            selLe.minHeight = 48f;
+            selLe.preferredHeight = 48f;
+            selLe.flexibleHeight = 0f;
 
             Image selBg = selectorCard.AddComponent<Image>();
             selBg.sprite = cardBaseSprite;
@@ -139,15 +152,13 @@ namespace XingShuRuntime.UI
             }
 
             // ==========================================
-            // 1. 特色功能卡片 (Feature Header Card: 76px, y: -60px)
+            // 1. 特色功能卡片 (Feature Header Card: 76px)
             // ==========================================
-            GameObject headerGo = XingShuUIFactory.CreateUIObject("FeatureHeaderCard", _root);
-            RectTransform headerRt = headerGo.GetComponent<RectTransform>();
-            headerRt.anchorMin = new Vector2(0f, 1f);
-            headerRt.anchorMax = new Vector2(1f, 1f);
-            headerRt.pivot = new Vector2(0.5f, 1f);
-            headerRt.anchoredPosition = new Vector2(0f, -60f);
-            headerRt.sizeDelta = new Vector2(0f, 76f);
+            GameObject headerGo = XingShuUIFactory.CreateUIObject("FeatureHeaderCard", content);
+            LayoutElement headerLe = headerGo.AddComponent<LayoutElement>();
+            headerLe.minHeight = 76f;
+            headerLe.preferredHeight = 76f;
+            headerLe.flexibleHeight = 0f;
 
             Image headerBg = headerGo.AddComponent<Image>();
             headerBg.sprite = cfhSprite;
@@ -205,15 +216,13 @@ namespace XingShuRuntime.UI
             btRt.offsetMax = Vector2.zero;
 
             // ==========================================
-            // 2. 启用开关卡片 (Enable Row Card: 60px, y: -148px)
+            // 2. 启用开关卡片 (Enable Row Card: 60px)
             // ==========================================
-            GameObject switchCard = XingShuUIFactory.CreateUIObject("EnableRowCard", _root);
-            RectTransform switchRt = switchCard.GetComponent<RectTransform>();
-            switchRt.anchorMin = new Vector2(0f, 1f);
-            switchRt.anchorMax = new Vector2(1f, 1f);
-            switchRt.pivot = new Vector2(0.5f, 1f);
-            switchRt.anchoredPosition = new Vector2(0f, -148f);
-            switchRt.sizeDelta = new Vector2(0f, 60f);
+            GameObject switchCard = XingShuUIFactory.CreateUIObject("EnableRowCard", content);
+            LayoutElement switchLe = switchCard.AddComponent<LayoutElement>();
+            switchLe.minHeight = 60f;
+            switchLe.preferredHeight = 60f;
+            switchLe.flexibleHeight = 0f;
 
             Image switchCardBg = switchCard.AddComponent<Image>();
             switchCardBg.sprite = cardBaseSprite;
@@ -300,15 +309,13 @@ namespace XingShuRuntime.UI
             }
 
             // ==========================================
-            // 3. 核心调速卡片 (Speed Control Card: 196px, y: -220px)
+            // 3. 核心调速卡片 (Speed Control Card: 196px)
             // ==========================================
-            GameObject speedCard = XingShuUIFactory.CreateUIObject("SpeedControlCard", _root);
-            RectTransform speedCardRt = speedCard.GetComponent<RectTransform>();
-            speedCardRt.anchorMin = new Vector2(0f, 1f);
-            speedCardRt.anchorMax = new Vector2(1f, 1f);
-            speedCardRt.pivot = new Vector2(0.5f, 1f);
-            speedCardRt.anchoredPosition = new Vector2(0f, -220f);
-            speedCardRt.sizeDelta = new Vector2(0f, 196f);
+            GameObject speedCard = XingShuUIFactory.CreateUIObject("SpeedControlCard", content);
+            LayoutElement speedLe = speedCard.AddComponent<LayoutElement>();
+            speedLe.minHeight = 196f;
+            speedLe.preferredHeight = 196f;
+            speedLe.flexibleHeight = 0f;
 
             Image speedCardBg = speedCard.AddComponent<Image>();
             speedCardBg.sprite = cardBaseSprite;
@@ -363,36 +370,34 @@ namespace XingShuRuntime.UI
             CreatePresetButtons(speedCard, 1.0f);
 
             // ==========================================
-            // 3.5 加速模式右侧标点延长卡片 (Ping Extend Card: 68px, y: -424px)
+            // 3.5 加速模式标记与测距延长卡片 (Ping Extend Card: 72px)
             // ==========================================
-            GameObject pingCard = XingShuUIFactory.CreateUIObject("PingExtendCard", _root);
-            RectTransform pingRt = pingCard.GetComponent<RectTransform>();
-            pingRt.anchorMin = new Vector2(0f, 1f);
-            pingRt.anchorMax = new Vector2(1f, 1f);
-            pingRt.pivot = new Vector2(0.5f, 1f);
-            pingRt.anchoredPosition = new Vector2(0f, -424f);
-            pingRt.sizeDelta = new Vector2(0f, 68f);
+            GameObject pingCard = XingShuUIFactory.CreateUIObject("PingExtendCard", content);
+            LayoutElement pingLe = pingCard.AddComponent<LayoutElement>();
+            pingLe.minHeight = 72f;
+            pingLe.preferredHeight = 72f;
+            pingLe.flexibleHeight = 0f;
 
             Image pingBg = pingCard.AddComponent<Image>();
             pingBg.sprite = cardBaseSprite;
             pingBg.type = Image.Type.Sliced;
             pingBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
 
-            Text pingTitle = XingShuUIFactory.CreateText(pingCard, "PingTitle", "加速模式右侧标点延长", 14, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Text pingTitle = XingShuUIFactory.CreateText(pingCard, "PingTitle", "加速模式标记与测距延长", 14, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
             RectTransform ptRt = pingTitle.rectTransform;
             ptRt.anchorMin = new Vector2(0f, 1f);
             ptRt.anchorMax = new Vector2(0f, 1f);
             ptRt.pivot = new Vector2(0f, 1f);
             ptRt.anchoredPosition = new Vector2(24f, -10f);
-            ptRt.sizeDelta = new Vector2(220f, 22f);
+            ptRt.sizeDelta = new Vector2(240f, 22f);
 
-            Text pingSub = XingShuUIFactory.CreateText(pingCard, "PingSub", "加速时按真实时间并额外延长气泡与标记显示", 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
+            Text pingSub = XingShuUIFactory.CreateText(pingCard, "PingSub", "加速时按真实时间延长右侧标点气泡、地图标记及放大镜地块数字显示", 11, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
             RectTransform psRt = pingSub.rectTransform;
             psRt.anchorMin = new Vector2(0f, 1f);
             psRt.anchorMax = new Vector2(0f, 1f);
             psRt.pivot = new Vector2(0f, 1f);
             psRt.anchoredPosition = new Vector2(24f, -34f);
-            psRt.sizeDelta = new Vector2(310f, 20f);
+            psRt.sizeDelta = new Vector2(420f, 24f);
 
             float initExtend = PingDisplayTiming.ExtensionSeconds;
             _lastObservedPingExtend = initExtend;
@@ -424,15 +429,80 @@ namespace XingShuRuntime.UI
             peSlRt.sizeDelta = new Vector2(210f, 26f);
 
             // ==========================================
-            // 4. 底部说明贴士卡片 (Tip Card: 38px, y: -500px)
+            // 3.8 思考时间倍数调节卡片 (Thinking Time Card: 176px)
             // ==========================================
-            GameObject tipCard = XingShuUIFactory.CreateUIObject("TipCard", _root);
-            RectTransform tipRt = tipCard.GetComponent<RectTransform>();
-            tipRt.anchorMin = new Vector2(0f, 1f);
-            tipRt.anchorMax = new Vector2(1f, 1f);
-            tipRt.pivot = new Vector2(0.5f, 1f);
-            tipRt.anchoredPosition = new Vector2(0f, -500f);
-            tipRt.sizeDelta = new Vector2(0f, 38f);
+            GameObject thinkCard = XingShuUIFactory.CreateUIObject("ThinkingTimeCard", content);
+            LayoutElement thinkLe = thinkCard.AddComponent<LayoutElement>();
+            thinkLe.minHeight = 176f;
+            thinkLe.preferredHeight = 176f;
+            thinkLe.flexibleHeight = 0f;
+
+            Image thinkBg = thinkCard.AddComponent<Image>();
+            thinkBg.sprite = cardBaseSprite;
+            thinkBg.type = Image.Type.Sliced;
+            thinkBg.color = XingShuUIAssetService.IsFallbackSprite(cardBaseSprite) ? XingShuUITheme.Card : Color.white;
+
+            Text thinkTitle = XingShuUIFactory.CreateText(thinkCard, "ThinkingTitle", "思考时间倍数 (1x ~ 20x)", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(thinkTitle.rectTransform, new Vector2(24f, -12f), new Vector2(280f, 24f));
+
+            Text thinkSub = XingShuUIFactory.CreateText(thinkCard, "ThinkingSub", "选人、自身操作与筹码按真实时钟计时（默认 10x，最低 1x 原速，最高 20x）", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            XingShuViewCardHelper.PlaceStretchTop(thinkSub.rectTransform, 38f, 20f, 48f);
+
+            bool hasThinking = LauncherModules.CanLoad(nameof(ThinkingTime));
+            float initThink = hasThinking ? ThinkingTime.ScaleMultiplier : ThinkingTime.DefaultScale;
+            _lastObservedThinkingScale = initThink;
+            _lastObservedThinkingModule = hasThinking;
+
+            _thinkingTimeValueText = XingShuUIFactory.CreateText(
+                thinkCard,
+                "ThinkingTimeVal",
+                hasThinking ? FormatThinkingScale(initThink) : "未安装模块",
+                22,
+                XingShuUITheme.NumericAccent,
+                TextAnchor.MiddleRight,
+                FontStyle.Bold);
+            _thinkingTimeValueText.verticalOverflow = VerticalWrapMode.Overflow;
+            XingShuViewCardHelper.PlaceTopRight(_thinkingTimeValueText.rectTransform, new Vector2(-24f, -10f), new Vector2(130f, 28f));
+
+            _thinkingTimeSlider = XingShuUIFactory.CreateSlider(
+                thinkCard,
+                "ThinkingTimeSlider",
+                ThinkingTime.MinScale,
+                ThinkingTime.MaxScale,
+                initThink,
+                delegate(float val)
+                {
+                    if (_suppressCallbacks || !LauncherModules.CanLoad(nameof(ThinkingTime))) return;
+                    float snapped = Mathf.Clamp(Mathf.Round(val), ThinkingTime.MinScale, ThinkingTime.MaxScale);
+                    ThinkingTime.ScaleMultiplier = snapped;
+                    _lastObservedThinkingScale = snapped;
+                    if (_thinkingTimeValueText != null) _thinkingTimeValueText.text = FormatThinkingScale(snapped);
+                    UpdateThinkingPresetVisuals(snapped);
+                });
+            _thinkingTimeSlider.wholeNumbers = true;
+            _thinkingTimeSlider.interactable = hasThinking;
+            XingShuViewCardHelper.PlaceStretchTop(_thinkingTimeSlider.GetComponent<RectTransform>(), 66f, 28f, 48f);
+
+            CreateThinkingPresetButtons(thinkCard, initThink, hasThinking);
+
+            _thinkingLiveStatusText = XingShuUIFactory.CreateText(
+                thinkCard,
+                "ThinkingLiveStatus",
+                FormatThinkingLiveStatus(out bool initThinkActive),
+                11,
+                initThinkActive ? XingShuUITheme.Positive : XingShuUITheme.MutedText,
+                TextAnchor.MiddleLeft);
+            XingShuViewCardHelper.PlaceStretchTop(_thinkingLiveStatusText.rectTransform, 148f, 20f, 48f);
+            _lastThinkingLiveStatus = _thinkingLiveStatusText.text;
+
+            // ==========================================
+            // 4. 底部说明贴士卡片 (Tip Card: 38px)
+            // ==========================================
+            GameObject tipCard = XingShuUIFactory.CreateUIObject("TipCard", content);
+            LayoutElement tipLe = tipCard.AddComponent<LayoutElement>();
+            tipLe.minHeight = 38f;
+            tipLe.preferredHeight = 38f;
+            tipLe.flexibleHeight = 0f;
 
             Image tipBg = tipCard.AddComponent<Image>();
             tipBg.sprite = cardBaseSprite;
@@ -452,6 +522,120 @@ namespace XingShuRuntime.UI
         }
 
         private static string FormatExtend(float seconds) => seconds <= 0.05f ? "仅原真实时长" : $"+{seconds:0.0}s";
+
+        private static string FormatThinkingScale(float scale)
+        {
+            int rounded = Mathf.RoundToInt(scale);
+            return rounded <= 1 ? "1x 原速" : $"{rounded}x";
+        }
+
+        private static string FormatThinkingLiveStatus(out bool active)
+        {
+            if (!LauncherModules.CanLoad(nameof(ThinkingTime)))
+            {
+                active = false;
+                return "未安装思考时间模块";
+            }
+            if (ThinkingTime.HasActiveTurnTimer)
+            {
+                active = true;
+                int remain = Mathf.Max(0, Mathf.CeilToInt(ThinkingTime.ActiveRemainingSeconds));
+                int total = Mathf.Max(1, Mathf.RoundToInt(ThinkingTime.ActiveScaledDuration));
+                int baseSec = Mathf.Max(1, Mathf.RoundToInt(ThinkingTime.ActiveBaseDuration));
+                return $"● 当前回合计时生效中 · 剩余 {remain}s / {total}s（基础 {baseSec}s × {FormatThinkingScale(ThinkingTime.ScaleMultiplier)}，调节实时生效）";
+            }
+            active = false;
+            return "○ 当前无进行中的操作倒计时 · 选人或自身回合开启后自动生效（单人剧情/不限时房无回合计时）";
+        }
+
+        private void CreateThinkingPresetButtons(GameObject parent, float currentScale, bool enabled)
+        {
+            GameObject container = XingShuUIFactory.CreateUIObject("ThinkingPresetContainer", parent);
+            RectTransform containerRt = container.GetComponent<RectTransform>();
+            containerRt.anchorMin = new Vector2(0f, 1f);
+            containerRt.anchorMax = new Vector2(1f, 1f);
+            containerRt.pivot = new Vector2(0.5f, 1f);
+            containerRt.anchoredPosition = new Vector2(0f, -104f);
+            containerRt.sizeDelta = new Vector2(-48f, 36f);
+
+            HorizontalLayoutGroup hlg = container.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 12f;
+            hlg.childAlignment = TextAnchor.MiddleCenter;
+            hlg.childForceExpandWidth = true;
+            hlg.childForceExpandHeight = true;
+
+            Sprite btnSecSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
+            Sprite btnSelSprite = XingShuUIAssetService.GetSprite("button_selected.png");
+
+            _thinkingPresetButtons.Clear();
+            _thinkingPresetImages.Clear();
+            _thinkingPresetTexts.Clear();
+
+            for (int i = 0; i < THINKING_PRESET_VALUES.Length; i++)
+            {
+                float target = THINKING_PRESET_VALUES[i];
+                string label = THINKING_PRESET_LABELS[i];
+                bool isMatching = enabled && Mathf.Abs(currentScale - target) < 0.2f;
+
+                Sprite activeSprite = isMatching ? btnSelSprite : btnSecSprite;
+                Color activeColor = XingShuUIAssetService.IsFallbackSprite(activeSprite)
+                    ? (isMatching ? XingShuUITheme.Pink : new Color(0.92f, 0.94f, 0.97f, 1f))
+                    : Color.white;
+
+                Button btn = XingShuUIFactory.CreateButton(container, "Btn_ThinkPreset_" + target, label,
+                    activeSprite,
+                    activeColor,
+                    isMatching ? Color.white : XingShuUITheme.PrimaryText,
+                    delegate
+                    {
+                        if (!LauncherModules.CanLoad(nameof(ThinkingTime))) return;
+                        ThinkingTime.ScaleMultiplier = target;
+                        _lastObservedThinkingScale = target;
+                        _suppressCallbacks = true;
+                        try { if (_thinkingTimeSlider != null) _thinkingTimeSlider.value = target; }
+                        finally { _suppressCallbacks = false; }
+                        if (_thinkingTimeValueText != null) _thinkingTimeValueText.text = FormatThinkingScale(target);
+                        UpdateThinkingPresetVisuals(target);
+                    }, 13);
+                btn.interactable = enabled;
+
+                Image btnImg = btn.GetComponent<Image>();
+                Text btnTxt = btn.GetComponentInChildren<Text>();
+                if (btnTxt != null)
+                {
+                    btnTxt.alignment = TextAnchor.MiddleCenter;
+                    btnTxt.fontStyle = FontStyle.Bold;
+                    RectTransform pbtRt = btnTxt.rectTransform;
+                    pbtRt.anchorMin = Vector2.zero;
+                    pbtRt.anchorMax = Vector2.one;
+                    pbtRt.pivot = new Vector2(0.5f, 0.5f);
+                    pbtRt.offsetMin = Vector2.zero;
+                    pbtRt.offsetMax = Vector2.zero;
+                }
+
+                _thinkingPresetButtons.Add(btn);
+                _thinkingPresetImages.Add(btnImg);
+                _thinkingPresetTexts.Add(btnTxt);
+            }
+        }
+
+        private void UpdateThinkingPresetVisuals(float currentScale)
+        {
+            bool enabled = LauncherModules.CanLoad(nameof(ThinkingTime));
+            for (int i = 0; i < _thinkingPresetButtons.Count; i++)
+            {
+                if (i >= THINKING_PRESET_VALUES.Length) break;
+                if (_thinkingPresetButtons[i] != null) _thinkingPresetButtons[i].interactable = enabled;
+                bool isMatching = enabled && Mathf.Abs(currentScale - THINKING_PRESET_VALUES[i]) < 0.2f;
+                Image img = i < _thinkingPresetImages.Count ? _thinkingPresetImages[i] : null;
+                Text txt = i < _thinkingPresetTexts.Count ? _thinkingPresetTexts[i] : null;
+                XingShuGlassSkin.ApplySelectableButton(img, txt, isMatching);
+                if (txt != null)
+                {
+                    txt.fontStyle = FontStyle.Bold;
+                }
+            }
+        }
 
         private static string ShortcutTip() => "[" + XingShuHotkeys.Display(XingShuShortcut.SpeedPanel) + "] 呼出控制面板 · [" + XingShuHotkeys.Display(XingShuShortcut.Acceleration) + "] 快速开关加速";
 
@@ -891,6 +1075,41 @@ namespace XingShuRuntime.UI
                     finally { _suppressCallbacks = false; }
                 }
                 if (_pingExtendValueText != null) _pingExtendValueText.text = FormatExtend(curExtend);
+            }
+            if (_lastObservedThinkingModule != LauncherModules.CanLoad(nameof(ThinkingTime)))
+            {
+                _lastObservedThinkingModule = LauncherModules.CanLoad(nameof(ThinkingTime));
+                if (_thinkingTimeSlider != null) _thinkingTimeSlider.interactable = _lastObservedThinkingModule;
+                float curT = _lastObservedThinkingModule ? ThinkingTime.ScaleMultiplier : ThinkingTime.DefaultScale;
+                _lastObservedThinkingScale = curT;
+                if (_thinkingTimeValueText != null)
+                {
+                    _thinkingTimeValueText.text = _lastObservedThinkingModule ? FormatThinkingScale(curT) : "未安装模块";
+                }
+                UpdateThinkingPresetVisuals(curT);
+            }
+            else if (_lastObservedThinkingModule)
+            {
+                float curThinking = ThinkingTime.ScaleMultiplier;
+                if (Mathf.Abs(curThinking - _lastObservedThinkingScale) > 0.05f)
+                {
+                    _lastObservedThinkingScale = curThinking;
+                    if (_thinkingTimeSlider != null && Mathf.Abs(_thinkingTimeSlider.value - curThinking) > 0.05f)
+                    {
+                        _suppressCallbacks = true;
+                        try { _thinkingTimeSlider.value = curThinking; }
+                        finally { _suppressCallbacks = false; }
+                    }
+                    if (_thinkingTimeValueText != null) _thinkingTimeValueText.text = FormatThinkingScale(curThinking);
+                    UpdateThinkingPresetVisuals(curThinking);
+                }
+            }
+            string liveThinkStatus = FormatThinkingLiveStatus(out bool liveThinkActive);
+            if (_thinkingLiveStatusText != null && liveThinkStatus != _lastThinkingLiveStatus)
+            {
+                _lastThinkingLiveStatus = liveThinkStatus;
+                _thinkingLiveStatusText.text = liveThinkStatus;
+                _thinkingLiveStatusText.color = liveThinkActive ? XingShuUITheme.Positive : XingShuUITheme.MutedText;
             }
             string curHotkey = XingShuHotkeys.Display(XingShuShortcut.SpeedPanel);
             if (curHotkey != _lastObservedHotkey)

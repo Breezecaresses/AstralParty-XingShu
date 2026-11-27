@@ -159,6 +159,7 @@ public sealed class MonsterCooldownRuntime : MonoBehaviour
     {
         try
         {
+            PlayerCombatStatusHud.ObserveHeroInfo(model);
             var self = _instance;
             if (model == null || self == null || !self.Context(false) || model.Cd < 0) return;
             var monster = self.Monster(model.PlayerId);
@@ -174,6 +175,7 @@ public sealed class MonsterCooldownRuntime : MonoBehaviour
     {
         try
         {
+            PlayerCombatStatusHud.ObserveAttributes(model);
             var self = _instance;
             if (model == null || self == null || !self.Context(false)) return;
             foreach (var effect in model.EffectDatas)
@@ -196,6 +198,7 @@ public sealed class MonsterCooldownRuntime : MonoBehaviour
     {
         try
         {
+            PlayerCombatStatusHud.ObserveUse(model);
             var self = _instance;
             if (model == null || !model.UseSkill || self == null || !self.Context(false)) return;
             var monster = self.Monster(model.PlayerId);
@@ -217,6 +220,7 @@ public sealed class MonsterCooldownRuntime : MonoBehaviour
     {
         try
         {
+            PlayerCombatStatusHud.ObserveRound(model);
             var self = _instance;
             if (model == null || self == null || !self.Context(false)) return;
             int before = self._ledger.Round;

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using XingShuRuntime.Core;
 using XingShuRuntime.Social;
 using XingShuRuntime.Utilities;
@@ -8,7 +9,8 @@ namespace XingShuRuntime.UI
 {
     /// <summary>
     /// Merged page view for Automated Social Features (自动化社交, Tab 18):
-    /// combines Auto Quick Thanks, Avatar Auto Praise, Daily Star Coin Shop, and Auto Settlement Screenshot.
+    /// combines Auto Quick Thanks, Avatar Auto Praise, Daily Star Coin Shop,
+    /// Auto Settlement Screenshot, and Color Dynamic Nickname Adaptation.
     /// </summary>
     internal sealed class XingShuAutoSocialView
     {
@@ -29,6 +31,21 @@ namespace XingShuRuntime.UI
 
         private Toggle _settlementScreenshotToggle;
         private Text _settlementScreenshotPathText;
+
+        private Toggle _colorNameToggle;
+        private Button _colorScopeSelfBtn;
+        private Button _colorScopeAllBtn;
+        private readonly List<Button> _colorPresetBtns = new List<Button>();
+        private Button _colorBoldBtn;
+        private Button _colorItalicBtn;
+        private Button _colorUnderlineBtn;
+        private Slider _colorSpeedSlider;
+        private Text _colorSpeedValueText;
+        private int _lastColorScope = -1;
+        private int _lastColorPreset = -1;
+        private bool _lastColorBold;
+        private bool _lastColorItalic;
+        private bool _lastColorUnderline;
 
         private bool _suppressCallbacks;
 
@@ -159,6 +176,134 @@ namespace XingShuRuntime.UI
                 XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled,
                 value => { if (!_suppressCallbacks) XingShuRuntime.MatchPort.SettlementScreenshot.SetEnabled(value); });
             XingShuViewCardHelper.PlaceTopRight(_settlementScreenshotToggle.GetComponent<RectTransform>(), new Vector2(-20f, -10f), new Vector2(165f, 34f));
+
+            // Card 5: 彩色动态名字适配
+            GameObject colorCard = XingShuViewCardHelper.CreateCardContainer(content, "Card_ColorName", 268f);
+            Text colorTitle = XingShuUIFactory.CreateText(colorCard, "Title", "彩色动态名字", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(colorTitle.rectTransform, new Vector2(20f, -12f), new Vector2(300f, 26f));
+
+            Text colorDesc = XingShuUIFactory.CreateText(colorCard, "Description",
+                "自动修复局内与统计界面 [color=...] 彩色昵称截断，并为昵称叠加本地动态流光渐变（大厅/房间/选人/局内生效）。",
+                12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
+            XingShuViewCardHelper.PlaceStretchTop(colorDesc.rectTransform, 42f, 32f, 40f);
+
+            _colorNameToggle = XingShuUIFactory.CreateToggle(colorCard, "ColorNameToggle", "开启流光名字",
+                XingShuColorName.IsEnabled,
+                val =>
+                {
+                    if (_suppressCallbacks) return;
+                    XingShuColorName.IsEnabled = val;
+                    UpdateSync();
+                });
+            XingShuViewCardHelper.PlaceTopRight(_colorNameToggle.GetComponent<RectTransform>(), new Vector2(-20f, -10f), new Vector2(170f, 34f));
+
+            Text scopeLbl = XingShuUIFactory.CreateText(colorCard, "ScopeLabel", "作用范围", 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(scopeLbl.rectTransform, new Vector2(20f, -84f), new Vector2(88f, 30f));
+
+            _colorScopeSelfBtn = XingShuViewCardHelper.CreateActionButton(colorCard, "ColorScope_Self", "仅自己", () =>
+            {
+                XingShuColorName.Scope = 0;
+                RefreshColorOptionVisuals(force: true);
+            }, 100f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_colorScopeSelfBtn.GetComponent<RectTransform>(), new Vector2(104f, -84f), new Vector2(100f, 30f));
+
+            _colorScopeAllBtn = XingShuViewCardHelper.CreateActionButton(colorCard, "ColorScope_All", "全员 (不含AI)", () =>
+            {
+                XingShuColorName.Scope = 1;
+                RefreshColorOptionVisuals(force: true);
+            }, 126f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_colorScopeAllBtn.GetComponent<RectTransform>(), new Vector2(212f, -84f), new Vector2(126f, 30f));
+
+            Text presetLbl = XingShuUIFactory.CreateText(colorCard, "PresetLabel", "流光配色", 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(presetLbl.rectTransform, new Vector2(20f, -124f), new Vector2(88f, 32f));
+
+            GameObject presetRow = XingShuUIFactory.CreateUIObject("ColorPresetRow", colorCard);
+            RectTransform prRt = presetRow.GetComponent<RectTransform>();
+            prRt.anchorMin = new Vector2(0f, 1f);
+            prRt.anchorMax = new Vector2(1f, 1f);
+            prRt.pivot = new Vector2(0f, 1f);
+            prRt.anchoredPosition = new Vector2(104f, -124f);
+            prRt.sizeDelta = new Vector2(-124f, 32f);
+            HorizontalLayoutGroup prHlg = presetRow.AddComponent<HorizontalLayoutGroup>();
+            prHlg.spacing = 8f;
+            prHlg.childAlignment = TextAnchor.MiddleLeft;
+            prHlg.childForceExpandWidth = true;
+            prHlg.childForceExpandHeight = true;
+
+            _colorPresetBtns.Clear();
+            for (int i = 0; i < ColorNamePolicy.PresetNames.Length; i++)
+            {
+                int idx = i;
+                Button pb = XingShuViewCardHelper.CreateActionButton(presetRow, "ColorPreset_" + idx, ColorNamePolicy.PresetNames[idx], () =>
+                {
+                    XingShuColorName.Preset = idx;
+                    RefreshColorOptionVisuals(force: true);
+                }, 92f, 32f, 12);
+                _colorPresetBtns.Add(pb);
+            }
+
+            Text styleLbl = XingShuUIFactory.CreateText(colorCard, "FontStyleLabel", "字体样式", 12, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(styleLbl.rectTransform, new Vector2(20f, -166f), new Vector2(88f, 32f));
+
+            _colorBoldBtn = XingShuViewCardHelper.CreateActionButton(colorCard, "ColorStyle_Bold", "字体加粗", () =>
+            {
+                XingShuColorName.IsBold = !XingShuColorName.IsBold;
+                RefreshColorOptionVisuals(force: true);
+            }, 104f, 32f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_colorBoldBtn.GetComponent<RectTransform>(), new Vector2(104f, -166f), new Vector2(104f, 32f));
+
+            _colorItalicBtn = XingShuViewCardHelper.CreateActionButton(colorCard, "ColorStyle_Italic", "斜字体", () =>
+            {
+                XingShuColorName.IsItalic = !XingShuColorName.IsItalic;
+                RefreshColorOptionVisuals(force: true);
+            }, 96f, 32f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_colorItalicBtn.GetComponent<RectTransform>(), new Vector2(216f, -166f), new Vector2(96f, 32f));
+
+            _colorUnderlineBtn = XingShuViewCardHelper.CreateActionButton(colorCard, "ColorStyle_Underline", "下划线", () =>
+            {
+                XingShuColorName.IsUnderline = !XingShuColorName.IsUnderline;
+                RefreshColorOptionVisuals(force: true);
+            }, 96f, 32f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_colorUnderlineBtn.GetComponent<RectTransform>(), new Vector2(320f, -166f), new Vector2(96f, 32f));
+
+            XingShuViewCardHelper.AddSliderRow(colorCard, "ColorFlowSpeed", "流光速度", 210f,
+                XingShuConfigKeys.ColorNameSpeedMin, XingShuConfigKeys.ColorNameSpeedMax,
+                XingShuColorName.FlowSpeed, $"{XingShuColorName.FlowSpeed:F1}x",
+                v =>
+                {
+                    XingShuColorName.FlowSpeed = Mathf.Round(v * 10f) / 10f;
+                    UpdateSync();
+                },
+                () => _suppressCallbacks,
+                out _colorSpeedSlider, out _colorSpeedValueText);
+
+            RefreshColorOptionVisuals(force: true);
+        }
+
+        private void RefreshColorOptionVisuals(bool force = false)
+        {
+            int scope = XingShuColorName.Scope;
+            int preset = XingShuColorName.Preset;
+            bool bold = XingShuColorName.IsBold;
+            bool italic = XingShuColorName.IsItalic;
+            bool underline = XingShuColorName.IsUnderline;
+            if (!force && scope == _lastColorScope && preset == _lastColorPreset
+                && bold == _lastColorBold && italic == _lastColorItalic && underline == _lastColorUnderline) return;
+            _lastColorScope = scope;
+            _lastColorPreset = preset;
+            _lastColorBold = bold;
+            _lastColorItalic = italic;
+            _lastColorUnderline = underline;
+
+            XingShuGlassSkin.ApplySelectableButton(_colorScopeSelfBtn, scope == 0);
+            XingShuGlassSkin.ApplySelectableButton(_colorScopeAllBtn, scope == 1);
+            for (int i = 0; i < _colorPresetBtns.Count; i++)
+            {
+                XingShuGlassSkin.ApplySelectableButton(_colorPresetBtns[i], i == preset);
+            }
+            XingShuGlassSkin.ApplySelectableButton(_colorBoldBtn, bold);
+            XingShuGlassSkin.ApplySelectableButton(_colorItalicBtn, italic);
+            XingShuGlassSkin.ApplySelectableButton(_colorUnderlineBtn, underline);
         }
 
         private static string FormatSignedPx(float value)
@@ -206,6 +351,11 @@ namespace XingShuRuntime.UI
             }
             if (_settlementScreenshotToggle != null && _settlementScreenshotToggle.isOn != XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled)
                 _settlementScreenshotToggle.isOn = XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled;
+            if (_colorNameToggle != null && _colorNameToggle.isOn != XingShuColorName.IsEnabled)
+                _colorNameToggle.isOn = XingShuColorName.IsEnabled;
+            float colorSpd = XingShuColorName.FlowSpeed;
+            if (_colorSpeedSlider != null && Mathf.Abs(_colorSpeedSlider.value - colorSpd) > 0.05f)
+                _colorSpeedSlider.value = colorSpd;
             _suppressCallbacks = false;
 
             if (_praiseScaleValueText != null) _praiseScaleValueText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
@@ -219,6 +369,8 @@ namespace XingShuRuntime.UI
                 string summary = FormatScreenshotPathSummary();
                 if (_settlementScreenshotPathText.text != summary) _settlementScreenshotPathText.text = summary;
             }
+            if (_colorSpeedValueText != null) _colorSpeedValueText.text = $"{colorSpd:F1}x";
+            RefreshColorOptionVisuals();
         }
     }
 }

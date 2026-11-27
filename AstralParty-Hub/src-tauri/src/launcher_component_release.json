@@ -2,7 +2,7 @@
   "FormatVersion": 1,
   "Version": "0.2.2",
   "HubSha256": "8f4436764029679550c7c0943cb423a2c52033c171056e1a8637511e509b3a77",
-  "RuntimeVersion": "1.0.0-game-ui-r8.61",
+  "RuntimeVersion": "1.0.0-game-ui-r8.62",
   "HubVersion": "0.2.2",
   "ExtensionManagementChannels": [
     "STEAM_CN",
@@ -23,7 +23,7 @@
       "ResourceVersion": "160",
       "BundleRelativePath": "AstralParty_CN_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\74ec34421f662150b01741f232d7497c\\__data",
       "Payload": "Runtime/STEAM_CN/__data",
-      "PayloadSha256": "5fcb56953dcc3cc61d4e43ce8b9f1f8a1d7ada868d4a1dc82c60e0f28c4f2451",
+      "PayloadSha256": "6a481e71ce891c6243a495ce3197734ece109779666abe52c4298a8aab5c19d9",
       "VanillaSha256": "9bdaeb067e6318bc8c3cafdbbce4a6a11287fb6e51e60760d6947c4de4db33cc",
       "AcceptedHashes": [
         "9bdaeb067e6318bc8c3cafdbbce4a6a11287fb6e51e60760d6947c4de4db33cc",
@@ -61,7 +61,8 @@
         "3929a7ceeb85697790eb7fd621b82e47cf9568ae935f2e5b6b8a52e29c391db9",
         "2e03c02baa9ec215cbebd2e7cb32f2f0df098e30dd835d4b4af4455f5b3a7b27",
         "0b6b05da8af937a634e82a13fbe419cc9631fb0e8a28200d957a06536717419d",
-        "0b2862cdcad893a5783a6068857871368f54a42ef6aec7dddd0765765a6bd404"
+        "0b2862cdcad893a5783a6068857871368f54a42ef6aec7dddd0765765a6bd404",
+        "5fcb56953dcc3cc61d4e43ce8b9f1f8a1d7ada868d4a1dc82c60e0f28c4f2451"
       ]
     },
     {
@@ -73,7 +74,7 @@
       "ResourceVersion": "160",
       "BundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\f468bb754fee0362b0d1074e74e7e885\\__data",
       "Payload": "Runtime/TAPTAP/__data",
-      "PayloadSha256": "e678bc0f1b8fff7995b91ce85b9db7f6b35d0cf3933203d1a7aabbaaecec445c",
+      "PayloadSha256": "75f2fedd6807e8352f205d3067047778e4563e22dcfc296821a53c8420053868",
       "VanillaSha256": "bf43fdda0cfc011d6951d68a7687b61ab55fecdb35a77d7eef48a4592656d0eb",
       "AcceptedHashes": [
         "bf43fdda0cfc011d6951d68a7687b61ab55fecdb35a77d7eef48a4592656d0eb",
@@ -110,7 +111,8 @@
         "729d2ec24c968216dd229be4874877946718ddfaf2e4dcbc409105fe3281e3cb",
         "3570e7a621837caa980afe85b11f5310afe9cd6868d7fef064bdac6487073f20",
         "d0ede88e4480c19f8caf79e32adf244365ee91de656a86c264d5936ea89683e0",
-        "f557f3f4feaa56875cf3e97c9cff84c3ab9d475d0d371f150a2d0752fd505573"
+        "f557f3f4feaa56875cf3e97c9cff84c3ab9d475d0d371f150a2d0752fd505573",
+        "e678bc0f1b8fff7995b91ce85b9db7f6b35d0cf3933203d1a7aabbaaecec445c"
       ]
     },
     {
@@ -122,7 +124,7 @@
       "ResourceVersion": "160",
       "BundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\21b07f52b18434b20781372324ee459f\\__data",
       "Payload": "Runtime/BILIBILI/__data",
-      "PayloadSha256": "dbcfb2a803acda7529e4d39300ff7129690d0439e3e22b8d5e5b852387e58ebf",
+      "PayloadSha256": "37d1e2500b198f11de4a48e478c18f3996cb1a3c7b4da0a3bda57e6fa6826ffd",
       "VanillaSha256": "05ed66dd24609913cd6a50ff7ddec64c7a1547897a2137109b0796b8902d6030",
       "AcceptedHashes": [
         "05ed66dd24609913cd6a50ff7ddec64c7a1547897a2137109b0796b8902d6030",
@@ -159,7 +161,8 @@
         "58ae9d681e42c31755ebbf59af642082542d070f996495b9bec3b506ccc24409",
         "abe29eeaf8e73a4c36d7cb040853f70b8ffa1428f59605bcf01a17a388324c38",
         "4f551e51671b18fc82bccf097d993b7db6ec135cd1652daa8d3ceae4c5fa9cd6",
-        "a2c6e781723cd0c98c41bc82fa38c357f3eaf6a881e2be3825bfd332b34d3348"
+        "a2c6e781723cd0c98c41bc82fa38c357f3eaf6a881e2be3825bfd332b34d3348",
+        "dbcfb2a803acda7529e4d39300ff7129690d0439e3e22b8d5e5b852387e58ebf"
       ]
     },
     {
@@ -171,7 +174,7 @@
       "ResourceVersion": "160",
       "BundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\111661d4da79135f6d1fdadbc1140b74\\__data",
       "Payload": "Runtime/WEGAME/__data",
-      "PayloadSha256": "c387d54646822731a52a6290e96fa76497bee10916627338723ec14093fa36d0",
+      "PayloadSha256": "9bdc02e977685430a0fbe30d20bf4ace6e53523896965fcb815a5ed5bf6c5d84",
       "VanillaSha256": "3a90aa661182f660b5d8793e11e720271e72e5a62e0f61cda60c4a0a81b0b82b",
       "AcceptedHashes": [
         "3a90aa661182f660b5d8793e11e720271e72e5a62e0f61cda60c4a0a81b0b82b",
@@ -208,7 +211,8 @@
         "7d5abec3bd33a99db1c69971ae6b3fb230834d370bc775f778db6c254602f92e",
         "2ccc4d4c4244b496de58f33ad9b3af440db0ada85f09be54aee20ce334d7e53c",
         "a223512aebc71f44c1b03196e3922a87aa53d942066c5650f5e54f5c45a72bf0",
-        "2b2f38bfd802d66ccca5c585b36fdb23812921eca7ab5b8ac514a1e1b8055caf"
+        "2b2f38bfd802d66ccca5c585b36fdb23812921eca7ab5b8ac514a1e1b8055caf",
+        "c387d54646822731a52a6290e96fa76497bee10916627338723ec14093fa36d0"
       ]
     }
   ],
