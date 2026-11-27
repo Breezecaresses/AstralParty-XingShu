@@ -1,12 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Core.Net;
 using Core.Scene;
+using FairyGUI;
 using GameLogic;
 using Tools;
+using UI;
 using UnityEngine;
 using UnityEngine.Networking;
 using XingShu.Bridge;
@@ -24,10 +29,15 @@ namespace XingShuRuntime.Utilities
         private const string ApiOrigin = "https://124.221.176.134";
         private const string PrefTokenPrefix = "XingShu_CreditAuthTok_";
         private const string PrefTokenFallback = "XingShu_CreditAuthTok_Default";
+        private const string PrefDeviceIdKey = "XingShu_CreditDeviceId_v1";
         private const float RoomScanInterval = 1.0f;
         private const float ProfileCacheTtl = 45.0f;
         private const float FleetHeartbeatInterval = 15.0f;
         private const float FollowPollInterval = 4.0f;
+        private const float CardOverlayInterval = 0.25f;
+        private const float DevicePollInterval = 2.5f;
+        private const string CardBadgeName = "XINGSHU_CreditCardBadge";
+        private const string RoomWarnBannerName = "XINGSHU_RoomLowCreditBanner";
 
         internal sealed class CreditProfileModel
         {
@@ -145,6 +155,8 @@ namespace XingShuRuntime.Utilities
         private bool _blockBlacklisted = XingShuConfigKeys.CreditGuardBlockBlacklistedDefault;
         private bool _autoKick = XingShuConfigKeys.CreditGuardAutoKickDefault;
         private bool _autoReady = XingShuConfigKeys.CreditGuardAutoReadyDefault;
+        private bool _extendRoomWait = XingShuConfigKeys.CreditGuardExtendRoomWaitDefault;
+        private int _roomWaitMinutes = XingShuConfigKeys.CreditGuardRoomWaitMinutesDefault;
 
         private long _localUid;
         private string _localNick = string.Empty;
@@ -181,7 +193,66 @@ namespace XingShuRuntime.Utilities
         private float _lastRoomScanAt;
         private float _lastProfileFetchAt;
         private float _lastKickAt;
+        private float _lastCardOverlayAt;
+        private bool _cardOverlayActive;
         private string _statusMessage = "信誉分与车队模块已就绪";
+
+        // Official room wait stay extension (real wall-clock, immune to game speedup)
+        private double _roomWaitEnteredRealSec;
+        private long _roomWaitTrackedRoomId;
+        private static readonly FieldInfo RoomWaitRoomTimerField =
+            typeof(RoomWaitPanel).GetField("roomTimer", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RoomWaitMasterKickTimerField =
+            typeof(RoomWaitPanel).GetField("masterKickTimer", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo HeroPlayerDataField =
+            typeof(UIRoomHero_Com_Player).GetField("playerData", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static MethodInfo _timerCancelMethod;
+
+        // Native FairyGUI player card credit badges & low-credit warning frame
+        private sealed class CardBadgeVisual
+        {
+            public GComponent HostCard;
+            public GComponent Root;
+            public GGraph PillBg;
+            public GTextField PillText;
+            public GGraph BorderTop;
+            public GGraph BorderBottom;
+            public GGraph BorderLeft;
+            public GGraph BorderRight;
+            public bool IsRisky;
+        }
+        private readonly List<CardBadgeVisual> _cardBadges = new List<CardBadgeVisual>(8);
+        private GComponent _roomWarnBanner;
+        private GGraph _roomWarnBg;
+        private GTextField _roomWarnText;
+
+        // Built-in one-click PKCE browser login (/auth/device + /auth/device/poll)
+        private bool _deviceLoginPending;
+        private string _deviceLoginRequestId = string.Empty;
+        private string _deviceLoginVerifier = string.Empty;
+        private string _deviceLoginUrl = string.Empty;
+        private float _deviceLoginDeadline;
+        private float _lastDevicePollAt;
+        private bool _devicePollInFlight;
+
+        // PC Desktop Hub localhost proxy auto-reuse (no re-login, no game kick)
+        private bool _hubProxyReachable;
+        private bool _hubProxySignedIn;
+        private int _hubProxyPort;
+        private string _hubProxyNonce = string.Empty;
+        private float _lastHubProxyProbeAt = -100f;
+        private bool _hubProxyProbeInFlight;
+
+        // Official PVE map & difficulty presets (matches room_host.py OFFICIAL_MAPS)
+        internal static readonly int[] FleetPveMapIds = { 82017, 82016, 82015, 82014, 82013, 82012, 82010, 82008, 82007 };
+        internal static readonly string[] FleetPveMapNames =
+        {
+            "森秋幻境", "异变图书馆", "园林中庭", "幽魂暗巷", "龙宫游乐园",
+            "魔法学院", "水乡古镇", "御魂庆典", "星趴·梦想号"
+        };
+        internal static readonly string[] FleetDifficultyNames = { "普通", "困难", "噩梦", "疯狂" };
+        private int _fleetMapId = 82017;
+        private int _fleetDifficulty = 2;
 
         private Texture2D _hudBgTex;
         private GUIStyle _hudBoxStyle;
@@ -275,6 +346,60 @@ namespace XingShuRuntime.Utilities
             }
         }
 
+        internal bool ExtendRoomWait
+        {
+            get => _extendRoomWait;
+            set
+            {
+                if (_extendRoomWait == value) return;
+                _extendRoomWait = value;
+                XingShuConfigService.SetBool(XingShuConfigKeys.CreditGuardExtendRoomWait, value);
+                XingShuConfigService.Save();
+            }
+        }
+
+        internal int RoomWaitMinutes
+        {
+            get => _roomWaitMinutes;
+            set
+            {
+                int next = value <= 0 ? 0 : Mathf.Clamp(value, 10, 360);
+                if (_roomWaitMinutes == next) return;
+                _roomWaitMinutes = next;
+                XingShuConfigService.SetInt(XingShuConfigKeys.CreditGuardRoomWaitMinutes, next);
+                XingShuConfigService.Save();
+            }
+        }
+
+        internal double RoomWaitElapsedSeconds =>
+            _inWaitRoom && _roomWaitEnteredRealSec > 0d
+                ? Math.Max(0d, ThinkingClock.RealSeconds() - _roomWaitEnteredRealSec)
+                : 0d;
+
+        internal bool IsDeviceLoginPending => _deviceLoginPending;
+        internal string DeviceLoginUrl => _deviceLoginUrl;
+        internal bool IsHubProxyReachable => _hubProxyReachable;
+        internal bool IsUsingHubProxy => _hubProxyReachable && _hubProxySignedIn;
+        internal int FleetMapId
+        {
+            get => _fleetMapId;
+            set => _fleetMapId = Array.IndexOf(FleetPveMapIds, value) >= 0 ? value : 82017;
+        }
+        internal int FleetDifficulty
+        {
+            get => _fleetDifficulty;
+            set => _fleetDifficulty = Mathf.Clamp(value, 0, 3);
+        }
+        internal string FleetMapName
+        {
+            get
+            {
+                int idx = Array.IndexOf(FleetPveMapIds, _fleetMapId);
+                return idx >= 0 ? FleetPveMapNames[idx] : "森秋幻境";
+            }
+        }
+        internal string FleetDifficultyName => FleetDifficultyNames[Mathf.Clamp(_fleetDifficulty, 0, 3)];
+
         internal long LocalUid => _localUid;
         internal bool InRoom => _inRoom;
         internal bool InWaitRoom => _inWaitRoom;
@@ -305,9 +430,87 @@ namespace XingShuRuntime.Utilities
             _blockBlacklisted = XingShuConfigService.GetBool(XingShuConfigKeys.CreditGuardBlockBlacklisted, XingShuConfigKeys.CreditGuardBlockBlacklistedDefault);
             _autoKick = XingShuConfigService.GetBool(XingShuConfigKeys.CreditGuardAutoKick, XingShuConfigKeys.CreditGuardAutoKickDefault);
             _autoReady = XingShuConfigService.GetBool(XingShuConfigKeys.CreditGuardAutoReady, XingShuConfigKeys.CreditGuardAutoReadyDefault);
+            _extendRoomWait = XingShuConfigService.GetBool(XingShuConfigKeys.CreditGuardExtendRoomWait, XingShuConfigKeys.CreditGuardExtendRoomWaitDefault);
+            _roomWaitMinutes = XingShuConfigService.GetInt(XingShuConfigKeys.CreditGuardRoomWaitMinutes, XingShuConfigKeys.CreditGuardRoomWaitMinutesDefault);
+            RefreshHubProxyNow();
         }
 
-        internal bool HasAuthToken => !string.IsNullOrEmpty(GetAuthToken());
+        internal bool HasAuthToken => IsUsingHubProxy || !string.IsNullOrEmpty(GetAuthToken());
+
+        internal void RefreshHubProxyNow()
+        {
+            _lastHubProxyProbeAt = -100f;
+            ProbeHubProxy();
+        }
+
+        private void ProbeHubProxy()
+        {
+#if !XINGSHU_ANDROID_PREVIEW
+            if (_hubProxyProbeInFlight) return;
+            try
+            {
+                string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                if (string.IsNullOrEmpty(localApp)) return;
+                string cfgPath = Path.Combine(localApp, "XingShu-Hub", "credit-proxy.json");
+                if (!File.Exists(cfgPath))
+                {
+                    _hubProxyReachable = false;
+                    _hubProxySignedIn = false;
+                    return;
+                }
+                string raw = File.ReadAllText(cfgPath, Encoding.UTF8);
+                var d = BridgeJson.Parse(raw) as Dictionary<string, object>;
+                int port = Int(d, "port");
+                string nonce = Str(d, "nonce");
+                if (port <= 0 || port > 65535 || string.IsNullOrEmpty(nonce))
+                {
+                    _hubProxyReachable = false;
+                    _hubProxySignedIn = false;
+                    return;
+                }
+                _hubProxyPort = port;
+                _hubProxyNonce = nonce;
+                _hubProxyProbeInFlight = true;
+
+                var req = new UnityWebRequest(string.Format(CultureInfo.InvariantCulture, "http://127.0.0.1:{0}/_status", port), "GET");
+                req.downloadHandler = new DownloadHandlerBuffer();
+                req.timeout = 2;
+                req.SetRequestHeader("X-XingShu-Proxy-Nonce", nonce);
+                req.SendWebRequest();
+                _httpInFlight.Add(new PendingHttp
+                {
+                    Request = req,
+                    StartedAt = Time.realtimeSinceStartup,
+                    Callback = (ok, code, text) =>
+                    {
+                        _hubProxyProbeInFlight = false;
+                        if (!ok)
+                        {
+                            _hubProxyReachable = false;
+                            _hubProxySignedIn = false;
+                            return;
+                        }
+                        var st = BridgeJson.Parse(text) as Dictionary<string, object>;
+                        bool wasUsing = IsUsingHubProxy;
+                        _hubProxyReachable = st != null && Bool(st, "ok");
+                        _hubProxySignedIn = _hubProxyReachable && Bool(st, "signedIn");
+                        if (!wasUsing && IsUsingHubProxy)
+                        {
+                            _statusMessage = "已自动复用桌面端 Hub 星枢登录态（无需重复登录）";
+                            RefreshBlacklist();
+                            RefreshRoomProfilesNow();
+                        }
+                    }
+                });
+            }
+            catch
+            {
+                _hubProxyReachable = false;
+                _hubProxySignedIn = false;
+                _hubProxyProbeInFlight = false;
+            }
+#endif
+        }
 
         internal string GetAuthToken()
         {
@@ -346,13 +549,156 @@ namespace XingShuRuntime.Utilities
 
         internal void ClearManualAuthToken()
         {
+            CancelDeviceLogin();
             if (_localUid > 0)
             {
                 PlayerPrefs.DeleteKey(PrefTokenPrefix + _localUid.ToString(CultureInfo.InvariantCulture));
             }
             PlayerPrefs.DeleteKey(PrefTokenFallback);
             PlayerPrefs.Save();
-            _statusMessage = "已清除手动授权令牌";
+            _statusMessage = "已退出星枢账号授权";
+        }
+
+        internal void StartDeviceLogin()
+        {
+            if (_deviceLoginPending)
+            {
+                if (!string.IsNullOrEmpty(_deviceLoginUrl))
+                {
+                    try { Application.OpenURL(_deviceLoginUrl); } catch { }
+                    _statusMessage = "已重新打开浏览器登录页，请完成授权…";
+                }
+                return;
+            }
+            string deviceId = GetOrCreateDeviceId();
+            string verifier = GeneratePkceVerifier();
+            string challenge = ComputePkceChallenge(verifier);
+            _deviceLoginVerifier = verifier;
+            _deviceLoginRequestId = string.Empty;
+            _deviceLoginUrl = string.Empty;
+            _deviceLoginPending = true;
+            _devicePollInFlight = false;
+            _deviceLoginDeadline = Time.realtimeSinceStartup + 180f;
+            _lastDevicePollAt = Time.realtimeSinceStartup;
+            _statusMessage = "正在发起星枢浏览器一键登录…";
+
+            var body = new Dictionary<string, object>
+            {
+                ["device_id"] = deviceId,
+                ["code_challenge"] = challenge,
+                ["label"] = Application.isMobilePlatform ? "星枢局内插件 (手机)" : "星枢局内插件 (电脑)"
+            };
+            SendJsonRequest("POST", "/auth/device", body, requireAuth: false, (ok, code, text) =>
+            {
+                if (!ok)
+                {
+                    _deviceLoginPending = false;
+                    _statusMessage = ExtractError(text, "发起星枢登录失败，请稍后重试");
+                    return;
+                }
+                var d = BridgeJson.Parse(text) as Dictionary<string, object>;
+                string reqId = Str(d, "request_id");
+                string loginUrl = Str(d, "login_url");
+                if (string.IsNullOrEmpty(reqId) || string.IsNullOrEmpty(loginUrl))
+                {
+                    _deviceLoginPending = false;
+                    _statusMessage = "服务器未返回有效登录链接";
+                    return;
+                }
+                _deviceLoginRequestId = reqId;
+                _deviceLoginUrl = loginUrl;
+                _deviceLoginDeadline = Time.realtimeSinceStartup + Math.Max(60f, Int(d, "expires_in", 180));
+                _lastDevicePollAt = Time.realtimeSinceStartup;
+                try { Application.OpenURL(loginUrl); } catch { }
+                _statusMessage = "已在浏览器打开星枢登录页，完成登录后将自动同步授权…";
+            });
+        }
+
+        internal void CancelDeviceLogin()
+        {
+            _deviceLoginPending = false;
+            _deviceLoginRequestId = string.Empty;
+            _deviceLoginVerifier = string.Empty;
+            _deviceLoginUrl = string.Empty;
+            _devicePollInFlight = false;
+        }
+
+        private void PollDeviceLogin()
+        {
+            if (!_deviceLoginPending || _devicePollInFlight || string.IsNullOrEmpty(_deviceLoginRequestId)) return;
+            if (Time.realtimeSinceStartup > _deviceLoginDeadline)
+            {
+                CancelDeviceLogin();
+                _statusMessage = "星枢登录已超时，请重新点击「浏览器一键登录」";
+                return;
+            }
+            _devicePollInFlight = true;
+            var body = new Dictionary<string, object>
+            {
+                ["request_id"] = _deviceLoginRequestId,
+                ["code_verifier"] = _deviceLoginVerifier
+            };
+            SendJsonRequest("POST", "/auth/device/poll", body, requireAuth: false, (ok, code, text) =>
+            {
+                _devicePollInFlight = false;
+                if (!_deviceLoginPending || !ok) return;
+                var d = BridgeJson.Parse(text) as Dictionary<string, object>;
+                string st = Str(d, "status");
+                if (st == "succeeded")
+                {
+                    string tok = Str(d, "access_token");
+                    CancelDeviceLogin();
+                    if (!string.IsNullOrEmpty(tok))
+                    {
+                        if (_localUid > 0)
+                        {
+                            PlayerPrefs.SetString(PrefTokenPrefix + _localUid.ToString(CultureInfo.InvariantCulture), tok);
+                        }
+                        PlayerPrefs.SetString(PrefTokenFallback, tok);
+                        PlayerPrefs.Save();
+                        _statusMessage = "星枢账号登录成功！点赞、拉黑、反馈与高信誉车队已全部解锁";
+                        RefreshBlacklist();
+                        RefreshRoomProfilesNow();
+                    }
+                }
+                else if (st == "expired" || st == "rejected" || st == "failed")
+                {
+                    CancelDeviceLogin();
+                    _statusMessage = "登录已过期或取消，请重新点击「浏览器一键登录」";
+                }
+            });
+        }
+
+        private static string GetOrCreateDeviceId()
+        {
+            try
+            {
+                string existing = PlayerPrefs.GetString(PrefDeviceIdKey, string.Empty);
+                if (!string.IsNullOrEmpty(existing) && existing.Length >= 16) return existing;
+            }
+            catch { }
+            string created = Guid.NewGuid().ToString("N");
+            try
+            {
+                PlayerPrefs.SetString(PrefDeviceIdKey, created);
+                PlayerPrefs.Save();
+            }
+            catch { }
+            return created;
+        }
+
+        private static string GeneratePkceVerifier()
+        {
+            return Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+        }
+
+        private static string ComputePkceChallenge(string verifier)
+        {
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(verifier));
+                return Convert.ToBase64String(hash).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            }
         }
 
         internal CreditProfileModel GetCachedProfile(string uid)
@@ -394,13 +740,45 @@ namespace XingShuRuntime.Utilities
         {
             TickHttpRequests();
 
-            if (!_enabled) return;
-
             float now = Time.realtimeSinceStartup;
+            float probeInterval = IsUsingHubProxy ? 15f : 5f;
+            if (now - _lastHubProxyProbeAt >= probeInterval)
+            {
+                _lastHubProxyProbeAt = now;
+                ProbeHubProxy();
+            }
+
+            if (_deviceLoginPending && now - _lastDevicePollAt >= DevicePollInterval)
+            {
+                _lastDevicePollAt = now;
+                PollDeviceLogin();
+            }
+
+            if (!_enabled)
+            {
+                if (_cardBadges.Count > 0 || _roomWarnBanner != null)
+                {
+                    DisposeCardOverlays();
+                }
+                _cardOverlayActive = false;
+                return;
+            }
+
             if (now - _lastRoomScanAt >= RoomScanInterval)
             {
                 _lastRoomScanAt = now;
                 ScanGameRoomAndPeers(now);
+            }
+
+            if (now - _lastCardOverlayAt >= CardOverlayInterval)
+            {
+                _lastCardOverlayAt = now;
+                TickRoomWaitKeepAlive();
+                TickNativeCardOverlays();
+            }
+            else if (_cardBadges.Count > 0)
+            {
+                PulseRiskyBorders(now);
             }
 
             if (_hostingFleetRoom && _inRoom && _isRoomHost && now - _lastHeartbeatAt >= FleetHeartbeatInterval)
@@ -740,11 +1118,11 @@ namespace XingShuRuntime.Utilities
             }
         }
 
-        internal void CreateHighCreditRoom(string roomName = "", string customPwd = "", int mode = 4, int mapId = 4, int difficulty = 2)
+        internal void CreateHighCreditRoom(string roomName = "", string customPwd = "", int mode = 4, int mapId = -1, int difficulty = -1)
         {
             if (!HasAuthToken)
             {
-                _statusMessage = "请先绑定或授权星枢账号后再发起高信誉密码车队";
+                _statusMessage = "请先在星枢 Hub（或下方授权页）登录星枢账号后再发起高信誉密码车队";
                 return;
             }
             if (!ValidateLobby(out GameLogicManager logic, out string err))
@@ -757,6 +1135,10 @@ namespace XingShuRuntime.Utilities
                 PublishCurrentRoomToFleet(customPwd);
                 return;
             }
+            int effectiveMapId = mapId > 0 ? mapId : _fleetMapId;
+            int effectiveDiff = difficulty >= 0 ? Mathf.Clamp(difficulty, 0, 3) : _fleetDifficulty;
+            int upgradePlan = mode == 4 ? (effectiveDiff == 0 ? 5 : 4) : 1;
+
             string pwd = (customPwd ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(pwd))
             {
@@ -777,8 +1159,8 @@ namespace XingShuRuntime.Utilities
             catch { }
             try
             {
-                logic.room.RequestCreateC2S(rName, pwd, mapId, 0, 1, 2, 0UL, 2, mode, difficulty, false, 0);
-                _statusMessage = "正在创建高信誉密码房（门槛 " + _minCredit + " 分）…";
+                logic.room.RequestCreateC2S(rName, pwd, effectiveMapId, 0, upgradePlan, 2, 0UL, 2, mode, effectiveDiff, false, 0);
+                _statusMessage = "正在创建高信誉密码房（" + FleetMapName + " · " + FleetDifficultyName + " · 门槛 " + _minCredit + " 分）…";
             }
             catch (Exception ex)
             {
@@ -1152,11 +1534,463 @@ namespace XingShuRuntime.Utilities
             return true;
         }
 
-        // --- Lightweight top-right room/teammate credit strip ---
+        // --- Official room wait stay extension (real wall-clock, immune to speedup) ---
+
+        private void TickRoomWaitKeepAlive()
+        {
+            try
+            {
+                if (!SimpleSingletonProvider<UIManager>.hasInstance)
+                {
+                    _roomWaitTrackedRoomId = 0;
+                    _roomWaitEnteredRealSec = 0d;
+                    return;
+                }
+                UIManager uiMgr = SimpleSingletonProvider<UIManager>.inst;
+                RoomWaitPanel waitPanel = uiMgr != null ? uiMgr.currentPanel as RoomWaitPanel : null;
+                if (waitPanel == null || !waitPanel.IsOpen())
+                {
+                    _roomWaitTrackedRoomId = 0;
+                    _roomWaitEnteredRealSec = 0d;
+                    return;
+                }
+
+                double nowReal = ThinkingClock.RealSeconds();
+                long roomKey = _currentRoomId > 0 ? _currentRoomId : 1L;
+                if (_roomWaitTrackedRoomId != roomKey || _roomWaitEnteredRealSec <= 0d)
+                {
+                    _roomWaitTrackedRoomId = roomKey;
+                    _roomWaitEnteredRealSec = nowReal;
+                }
+
+                if (!_extendRoomWait) return;
+
+                double elapsed = Math.Max(0d, nowReal - _roomWaitEnteredRealSec);
+                if (_roomWaitMinutes > 0 && elapsed >= _roomWaitMinutes * 60d)
+                {
+                    return;
+                }
+
+                CancelPrivateTimer(waitPanel, RoomWaitRoomTimerField);
+                if (_isRoomHost)
+                {
+                    CancelPrivateTimer(waitPanel, RoomWaitMasterKickTimerField);
+                }
+            }
+            catch { }
+        }
+
+        private static void CancelPrivateTimer(object target, FieldInfo field)
+        {
+            if (target == null || field == null) return;
+            object timerObj = field.GetValue(target);
+            if (timerObj == null) return;
+            if (_timerCancelMethod == null)
+            {
+                _timerCancelMethod = timerObj.GetType().GetMethod("Cancel", BindingFlags.Instance | BindingFlags.Public);
+            }
+            if (_timerCancelMethod != null)
+            {
+                _timerCancelMethod.Invoke(timerObj, null);
+                field.SetValue(target, null);
+            }
+        }
+
+        // --- Native FairyGUI Player Card Credit Badges & Low-Credit Warning ---
+
+        private void TickNativeCardOverlays()
+        {
+            _cardOverlayActive = false;
+            try
+            {
+                if (!SimpleSingletonProvider<UIManager>.hasInstance)
+                {
+                    DisposeCardOverlays();
+                    return;
+                }
+                UIManager uiMgr = SimpleSingletonProvider<UIManager>.inst;
+                if (uiMgr == null)
+                {
+                    DisposeCardOverlays();
+                    return;
+                }
+
+                RoomWaitPanel waitPanel = uiMgr.currentPanel as RoomWaitPanel;
+                if (waitPanel != null && waitPanel.IsOpen())
+                {
+                    UIRoomWaitPanel waitUi = waitPanel.UIObject;
+                    if (waitUi != null && !waitUi.isDisposed && waitUi.visible && waitUi.onStage)
+                    {
+                        RenderRoomWaitCardOverlays(waitUi);
+                        _cardOverlayActive = true;
+                        return;
+                    }
+                }
+
+                RoomHeroPanel heroPanel = uiMgr.currentPanel as RoomHeroPanel;
+                if (heroPanel != null && heroPanel.IsOpen())
+                {
+                    UIRoomHeroPanel heroUi = heroPanel.UIObject;
+                    if (heroUi != null && !heroUi.isDisposed && heroUi.visible && heroUi.onStage)
+                    {
+                        RenderHeroSelectCardOverlays(heroUi);
+                        _cardOverlayActive = true;
+                        return;
+                    }
+                }
+
+                DisposeCardOverlays();
+            }
+            catch { }
+        }
+
+        private void RenderRoomWaitCardOverlays(UIRoomWaitPanel waitUi)
+        {
+            var activeCards = new HashSet<GComponent>();
+            var riskySummaries = new List<string>(4);
+            var missingUids = new List<string>(4);
+
+            UICom_RoomPlayer comPlayer = waitUi.com_Player as UICom_RoomPlayer;
+            GList list = comPlayer != null ? comPlayer.list_playerWait : null;
+            if (list != null && !list.isDisposed)
+            {
+                int count = list.numChildren;
+                for (int i = 0; i < count; i++)
+                {
+                    UIRoomPlayer_Com_PlayerLabel card = list.GetChildAt(i) as UIRoomPlayer_Com_PlayerLabel;
+                    if (card == null || card.isDisposed || !card.visible) continue;
+                    RoomPlayer rp = card.playerInfo;
+                    if (rp == null || rp.IsBot || rp.Id <= 0) continue;
+
+                    activeCards.Add(card);
+                    string uidStr = rp.Id.ToString(CultureInfo.InvariantCulture);
+                    if (!_profiles.ContainsKey(uidStr)) missingUids.Add(uidStr);
+                    bool isSelf = rp.Id == _localUid;
+                    string riskReason = string.Empty;
+                    bool risky = !isSelf && IsPeerRisky(uidStr, out riskReason);
+                    string displayNick = string.Empty;
+                    try { displayNick = StripRichTags(rp.GetNick(false) ?? string.Empty); } catch { }
+                    if (string.IsNullOrEmpty(displayNick)) displayNick = uidStr;
+                    if (risky)
+                    {
+                        riskySummaries.Add(displayNick + "(" + riskReason + ")");
+                    }
+                    UpdateSingleCardBadge(card, uidStr, isSelf, isHeroCard: false);
+                }
+            }
+
+            if (missingUids.Count > 0 && Time.realtimeSinceStartup - _lastProfileFetchAt >= 2.0f)
+            {
+                _lastProfileFetchAt = Time.realtimeSinceStartup;
+                FetchProfiles(missingUids);
+            }
+
+            CleanupUnusedCardBadges(activeCards);
+            UpdateRoomRiskBanner(waitUi, riskySummaries);
+        }
+
+        private void RenderHeroSelectCardOverlays(UIRoomHeroPanel heroUi)
+        {
+            var activeCards = new HashSet<GComponent>();
+            var riskySummaries = new List<string>(4);
+            var missingUids = new List<string>(4);
+
+            UIRoomHero_Com_Player[] slots = { heroUi.com_player_1, heroUi.com_player_2, heroUi.com_player_3, heroUi.com_player_4 };
+            for (int i = 0; i < slots.Length; i++)
+            {
+                UIRoomHero_Com_Player card = slots[i];
+                if (card == null || card.isDisposed || !card.visible) continue;
+                RoomPlayer rp = HeroPlayerDataField != null ? HeroPlayerDataField.GetValue(card) as RoomPlayer : null;
+                if (rp == null || rp.IsBot || rp.Id <= 0) continue;
+
+                activeCards.Add(card);
+                string uidStr = rp.Id.ToString(CultureInfo.InvariantCulture);
+                if (!_profiles.ContainsKey(uidStr)) missingUids.Add(uidStr);
+                bool isSelf = rp.Id == _localUid;
+                string riskReason = string.Empty;
+                bool risky = !isSelf && IsPeerRisky(uidStr, out riskReason);
+                string displayNick = string.Empty;
+                try { displayNick = StripRichTags(rp.GetNick(false) ?? string.Empty); } catch { }
+                if (string.IsNullOrEmpty(displayNick)) displayNick = uidStr;
+                if (risky)
+                {
+                    riskySummaries.Add(displayNick + "(" + riskReason + ")");
+                }
+                UpdateSingleCardBadge(card, uidStr, isSelf, isHeroCard: true);
+            }
+
+            if (missingUids.Count > 0 && Time.realtimeSinceStartup - _lastProfileFetchAt >= 2.0f)
+            {
+                _lastProfileFetchAt = Time.realtimeSinceStartup;
+                FetchProfiles(missingUids);
+            }
+
+            CleanupUnusedCardBadges(activeCards);
+            UpdateRoomRiskBanner(heroUi, riskySummaries);
+        }
+
+        private void UpdateSingleCardBadge(GComponent card, string uidStr, bool isSelf, bool isHeroCard)
+        {
+            CardBadgeVisual vis = null;
+            for (int i = 0; i < _cardBadges.Count; i++)
+            {
+                if (_cardBadges[i].HostCard == card && _cardBadges[i].Root != null && !_cardBadges[i].Root.isDisposed && _cardBadges[i].Root.parent == card)
+                {
+                    vis = _cardBadges[i];
+                    break;
+                }
+            }
+            if (vis == null)
+            {
+                GObject existing = card.GetChild(CardBadgeName);
+                if (existing != null && !existing.isDisposed) existing.Dispose();
+
+                var root = new GComponent { name = CardBadgeName, touchable = false, opaque = false };
+                var borderTop = new GGraph { touchable = false };
+                var borderBottom = new GGraph { touchable = false };
+                var borderLeft = new GGraph { touchable = false };
+                var borderRight = new GGraph { touchable = false };
+                var pillBg = new GGraph { touchable = false };
+                var pillText = new GTextField
+                {
+                    name = "CreditLabel",
+                    touchable = false,
+                    autoSize = AutoSizeType.Both,
+                    align = AlignType.Left,
+                    stroke = 1f,
+                    strokeColor = new Color(0f, 0f, 0f, 0.92f)
+                };
+                TextFormat fmt = pillText.textFormat;
+                fmt.size = Application.isMobilePlatform ? 22 : (isHeroCard ? 16 : 18);
+                fmt.bold = true;
+                fmt.color = Color.white;
+                pillText.textFormat = fmt;
+
+                root.AddChild(borderTop);
+                root.AddChild(borderBottom);
+                root.AddChild(borderLeft);
+                root.AddChild(borderRight);
+                root.AddChild(pillBg);
+                root.AddChild(pillText);
+                card.AddChild(root);
+
+                vis = new CardBadgeVisual
+                {
+                    HostCard = card,
+                    Root = root,
+                    PillBg = pillBg,
+                    PillText = pillText,
+                    BorderTop = borderTop,
+                    BorderBottom = borderBottom,
+                    BorderLeft = borderLeft,
+                    BorderRight = borderRight
+                };
+                _cardBadges.Add(vis);
+            }
+
+            if (vis.Root.parent == card)
+            {
+                card.SetChildIndex(vis.Root, card.numChildren - 1);
+            }
+
+            float cw = Mathf.Max(180f, card.width);
+            float ch = Mathf.Max(60f, card.height);
+            vis.Root.SetSize(cw, ch);
+            vis.Root.SetXY(0f, 0f);
+
+            CreditProfileModel p = GetCachedProfile(uidStr);
+            string cardRiskReason = string.Empty;
+            bool risky = !isSelf && IsPeerRisky(uidStr, out cardRiskReason);
+            vis.IsRisky = risky;
+
+            string labelText;
+            Color pillColor;
+            Color textColor;
+            if (p == null)
+            {
+                labelText = "★ 星枢信誉 查询中…";
+                pillColor = new Color(0.08f, 0.11f, 0.17f, 0.84f);
+                textColor = new Color(0.82f, 0.90f, 0.98f, 1f);
+            }
+            else if (risky)
+            {
+                string prefix = p.BlacklistedByMe ? "⚠ 黑名单警告" : (p.FleetBanned ? "⚠ 车队受限" : "⚠ 低信誉警告");
+                labelText = string.Format(CultureInfo.InvariantCulture, "{0} · {1}分 · 拔线{2:F0}%", prefix, p.Score, p.GiveUpRate);
+                pillColor = new Color(0.68f, 0.06f, 0.12f, 0.95f);
+                textColor = new Color(1.0f, 0.94f, 0.72f, 1f);
+            }
+            else if (p.Score >= 90)
+            {
+                string tier = p.Observing ? "观察期" : p.TierLabel;
+                labelText = string.Format(CultureInfo.InvariantCulture, "★ 信誉 {0} · {1} | 拔线{2:F0}%", p.Score, tier, p.GiveUpRate);
+                pillColor = new Color(0.05f, 0.24f, 0.18f, 0.88f);
+                textColor = new Color(0.56f, 0.98f, 0.76f, 1f);
+            }
+            else if (p.Score >= 80)
+            {
+                labelText = string.Format(CultureInfo.InvariantCulture, "★ 信誉 {0} · {1} | 拔线{2:F0}%", p.Score, p.TierLabel, p.GiveUpRate);
+                pillColor = new Color(0.06f, 0.18f, 0.28f, 0.88f);
+                textColor = new Color(0.62f, 0.90f, 1.0f, 1f);
+            }
+            else
+            {
+                labelText = string.Format(CultureInfo.InvariantCulture, "★ 信誉 {0} · {1} | 拔线{2:F0}%", p.Score, p.TierLabel, p.GiveUpRate);
+                pillColor = new Color(0.38f, 0.22f, 0.04f, 0.92f);
+                textColor = new Color(1.0f, 0.84f, 0.45f, 1f);
+            }
+
+            TextFormat curFmt = vis.PillText.textFormat;
+            if (curFmt.color != textColor)
+            {
+                curFmt.color = textColor;
+                vis.PillText.textFormat = curFmt;
+            }
+            if (vis.PillText.text != labelText)
+            {
+                vis.PillText.text = labelText;
+            }
+
+            float padX = 12f;
+            float padY = 4f;
+            float pillW = Mathf.Clamp(vis.PillText.width + padX * 2f, 140f, Mathf.Max(140f, cw - 20f));
+            float pillH = Mathf.Max(26f, vis.PillText.height + padY * 2f);
+            float pillX = isHeroCard
+                ? Mathf.Max(8f, (cw - pillW) * 0.5f)
+                : Mathf.Clamp(cw * 0.28f, 130f, Mathf.Max(130f, cw - pillW - 142f));
+            float pillY = isHeroCard ? 8f : 6f;
+
+            vis.PillBg.SetSize(pillW, pillH);
+            vis.PillBg.SetXY(pillX, pillY);
+            vis.PillBg.DrawRoundRect(pillW, pillH, pillColor, new float[] { 8f, 8f, 8f, 8f });
+            vis.PillText.SetXY(pillX + padX, pillY + padY);
+
+            vis.BorderTop.visible = risky;
+            vis.BorderBottom.visible = risky;
+            vis.BorderLeft.visible = risky;
+            vis.BorderRight.visible = risky;
+            if (risky)
+            {
+                float t = 5f;
+                Color warnCol = new Color(1.0f, 0.16f, 0.22f, 0.92f);
+                float[] r0 = { 4f, 4f, 4f, 4f };
+                vis.BorderTop.SetXY(2f, 2f);
+                vis.BorderTop.SetSize(cw - 4f, t);
+                vis.BorderTop.DrawRoundRect(cw - 4f, t, warnCol, r0);
+
+                vis.BorderBottom.SetXY(2f, ch - t - 2f);
+                vis.BorderBottom.SetSize(cw - 4f, t);
+                vis.BorderBottom.DrawRoundRect(cw - 4f, t, warnCol, r0);
+
+                vis.BorderLeft.SetXY(2f, 2f);
+                vis.BorderLeft.SetSize(t, ch - 4f);
+                vis.BorderLeft.DrawRoundRect(t, ch - 4f, warnCol, r0);
+
+                vis.BorderRight.SetXY(cw - t - 2f, 2f);
+                vis.BorderRight.SetSize(t, ch - 4f);
+                vis.BorderRight.DrawRoundRect(t, ch - 4f, warnCol, r0);
+            }
+        }
+
+        private void PulseRiskyBorders(float now)
+        {
+            float alpha = 0.58f + 0.40f * Mathf.Abs(Mathf.Sin(now * 4.5f));
+            for (int i = 0; i < _cardBadges.Count; i++)
+            {
+                CardBadgeVisual vis = _cardBadges[i];
+                if (!vis.IsRisky || vis.Root == null || vis.Root.isDisposed) continue;
+                vis.BorderTop.alpha = alpha;
+                vis.BorderBottom.alpha = alpha;
+                vis.BorderLeft.alpha = alpha;
+                vis.BorderRight.alpha = alpha;
+            }
+        }
+
+        private void UpdateRoomRiskBanner(GComponent panelUi, List<string> riskySummaries)
+        {
+            if (panelUi == null || panelUi.isDisposed || riskySummaries == null || riskySummaries.Count == 0)
+            {
+                if (_roomWarnBanner != null && !_roomWarnBanner.isDisposed) _roomWarnBanner.visible = false;
+                return;
+            }
+            if (_roomWarnBanner == null || _roomWarnBanner.isDisposed || _roomWarnBanner.parent != panelUi)
+            {
+                if (_roomWarnBanner != null && !_roomWarnBanner.isDisposed) _roomWarnBanner.Dispose();
+                GObject old = panelUi.GetChild(RoomWarnBannerName);
+                if (old != null && !old.isDisposed) old.Dispose();
+
+                _roomWarnBanner = new GComponent { name = RoomWarnBannerName, touchable = false, opaque = false };
+                _roomWarnBg = new GGraph { touchable = false };
+                _roomWarnText = new GTextField
+                {
+                    name = "WarnText",
+                    touchable = false,
+                    autoSize = AutoSizeType.Both,
+                    align = AlignType.Center,
+                    stroke = 1f,
+                    strokeColor = new Color(0f, 0f, 0f, 0.92f)
+                };
+                TextFormat wf = _roomWarnText.textFormat;
+                wf.size = Application.isMobilePlatform ? 24 : 20;
+                wf.bold = true;
+                wf.color = new Color(1.0f, 0.96f, 0.78f, 1f);
+                _roomWarnText.textFormat = wf;
+                _roomWarnBanner.AddChild(_roomWarnBg);
+                _roomWarnBanner.AddChild(_roomWarnText);
+                panelUi.AddChild(_roomWarnBanner);
+            }
+
+            panelUi.SetChildIndex(_roomWarnBanner, panelUi.numChildren - 1);
+            string text = "⚠ 低信誉风险警告：" + string.Join("、", riskySummaries.ToArray()) + "  |  按 F1 →「信誉与车队」可拉黑或踢出";
+            if (_roomWarnText.text != text) _roomWarnText.text = text;
+            float bw = Mathf.Clamp(_roomWarnText.width + 36f, 360f, Mathf.Max(360f, panelUi.width - 80f));
+            float bh = Mathf.Max(38f, _roomWarnText.height + 14f);
+            _roomWarnBanner.SetSize(bw, bh);
+            _roomWarnBanner.SetXY((panelUi.width - bw) * 0.5f, 18f);
+            _roomWarnBg.SetSize(bw, bh);
+            _roomWarnBg.DrawRoundRect(bw, bh, new Color(0.68f, 0.06f, 0.12f, 0.93f), new float[] { 10f, 10f, 10f, 10f });
+            _roomWarnText.SetXY((bw - _roomWarnText.width) * 0.5f, (bh - _roomWarnText.height) * 0.5f);
+            _roomWarnBanner.visible = true;
+        }
+
+        private void CleanupUnusedCardBadges(HashSet<GComponent> activeCards)
+        {
+            for (int i = _cardBadges.Count - 1; i >= 0; i--)
+            {
+                CardBadgeVisual vis = _cardBadges[i];
+                if (vis.HostCard == null || vis.HostCard.isDisposed || !activeCards.Contains(vis.HostCard))
+                {
+                    if (vis.Root != null && !vis.Root.isDisposed) vis.Root.Dispose();
+                    _cardBadges.RemoveAt(i);
+                }
+            }
+        }
+
+        private void DisposeCardOverlays()
+        {
+            for (int i = 0; i < _cardBadges.Count; i++)
+            {
+                try
+                {
+                    if (_cardBadges[i].Root != null && !_cardBadges[i].Root.isDisposed) _cardBadges[i].Root.Dispose();
+                }
+                catch { }
+            }
+            _cardBadges.Clear();
+            try
+            {
+                if (_roomWarnBanner != null && !_roomWarnBanner.isDisposed) _roomWarnBanner.Dispose();
+            }
+            catch { }
+            _roomWarnBanner = null;
+            _roomWarnBg = null;
+            _roomWarnText = null;
+        }
+
+        // --- Lightweight top-right in-match credit strip (hidden when native room/hero card badges are shown) ---
 
         private void OnGUI()
         {
-            if (!_enabled || !_hudStripEnabled || !_inRoom || _currentPeers.Count == 0) return;
+            if (!_enabled || !_hudStripEnabled || !_inRoom || _currentPeers.Count == 0 || _cardOverlayActive) return;
             EnsureGuiStyles();
 
             float rowH = 22f;
@@ -1225,19 +2059,24 @@ namespace XingShuRuntime.Utilities
 
         private void SendJsonRequest(string method, string path, object bodyObj, bool requireAuth, Action<bool, long, string> callback)
         {
-            string token = GetAuthToken();
-            if (requireAuth && string.IsNullOrEmpty(token))
+            bool useProxy = IsUsingHubProxy && path.StartsWith("/api/credit/", StringComparison.Ordinal);
+            string token = useProxy ? string.Empty : GetAuthToken();
+            if (requireAuth && !useProxy && string.IsNullOrEmpty(token))
             {
-                callback?.Invoke(false, 401, "{\"error\":\"请先完成星枢授权或绑定游戏账号\"}");
+                callback?.Invoke(false, 401, "{\"error\":\"请先在星枢 Hub 登录账号或完成一键授权\"}");
                 return;
             }
-            if (_httpInFlight.Count >= 8)
+            if (_httpInFlight.Count >= 10)
             {
                 callback?.Invoke(false, 429, "{\"error\":\"请求过于频繁，请稍候\"}");
                 return;
             }
 
-            var req = new UnityWebRequest(ApiOrigin + path, method);
+            string targetUrl = useProxy
+                ? string.Format(CultureInfo.InvariantCulture, "http://127.0.0.1:{0}{1}", _hubProxyPort, path)
+                : (ApiOrigin + path);
+
+            var req = new UnityWebRequest(targetUrl, method);
             if (bodyObj != null)
             {
                 string json = BridgeJson.Serialize(bodyObj);
@@ -1246,17 +2085,32 @@ namespace XingShuRuntime.Utilities
             req.downloadHandler = new DownloadHandlerBuffer();
             req.timeout = 12;
             req.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
-            req.SetRequestHeader("Origin", ApiOrigin);
-            if (!string.IsNullOrEmpty(token))
+            if (useProxy)
             {
-                req.SetRequestHeader("Authorization", "Bearer " + token);
+                req.SetRequestHeader("X-XingShu-Proxy-Nonce", _hubProxyNonce);
+            }
+            else
+            {
+                req.SetRequestHeader("Origin", ApiOrigin);
+                if (!string.IsNullOrEmpty(token))
+                {
+                    req.SetRequestHeader("Authorization", "Bearer " + token);
+                }
             }
             req.SendWebRequest();
             _httpInFlight.Add(new PendingHttp
             {
                 Request = req,
-                Callback = callback,
-                StartedAt = Time.realtimeSinceStartup
+                StartedAt = Time.realtimeSinceStartup,
+                Callback = (ok, code, body) =>
+                {
+                    if (useProxy && !ok && code <= 0)
+                    {
+                        _hubProxyReachable = false;
+                        _hubProxySignedIn = false;
+                    }
+                    callback?.Invoke(ok, code, body);
+                }
             });
         }
 
@@ -1419,6 +2273,8 @@ namespace XingShuRuntime.Utilities
 
         private void OnDestroy()
         {
+            CancelDeviceLogin();
+            DisposeCardOverlays();
             for (int i = 0; i < _httpInFlight.Count; i++)
             {
                 try { _httpInFlight[i].Request.Dispose(); } catch { }

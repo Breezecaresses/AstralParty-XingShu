@@ -319,6 +319,50 @@ fn write_disk_cached_core_manifest(raw: &[u8]) {
     }
 }
 
+fn runtime_version_key(version: &str) -> Vec<u64> {
+    let mut parts = Vec::new();
+    let mut current: Option<u64> = None;
+    for b in version.bytes() {
+        if b.is_ascii_digit() {
+            current = Some(
+                current
+                    .unwrap_or(0)
+                    .saturating_mul(10)
+                    .saturating_add((b - b'0') as u64),
+            );
+        } else if let Some(val) = current.take() {
+            parts.push(val);
+        }
+    }
+    if let Some(val) = current {
+        parts.push(val);
+    }
+    parts
+}
+
+fn prefer_newer_core_manifest(
+    candidate: CoreManifestBundle,
+    embedded: CoreManifestBundle,
+) -> (CoreManifestBundle, bool) {
+    if runtime_version_key(&embedded.release.runtime_version)
+        > runtime_version_key(&candidate.release.runtime_version)
+    {
+        let mut kept = embedded;
+        let mut seen: HashSet<String> = kept
+            .official_modules
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        for module in candidate.official_modules {
+            if seen.insert(module.id.clone()) {
+                kept.official_modules.push(module);
+            }
+        }
+        return (kept, false);
+    }
+    (candidate, true)
+}
+
 fn cached_or_embedded_core_manifest() -> HubResult<CoreManifestBundle> {
     {
         let guard = core_manifest_cache()
@@ -328,10 +372,11 @@ fn cached_or_embedded_core_manifest() -> HubResult<CoreManifestBundle> {
             return Ok(bundle.clone());
         }
     }
+    let embedded = embedded_core_manifest()?;
     if let Some(disk_bundle) = read_disk_cached_core_manifest() {
-        return Ok(disk_bundle);
+        return Ok(prefer_newer_core_manifest(disk_bundle, embedded).0);
     }
-    embedded_core_manifest()
+    Ok(embedded)
 }
 
 async fn resolve_core_manifest(force_refresh: bool) -> HubResult<CoreManifestBundle> {
@@ -357,18 +402,22 @@ async fn resolve_core_manifest(force_refresh: bool) -> HubResult<CoreManifestBun
             .map_err(|_| error("NETWORK", "无法初始化核心清单网络请求。"))?;
         let raw = crate::remote_content::read(&client, CORE_MANIFEST_PATH, CORE_MANIFEST_MAX_BYTES).await?;
         let bundle = parse_and_validate_core_manifest(&raw, "remote")?;
-        write_disk_cached_core_manifest(&raw);
-        Ok::<CoreManifestBundle, HubError>(bundle)
+        Ok::<(Vec<u8>, CoreManifestBundle), HubError>((raw, bundle))
     }
     .await;
 
     match fetched {
-        Ok(bundle) => {
+        Ok((raw, remote_bundle)) => {
+            let embedded = embedded_core_manifest()?;
+            let (effective, remote_won) = prefer_newer_core_manifest(remote_bundle, embedded);
+            if remote_won {
+                write_disk_cached_core_manifest(&raw);
+            }
             let mut guard = core_manifest_cache()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            *guard = Some((Instant::now(), CORE_MANIFEST_TTL, bundle.clone()));
-            Ok(bundle)
+            *guard = Some((Instant::now(), CORE_MANIFEST_TTL, effective.clone()));
+            Ok(effective)
         }
         Err(_) => {
             let fallback = cached_or_embedded_core_manifest()?;
@@ -1543,6 +1592,18 @@ fn enrich_conflict_report(root: &Path, report: &mut ConflictInspectReport) {
     }
 }
 
+fn normalize_windows_explorer_path(path: &Path) -> String {
+    dunce::simplified(path)
+        .to_string_lossy()
+        .replace('/', "\\")
+        .replace('"', "")
+}
+
+#[cfg(any(windows, test))]
+fn format_explorer_select_raw_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", normalize_windows_explorer_path(path))
+}
+
 #[tauri::command]
 pub async fn launcher_reveal_conflict_item(
     installation_id: String,
@@ -1555,9 +1616,10 @@ pub async fn launcher_reveal_conflict_item(
         .ok_or_else(|| error("INVALID_PATH", "冲突文件路径不合法。"))?;
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         if target.is_file() {
-            Command::new("explorer")
-                .arg(format!("/select,{}", target.to_string_lossy()))
+            Command::new("explorer.exe")
+                .raw_arg(format_explorer_select_raw_arg(&target))
                 .spawn()
                 .map_err(|_| error("OPEN_DIR_FAILED", "无法定位冲突文件。"))?;
         } else {
@@ -1566,8 +1628,8 @@ pub async fn launcher_reveal_conflict_item(
             } else {
                 target.parent().unwrap_or(&root)
             };
-            Command::new("explorer")
-                .arg(folder)
+            Command::new("explorer.exe")
+                .arg(normalize_windows_explorer_path(folder))
                 .spawn()
                 .map_err(|_| error("OPEN_DIR_FAILED", "无法打开冲突所在目录。"))?;
         }
@@ -1866,5 +1928,66 @@ mod tests {
             };
             crate::install::engine::InstallEngine::check_compatibility(&parsed, &game).unwrap();
         }
+    }
+
+    #[test]
+    fn explorer_select_arg_strips_verbatim_prefix_and_quotes_spaces() {
+        let verbatim = Path::new(r"\\?\E:\Steam\steamapps\common\Astral Party\8vJXn6CN\__data");
+        assert_eq!(
+            format_explorer_select_raw_arg(verbatim),
+            r#"/select,"E:\Steam\steamapps\common\Astral Party\8vJXn6CN\__data""#
+        );
+        let forward = Path::new("E:/Steam/steamapps/common/Astral Party/8vJXn6CN/__data");
+        assert_eq!(
+            format_explorer_select_raw_arg(forward),
+            r#"/select,"E:\Steam\steamapps\common\Astral Party\8vJXn6CN\__data""#
+        );
+    }
+
+    #[test]
+    fn newer_embedded_manifest_beats_older_remote_while_newer_remote_hot_updates() {
+        let embedded = embedded_core_manifest().unwrap();
+        let make_remote = |rt_ver: &str| {
+            let raw = serde_json::to_vec(&serde_json::json!({
+                "formatVersion": 1,
+                "runtimeVersion": rt_ver,
+                "pathPrefix": "/xingshu-hub/assets/launcher-runtime/test",
+                "payloadSizes": { "STEAM_CN": 9100000 },
+                "release": {
+                    "FormatVersion": 1,
+                    "Version": "0.2.0",
+                    "HubSha256": "5".repeat(64),
+                    "RuntimeVersion": rt_ver,
+                    "Platforms": [{
+                        "Id": "STEAM_CN",
+                        "GameAssemblySha256": "4".repeat(64),
+                        "BundleRelativePath": "AstralParty_CN_Data\\com.unity.addressables\\AssetBundles\\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\__data",
+                        "Payload": "Runtime/STEAM_CN/__data",
+                        "PayloadSha256": "2".repeat(64),
+                        "VanillaSha256": "3".repeat(64),
+                        "AcceptedHashes": ["3".repeat(64)]
+                    }]
+                },
+                "inventory": [],
+                "officialModules": [
+                    { "id": "hand-monitor", "name": "手牌监视", "description": "desc" },
+                    { "id": "remote-extra-mod", "name": "远端扩展", "description": "desc" }
+                ]
+            }))
+            .unwrap();
+            parse_and_validate_core_manifest(&raw, "remote").unwrap()
+        };
+
+        let older_remote = make_remote("1.0.0-game-ui-r8.59");
+        let (kept, remote_won) = prefer_newer_core_manifest(older_remote, embedded.clone());
+        assert!(!remote_won);
+        assert_eq!(kept.release.runtime_version, embedded.release.runtime_version);
+        assert!(kept.official_modules.iter().any(|m| m.id == "credit-guard"));
+        assert!(kept.official_modules.iter().any(|m| m.id == "remote-extra-mod"));
+
+        let newer_remote = make_remote("1.0.0-game-ui-r8.99");
+        let (adopted, remote_won) = prefer_newer_core_manifest(newer_remote, embedded);
+        assert!(remote_won);
+        assert_eq!(adopted.release.runtime_version, "1.0.0-game-ui-r8.99");
     }
 }

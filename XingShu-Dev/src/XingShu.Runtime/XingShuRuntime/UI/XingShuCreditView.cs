@@ -17,6 +17,7 @@ namespace XingShuRuntime.UI
         private static readonly string[] ReasonLabels = { "恶意挂机/摆烂", "故意送头/坑人", "频繁恶意拔线", "言语辱骂/骚扰", "疑似异常/作弊" };
         private static readonly int[] MinCreditPresets = { 70, 80, 85, 90, 95 };
         private static readonly int[] MaxGiveUpPresets = { 10, 15, 20, 30 };
+        private static readonly int[] RoomWaitPresets = { 15, 30, 60, 180, 0 };
 
         private readonly GameObject _root;
         private int _subTab;
@@ -46,8 +47,13 @@ namespace XingShuRuntime.UI
         // SubTab 1: Fleet Host & Browser
         private Text _minCreditValText;
         private Text _maxGiveUpValText;
+        private Text _fleetMapText;
+        private Text _fleetDiffText;
         private Toggle _blockBlkToggle;
         private Toggle _autoKickToggle;
+        private Toggle _extendRoomWaitToggle;
+        private Text _roomWaitLimitText;
+        private Text _roomWaitStatusText;
         private Text _hostStatusText;
         private readonly GameObject[] _fleetRows = new GameObject[5];
         private readonly Text[] _fleetTexts = new Text[5];
@@ -71,6 +77,8 @@ namespace XingShuRuntime.UI
         private readonly Text[] _blkTexts = new Text[6];
         private readonly string[] _blkUids = new string[6];
         private Text _authStatusText;
+        private Text _oneClickLoginBtnText;
+        private Button _cancelLoginBtn;
         private InputField _authTokenInput;
 
         private float _lastAutoRefresh;
@@ -229,9 +237,9 @@ namespace XingShuRuntime.UI
             vlg.childForceExpandHeight = false;
             _subPanels[1] = wrap;
 
-            GameObject hostCard = XingShuViewCardHelper.CreateCardContainer(wrap, "Card_FleetHost", 200f);
-            Text hTitle = XingShuUIFactory.CreateText(hostCard, "HTitle", "高信誉密码开房 & 房主门禁规则", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            XingShuViewCardHelper.PlaceTopLeft(hTitle.rectTransform, new Vector2(20f, -12f), new Vector2(360f, 24f));
+            GameObject hostCard = XingShuViewCardHelper.CreateCardContainer(wrap, "Card_FleetHost", 312f);
+            Text hTitle = XingShuUIFactory.CreateText(hostCard, "HTitle", "高信誉密码开房、房主门禁 & 官方房间保活", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(hTitle.rectTransform, new Vector2(20f, -12f), new Vector2(440f, 24f));
 
             Button minBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "MinCreditCycle", "信誉门槛 ≥ 85",
                 () =>
@@ -257,30 +265,73 @@ namespace XingShuRuntime.UI
             XingShuViewCardHelper.PlaceTopLeft(guBtn.GetComponent<RectTransform>(), new Vector2(178f, -46f), new Vector2(148f, 30f));
             _maxGiveUpValText = guBtn.GetComponentInChildren<Text>();
 
+            Button waitLimitBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "RoomWaitLimitCycle", "停留上限：60分钟",
+                () =>
+                {
+                    CreditGuardRuntime rt = CreditGuardRuntime.Instance;
+                    if (rt == null) return;
+                    int idx = Array.IndexOf(RoomWaitPresets, rt.RoomWaitMinutes);
+                    rt.RoomWaitMinutes = RoomWaitPresets[(idx + 1) % RoomWaitPresets.Length];
+                    UpdateSync();
+                }, 162f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(waitLimitBtn.GetComponent<RectTransform>(), new Vector2(336f, -46f), new Vector2(162f, 30f));
+            _roomWaitLimitText = waitLimitBtn.GetComponentInChildren<Text>();
+
             _blockBlkToggle = XingShuUIFactory.CreateToggle(hostCard, "BlockBlacklistToggle", "拦截黑名单",
                 CreditGuardRuntime.Instance == null || CreditGuardRuntime.Instance.BlockBlacklisted,
                 v => { if (!_suppressCallbacks && CreditGuardRuntime.Instance != null) CreditGuardRuntime.Instance.BlockBlacklisted = v; });
-            XingShuViewCardHelper.PlaceTopLeft(_blockBlkToggle.GetComponent<RectTransform>(), new Vector2(20f, -86f), new Vector2(150f, 30f));
+            XingShuViewCardHelper.PlaceTopLeft(_blockBlkToggle.GetComponent<RectTransform>(), new Vector2(20f, -86f), new Vector2(138f, 30f));
 
             _autoKickToggle = XingShuUIFactory.CreateToggle(hostCard, "AutoKickToggle", "房主自动踢低信誉",
                 CreditGuardRuntime.Instance != null && CreditGuardRuntime.Instance.AutoKick,
                 v => { if (!_suppressCallbacks && CreditGuardRuntime.Instance != null) CreditGuardRuntime.Instance.AutoKick = v; });
-            XingShuViewCardHelper.PlaceTopLeft(_autoKickToggle.GetComponent<RectTransform>(), new Vector2(182f, -86f), new Vector2(190f, 30f));
+            XingShuViewCardHelper.PlaceTopLeft(_autoKickToggle.GetComponent<RectTransform>(), new Vector2(164f, -86f), new Vector2(170f, 30f));
+
+            _extendRoomWaitToggle = XingShuUIFactory.CreateToggle(hostCard, "ExtendRoomWaitToggle", "延长官方房间停留",
+                CreditGuardRuntime.Instance == null || CreditGuardRuntime.Instance.ExtendRoomWait,
+                v => { if (!_suppressCallbacks && CreditGuardRuntime.Instance != null) CreditGuardRuntime.Instance.ExtendRoomWait = v; });
+            XingShuViewCardHelper.PlaceTopLeft(_extendRoomWaitToggle.GetComponent<RectTransform>(), new Vector2(340f, -86f), new Vector2(180f, 30f));
+
+            Button mapBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "FleetMapCycle", "地图：森秋幻境",
+                () =>
+                {
+                    CreditGuardRuntime rt = CreditGuardRuntime.Instance;
+                    if (rt == null) return;
+                    int idx = Array.IndexOf(CreditGuardRuntime.FleetPveMapIds, rt.FleetMapId);
+                    rt.FleetMapId = CreditGuardRuntime.FleetPveMapIds[(idx + 1) % CreditGuardRuntime.FleetPveMapIds.Length];
+                    UpdateSync();
+                }, 230f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(mapBtn.GetComponent<RectTransform>(), new Vector2(20f, -124f), new Vector2(230f, 30f));
+            _fleetMapText = mapBtn.GetComponentInChildren<Text>();
+
+            Button diffBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "FleetDiffCycle", "难度：噩梦",
+                () =>
+                {
+                    CreditGuardRuntime rt = CreditGuardRuntime.Instance;
+                    if (rt == null) return;
+                    rt.FleetDifficulty = (rt.FleetDifficulty + 1) % CreditGuardRuntime.FleetDifficultyNames.Length;
+                    UpdateSync();
+                }, 148f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(diffBtn.GetComponent<RectTransform>(), new Vector2(260f, -124f), new Vector2(148f, 30f));
+            _fleetDiffText = diffBtn.GetComponentInChildren<Text>();
 
             Button createBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "CreateFleetBtn", "一键开高信誉密码房",
                 () => CreditGuardRuntime.Instance?.CreateHighCreditRoom(), 164f, 34f, 12);
-            XingShuViewCardHelper.PlaceTopLeft(createBtn.GetComponent<RectTransform>(), new Vector2(20f, -126f), new Vector2(164f, 34f));
+            XingShuViewCardHelper.PlaceTopLeft(createBtn.GetComponent<RectTransform>(), new Vector2(20f, -164f), new Vector2(164f, 34f));
 
             Button pubBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "PublishCurrentBtn", "托管当前房间",
                 () => CreditGuardRuntime.Instance?.PublishCurrentRoomToFleet(), 126f, 34f, 12);
-            XingShuViewCardHelper.PlaceTopLeft(pubBtn.GetComponent<RectTransform>(), new Vector2(194f, -126f), new Vector2(126f, 34f));
+            XingShuViewCardHelper.PlaceTopLeft(pubBtn.GetComponent<RectTransform>(), new Vector2(194f, -164f), new Vector2(126f, 34f));
 
             Button stopBtn = XingShuViewCardHelper.CreateActionButton(hostCard, "StopHostBtn", "停止广播",
                 () => CreditGuardRuntime.Instance?.StopHostingFleetRoom(), 96f, 34f, 12);
-            XingShuViewCardHelper.PlaceTopLeft(stopBtn.GetComponent<RectTransform>(), new Vector2(330f, -126f), new Vector2(96f, 34f));
+            XingShuViewCardHelper.PlaceTopLeft(stopBtn.GetComponent<RectTransform>(), new Vector2(330f, -164f), new Vector2(96f, 34f));
 
             _hostStatusText = XingShuUIFactory.CreateText(hostCard, "HostStatus", "", 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            XingShuViewCardHelper.PlaceStretchTop(_hostStatusText.rectTransform, 166f, 22f, 40f);
+            XingShuViewCardHelper.PlaceStretchTop(_hostStatusText.rectTransform, 206f, 24f, 40f);
+
+            _roomWaitStatusText = XingShuUIFactory.CreateText(hostCard, "RoomWaitStatus", "", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            XingShuViewCardHelper.PlaceStretchTop(_roomWaitStatusText.rectTransform, 236f, 54f, 40f);
 
             GameObject listCard = XingShuViewCardHelper.CreateCardContainer(wrap, "Card_FleetList", 336f);
             Text lTitle = XingShuUIFactory.CreateText(listCard, "LTitle", "星枢高信誉车队大厅（通过门槛后自动直连密码进房）", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
@@ -399,29 +450,53 @@ namespace XingShuRuntime.UI
             vlg.childForceExpandHeight = false;
             _subPanels[3] = wrap;
 
-            GameObject authCard = XingShuViewCardHelper.CreateCardContainer(wrap, "Card_CreditAuth", 142f);
-            Text aTitle = XingShuUIFactory.CreateText(authCard, "ATitle", "星枢账号授权状态（用于点赞、拉黑、反馈与车队进房鉴权）", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            XingShuViewCardHelper.PlaceTopLeft(aTitle.rectTransform, new Vector2(20f, -12f), new Vector2(490f, 24f));
+            GameObject authCard = XingShuViewCardHelper.CreateCardContainer(wrap, "Card_CreditAuth", 204f);
+            Text aTitle = XingShuUIFactory.CreateText(authCard, "ATitle", "星枢账号授权状态（自动复用桌面端 Hub 登录，不会顶号）", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(aTitle.rectTransform, new Vector2(20f, -12f), new Vector2(500f, 24f));
 
-            _authStatusText = XingShuUIFactory.CreateText(authCard, "AuthStatus", "", 12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
-            XingShuViewCardHelper.PlaceStretchTop(_authStatusText.rectTransform, 40f, 24f, 40f);
+            _authStatusText = XingShuUIFactory.CreateText(authCard, "AuthStatus", "", 12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
+            XingShuViewCardHelper.PlaceStretchTop(_authStatusText.rectTransform, 40f, 46f, 40f);
 
-            _authTokenInput = XingShuUIFactory.CreateInputField(authCard, "ManualTokenInput", "如未自动同步授权，可粘贴星枢会话令牌…",
+            Button probeHubBtn = XingShuViewCardHelper.CreateActionButton(authCard, "ProbeHubBtn", "检测桌面 Hub 登录",
+                () =>
+                {
+                    CreditGuardRuntime.Instance?.RefreshHubProxyNow();
+                    UpdateSync();
+                }, 152f, 34f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(probeHubBtn.GetComponent<RectTransform>(), new Vector2(20f, -96f), new Vector2(152f, 34f));
+
+            Button oneClickLoginBtn = XingShuViewCardHelper.CreateActionButton(authCard, "OneClickLoginBtn", "备用：浏览器登录",
+                () =>
+                {
+                    CreditGuardRuntime rt = CreditGuardRuntime.Instance;
+                    if (rt == null) return;
+                    if (!rt.IsUsingHubProxy && rt.HasAuthToken && !rt.IsDeviceLoginPending) rt.ClearManualAuthToken();
+                    else rt.StartDeviceLogin();
+                    UpdateSync();
+                }, 156f, 34f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(oneClickLoginBtn.GetComponent<RectTransform>(), new Vector2(182f, -96f), new Vector2(156f, 34f));
+            _oneClickLoginBtnText = oneClickLoginBtn.GetComponentInChildren<Text>();
+
+            _cancelLoginBtn = XingShuViewCardHelper.CreateActionButton(authCard, "CancelLoginBtn", "取消等待",
+                () =>
+                {
+                    CreditGuardRuntime.Instance?.CancelDeviceLogin();
+                    UpdateSync();
+                }, 86f, 34f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(_cancelLoginBtn.GetComponent<RectTransform>(), new Vector2(348f, -96f), new Vector2(86f, 34f));
+
+            _authTokenInput = XingShuUIFactory.CreateInputField(authCard, "ManualTokenInput", "备用：手动粘贴星枢会话凭据…",
                 string.Empty, "credit_auth_token");
-            XingShuViewCardHelper.PlaceTopLeft(_authTokenInput.GetComponent<RectTransform>(), new Vector2(20f, -82f), new Vector2(290f, 34f));
+            XingShuViewCardHelper.PlaceTopLeft(_authTokenInput.GetComponent<RectTransform>(), new Vector2(20f, -144f), new Vector2(310f, 32f));
 
-            Button saveTokBtn = XingShuViewCardHelper.CreateActionButton(authCard, "SaveTokBtn", "保存令牌",
+            Button saveTokBtn = XingShuViewCardHelper.CreateActionButton(authCard, "SaveTokBtn", "保存备用凭据",
                 () =>
                 {
                     CreditGuardRuntime.Instance?.SaveManualAuthToken(_authTokenInput != null ? _authTokenInput.text : string.Empty);
                     if (_authTokenInput != null) _authTokenInput.text = string.Empty;
                     UpdateSync();
-                }, 88f, 34f, 12);
-            XingShuViewCardHelper.PlaceTopLeft(saveTokBtn.GetComponent<RectTransform>(), new Vector2(320f, -82f), new Vector2(88f, 34f));
-
-            Button clrTokBtn = XingShuViewCardHelper.CreateActionButton(authCard, "ClrTokBtn", "清除",
-                () => { CreditGuardRuntime.Instance?.ClearManualAuthToken(); UpdateSync(); }, 68f, 34f, 12);
-            XingShuViewCardHelper.PlaceTopLeft(clrTokBtn.GetComponent<RectTransform>(), new Vector2(416f, -82f), new Vector2(68f, 34f));
+                }, 108f, 32f, 12);
+            XingShuViewCardHelper.PlaceTopLeft(saveTokBtn.GetComponent<RectTransform>(), new Vector2(340f, -144f), new Vector2(108f, 32f));
 
             GameObject blkCard = XingShuViewCardHelper.CreateCardContainer(wrap, "Card_Blacklist", 336f);
             Text bTitle = XingShuUIFactory.CreateText(blkCard, "BTitle", "我的星枢云端黑名单（开房/选房自动屏蔽）", 15, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
@@ -542,8 +617,17 @@ namespace XingShuRuntime.UI
                 // SubTab 1
                 if (_minCreditValText != null) _minCreditValText.text = "信誉门槛 ≥ " + rt.MinCredit;
                 if (_maxGiveUpValText != null) _maxGiveUpValText.text = "拔线上限 ≤ " + rt.MaxGiveUpRate + "%";
+                if (_fleetMapText != null) _fleetMapText.text = "地图：" + rt.FleetMapName;
+                if (_fleetDiffText != null) _fleetDiffText.text = "难度：" + rt.FleetDifficultyName;
+                if (_roomWaitLimitText != null)
+                {
+                    _roomWaitLimitText.text = rt.RoomWaitMinutes <= 0
+                        ? "停留上限：不自动关房"
+                        : "停留上限：" + rt.RoomWaitMinutes + " 分钟";
+                }
                 if (_blockBlkToggle != null) _blockBlkToggle.isOn = rt.BlockBlacklisted;
                 if (_autoKickToggle != null) _autoKickToggle.isOn = rt.AutoKick;
+                if (_extendRoomWaitToggle != null) _extendRoomWaitToggle.isOn = rt.ExtendRoomWait;
                 if (_hostStatusText != null)
                 {
                     _hostStatusText.text = rt.HostingFleetRoom
@@ -551,6 +635,24 @@ namespace XingShuRuntime.UI
                         : rt.InRoom
                             ? (rt.IsRoomHost ? "当前在房 #" + rt.CurrentRoomId + "，点击「托管当前房间」可开放高信誉门禁" : "当前已在别人房间 #" + rt.CurrentRoomId)
                             : "当前未在房间；大厅点击「一键开高信誉密码房」将自动设密码并注册车队";
+                }
+                if (_roomWaitStatusText != null)
+                {
+                    string limitDesc = rt.RoomWaitMinutes <= 0 ? "不自动关房" : (rt.RoomWaitMinutes + " 分钟");
+                    if (rt.InWaitRoom)
+                    {
+                        int mins = (int)(rt.RoomWaitElapsedSeconds / 60d);
+                        int secs = (int)(rt.RoomWaitElapsedSeconds % 60d);
+                        _roomWaitStatusText.text = rt.ExtendRoomWait
+                            ? string.Format(CultureInfo.InvariantCulture, "官方房间真实时钟保活生效中（不受倍速影响）：已停留 {0}分{1:00}秒 / 上限 {2}", mins, secs, limitDesc)
+                            : "官方房间停留延长已关闭：开启游戏倍速时官方房间倒计时会被同步加速并提前自动关房。";
+                    }
+                    else
+                    {
+                        _roomWaitStatusText.text = rt.ExtendRoomWait
+                            ? "官方房间保活已开启（上限 " + limitDesc + "）：屏蔽原版受倍速影响的自动关房计时器。"
+                            : "官方房间保活已关闭。";
+                    }
                 }
 
                 IList<CreditGuardRuntime.FleetRoomModel> rooms = rt.FleetRooms;
@@ -622,9 +724,34 @@ namespace XingShuRuntime.UI
                 // SubTab 3
                 if (_authStatusText != null)
                 {
-                    _authStatusText.text = rt.HasAuthToken
-                        ? "已获取星枢授权令牌（UID " + rt.LocalUid + "），点赞/拉黑/反馈/车队/组队已全部解锁。"
-                        : "当前未检测到星枢授权令牌：仅支持只读查看队友信誉；安卓请先完成「手机助手绑定」，或下方粘贴令牌。";
+                    if (rt.IsUsingHubProxy)
+                    {
+                        _authStatusText.text = "已自动复用「星枢桌面端 Hub」登录态（UID " + rt.LocalUid + "）：\n点赞、拉黑、反馈与高信誉车队已全部解锁，无需二次登录、不会顶号！";
+                    }
+                    else if (rt.IsDeviceLoginPending)
+                    {
+                        _authStatusText.text = "正在等待你在浏览器中完成星枢登录授权（注意：首次校验同号票据可能会顶号一次）…\n登录完成后会自动回传凭证。";
+                    }
+                    else if (rt.HasAuthToken)
+                    {
+                        _authStatusText.text = "已保存独立星枢授权凭证（UID " + rt.LocalUid + "），点赞、拉黑、反馈与车队已解锁。\n如已在桌面端 Hub 登录，可点「检测桌面 Hub 登录」直接免重登同步。";
+                    }
+                    else
+                    {
+                        _authStatusText.text = rt.IsHubProxyReachable
+                            ? "已检测到桌面端 Hub 在运行，但 Hub 尚未登录星枢账号；请在 Hub「游戏账号」点登录（不顶号！），再点下方「检测桌面 Hub 登录」。"
+                            : "电脑端打开星枢 Hub 并登录即可免密自动复用（不会顶号）；若未开 Hub 或在手机端，可点「备用：浏览器登录」。";
+                    }
+                }
+                if (_oneClickLoginBtnText != null)
+                {
+                    _oneClickLoginBtnText.text = rt.IsDeviceLoginPending
+                        ? "重新打开浏览器"
+                        : (!rt.IsUsingHubProxy && rt.HasAuthToken) ? "退出备用授权" : "备用：浏览器登录";
+                }
+                if (_cancelLoginBtn != null)
+                {
+                    _cancelLoginBtn.gameObject.SetActive(rt.IsDeviceLoginPending);
                 }
                 IList<CreditGuardRuntime.BlacklistEntryModel> blks = rt.BlacklistEntries;
                 for (int i = 0; i < 6; i++)

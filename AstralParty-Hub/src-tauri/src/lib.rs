@@ -32,6 +32,8 @@ pub mod app_update;
 #[cfg(feature = "web-ui")]
 pub mod account_login;
 #[cfg(feature = "web-ui")]
+mod credit_proxy;
+#[cfg(feature = "web-ui")]
 pub mod launcher;
 #[cfg(feature = "web-ui")]
 pub mod in_game_room;
@@ -251,6 +253,7 @@ pub fn run() {
             if let Err(error) = bridge_server.start() {
                 tracing::warn!(%error, "Local bridge unavailable; continuing launcher startup");
             }
+            credit_proxy::start_credit_proxy(app_handle.clone());
             let spectator_service = Arc::new(SpectatorService::new(bridge_server.clone()));
             spectator_service.set_app_handle(app_handle.clone());
             spectator_service.start_snapshot_listener();

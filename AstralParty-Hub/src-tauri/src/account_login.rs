@@ -136,6 +136,11 @@ fn token(root: &Path) -> HubResult<Option<String>> {
     Ok(Some(value))
 }
 
+pub(crate) fn current_session_token(app: &tauri::AppHandle) -> Option<String> {
+    let root = data_root(app).ok()?;
+    token(&root).ok().flatten()
+}
+
 #[tauri::command]
 pub async fn get_cloud_account(app: tauri::AppHandle) -> HubResult<Value> {
     let root = data_root(&app)?;

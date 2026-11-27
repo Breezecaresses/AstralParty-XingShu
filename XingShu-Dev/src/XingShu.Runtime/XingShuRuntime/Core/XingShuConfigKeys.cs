@@ -605,4 +605,8 @@ internal static class XingShuConfigKeys
 	internal const bool CreditGuardAutoKickDefault = false;
 	internal const string CreditGuardAutoReady = "XINGSHU_CREDIT_AUTO_READY";
 	internal const bool CreditGuardAutoReadyDefault = true;
+	internal const string CreditGuardExtendRoomWait = "XINGSHU_CREDIT_EXTEND_ROOM_WAIT";
+	internal const bool CreditGuardExtendRoomWaitDefault = true;
+	internal const string CreditGuardRoomWaitMinutes = "XINGSHU_CREDIT_ROOM_WAIT_MINUTES";
+	internal const int CreditGuardRoomWaitMinutesDefault = 60;
 }
