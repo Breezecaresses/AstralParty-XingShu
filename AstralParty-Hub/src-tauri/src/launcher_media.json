@@ -1,10 +1,10 @@
 {
   "formatVersion": 1,
-  "pathPrefix": "/xingshu-hub/assets/launcher-runtime/r8.60",
+  "pathPrefix": "/xingshu-hub/assets/launcher-runtime/r8.61",
   "payloadSizes": {
-    "STEAM_CN": 9421569,
-    "TAPTAP": 9448066,
-    "BILIBILI": 9416497,
-    "WEGAME": 9416445
+    "STEAM_CN": 9424457,
+    "TAPTAP": 9448354,
+    "BILIBILI": 9417645,
+    "WEGAME": 9417149
   }
 }

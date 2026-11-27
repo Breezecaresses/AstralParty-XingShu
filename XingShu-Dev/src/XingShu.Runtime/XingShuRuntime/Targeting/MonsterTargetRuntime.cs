@@ -810,12 +810,12 @@ namespace XingShuRuntime.Targeting
             var format = row.Text.textFormat;
             format.font = anchor.textFormat.font;
             format.size = Mathf.Clamp(Mathf.RoundToInt(anchor.textFormat.size * 0.88f), 20, 28);
-            format.color = new Color(0.16f, 0.13f, 0.18f);
+            format.color = single ? new Color(1f, 0.93f, 0.72f, 1f) : new Color(1f, 0.80f, 0.90f, 1f);
             row.Text.textFormat = format;
-            row.Text.text = text;
+            if (row.Text.text != text) row.Text.text = text;
             float width = row.Text.width + 14f, height = row.Text.height + 6f;
-            row.Back.DrawRoundRect(width, height, single ? new Color(1f, 0.94f, 0.76f, 0.94f) :
-                new Color(1f, 0.87f, 0.93f, 0.94f), new[] { 6f, 6f, 6f, 6f });
+            if (!Mathf.Approximately(row.Back.width, width) || !Mathf.Approximately(row.Back.height, height))
+                row.Back.DrawRoundRect(width, height, new Color(0.055f, 0.065f, 0.09f, 0.84f), new[] { 6f, 6f, 6f, 6f });
             Place(row);
         }
 

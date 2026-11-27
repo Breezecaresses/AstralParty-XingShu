@@ -30,12 +30,14 @@ namespace XingShuRuntime.Utilities
         private const string PrefTokenPrefix = "XingShu_CreditAuthTok_";
         private const string PrefTokenFallback = "XingShu_CreditAuthTok_Default";
         private const string PrefDeviceIdKey = "XingShu_CreditDeviceId_v1";
-        private const float RoomScanInterval = 1.0f;
-        private const float ProfileCacheTtl = 45.0f;
-        private const float FleetHeartbeatInterval = 15.0f;
-        private const float FollowPollInterval = 4.0f;
-        private const float CardOverlayInterval = 0.25f;
-        private const float DevicePollInterval = 2.5f;
+        private const double RoomScanInterval = 1.0d;
+        private const double ProfileCacheTtl = 45.0d;
+        private const double FleetHeartbeatInterval = 15.0d;
+        private const double FollowPollInterval = 4.0d;
+        private const double CardOverlayInterval = 0.25d;
+        private const double DevicePollInterval = 2.5d;
+        private const double HttpRequestTimeoutSeconds = 15.0d;
+        private const double HubProbeTimeoutSeconds = 4.0d;
         private const string CardBadgeName = "XINGSHU_CreditCardBadge";
         private const string RoomWarnBannerName = "XINGSHU_RoomLowCreditBanner";
 
@@ -56,7 +58,7 @@ namespace XingShuRuntime.Utilities
             public bool BlacklistedByMe;
             public bool LikedByMe;
             public string TagsText = string.Empty;
-            public float FetchedAt;
+            public double FetchedAt;
         }
 
         internal sealed class RoomPeerModel
@@ -130,7 +132,8 @@ namespace XingShuRuntime.Utilities
         {
             public UnityWebRequest Request;
             public Action<bool, long, string> Callback;
-            public float StartedAt;
+            public double StartedAt;
+            public double TimeoutSeconds;
         }
 
         private static CreditGuardRuntime _instance;
@@ -178,22 +181,26 @@ namespace XingShuRuntime.Utilities
         private bool _hostingFleetRoom;
         private string _hostedRoomId = string.Empty;
         private string _hostedRoomPwd = string.Empty;
-        private float _lastHeartbeatAt;
+        private double _lastHeartbeatAt;
 
         private bool _autoFollowActive;
         private string _autoFollowHostUid = string.Empty;
         private string _lastFollowJoinedRoomId = string.Empty;
-        private float _lastFollowPollAt;
+        private double _lastFollowPollAt;
 
         private SquadModel _currentSquad;
         private string _lastSquadJoinedRoomId = string.Empty;
-        private float _lastSquadPollAt;
+        private double _lastSquadPollAt;
         private long _autoReadyDoneRoomId;
 
-        private float _lastRoomScanAt;
-        private float _lastProfileFetchAt;
-        private float _lastKickAt;
-        private float _lastCardOverlayAt;
+        private double _lastRoomScanAt;
+        private double _lastProfileFetchAt;
+        private bool _profileFetchInFlight;
+        private double _nextProfileRetryAt;
+        private int _profileConsecutiveFails;
+        private string _lastProfileError = string.Empty;
+        private double _lastKickAt;
+        private double _lastCardOverlayAt;
         private bool _cardOverlayActive;
         private string _statusMessage = "信誉分与车队模块已就绪";
 
@@ -231,8 +238,8 @@ namespace XingShuRuntime.Utilities
         private string _deviceLoginRequestId = string.Empty;
         private string _deviceLoginVerifier = string.Empty;
         private string _deviceLoginUrl = string.Empty;
-        private float _deviceLoginDeadline;
-        private float _lastDevicePollAt;
+        private double _deviceLoginDeadline;
+        private double _lastDevicePollAt;
         private bool _devicePollInFlight;
 
         // PC Desktop Hub localhost proxy auto-reuse (no re-login, no game kick)
@@ -240,8 +247,9 @@ namespace XingShuRuntime.Utilities
         private bool _hubProxySignedIn;
         private int _hubProxyPort;
         private string _hubProxyNonce = string.Empty;
-        private float _lastHubProxyProbeAt = -100f;
+        private double _lastHubProxyProbeAt = -1000d;
         private bool _hubProxyProbeInFlight;
+        private int _hubProxyConsecutiveFails;
 
         // Official PVE map & difficulty presets (matches room_host.py OFFICIAL_MAPS)
         internal static readonly int[] FleetPveMapIds = { 82017, 82016, 82015, 82014, 82013, 82012, 82010, 82008, 82007 };
@@ -410,6 +418,8 @@ namespace XingShuRuntime.Utilities
         internal string AutoFollowHostUid => _autoFollowHostUid;
         internal SquadModel CurrentSquad => _currentSquad;
         internal string StatusMessage => _statusMessage;
+        internal string LastProfileError => _lastProfileError;
+        internal bool IsProfileFetchInFlight => _profileFetchInFlight;
         internal IList<RoomPeerModel> ActivePeers => _currentPeers.Count > 0 ? _currentPeers : _recentPeers;
         internal IList<FleetRoomModel> FleetRooms => _fleetRooms;
         internal IList<BlacklistEntryModel> BlacklistEntries => _blacklistEntries;
@@ -439,7 +449,7 @@ namespace XingShuRuntime.Utilities
 
         internal void RefreshHubProxyNow()
         {
-            _lastHubProxyProbeAt = -100f;
+            _lastHubProxyProbeAt = -1000d;
             ProbeHubProxy();
         }
 
@@ -474,13 +484,14 @@ namespace XingShuRuntime.Utilities
 
                 var req = new UnityWebRequest(string.Format(CultureInfo.InvariantCulture, "http://127.0.0.1:{0}/_status", port), "GET");
                 req.downloadHandler = new DownloadHandlerBuffer();
-                req.timeout = 2;
+                req.timeout = 0;
                 req.SetRequestHeader("X-XingShu-Proxy-Nonce", nonce);
                 req.SendWebRequest();
                 _httpInFlight.Add(new PendingHttp
                 {
                     Request = req,
-                    StartedAt = Time.realtimeSinceStartup,
+                    StartedAt = ThinkingClock.RealSeconds(),
+                    TimeoutSeconds = HubProbeTimeoutSeconds,
                     Callback = (ok, code, text) =>
                     {
                         _hubProxyProbeInFlight = false;
@@ -488,17 +499,21 @@ namespace XingShuRuntime.Utilities
                         {
                             _hubProxyReachable = false;
                             _hubProxySignedIn = false;
+                            _hubProxyConsecutiveFails = Math.Min(_hubProxyConsecutiveFails + 1, 10);
                             return;
                         }
                         var st = BridgeJson.Parse(text) as Dictionary<string, object>;
                         bool wasUsing = IsUsingHubProxy;
                         _hubProxyReachable = st != null && Bool(st, "ok");
                         _hubProxySignedIn = _hubProxyReachable && Bool(st, "signedIn");
+                        _hubProxyConsecutiveFails = 0;
                         if (!wasUsing && IsUsingHubProxy)
                         {
+                            _nextProfileRetryAt = 0d;
+                            _profileConsecutiveFails = 0;
                             _statusMessage = "已自动复用桌面端 Hub 星枢登录态（无需重复登录）";
                             RefreshBlacklist();
-                            RefreshRoomProfilesNow();
+                            RefreshRoomProfilesNow(false);
                         }
                     }
                 });
@@ -508,6 +523,7 @@ namespace XingShuRuntime.Utilities
                 _hubProxyReachable = false;
                 _hubProxySignedIn = false;
                 _hubProxyProbeInFlight = false;
+                _hubProxyConsecutiveFails = Math.Min(_hubProxyConsecutiveFails + 1, 10);
             }
 #endif
         }
@@ -578,8 +594,8 @@ namespace XingShuRuntime.Utilities
             _deviceLoginUrl = string.Empty;
             _deviceLoginPending = true;
             _devicePollInFlight = false;
-            _deviceLoginDeadline = Time.realtimeSinceStartup + 180f;
-            _lastDevicePollAt = Time.realtimeSinceStartup;
+            _deviceLoginDeadline = ThinkingClock.RealSeconds() + 180d;
+            _lastDevicePollAt = ThinkingClock.RealSeconds();
             _statusMessage = "正在发起星枢浏览器一键登录…";
 
             var body = new Dictionary<string, object>
@@ -607,8 +623,8 @@ namespace XingShuRuntime.Utilities
                 }
                 _deviceLoginRequestId = reqId;
                 _deviceLoginUrl = loginUrl;
-                _deviceLoginDeadline = Time.realtimeSinceStartup + Math.Max(60f, Int(d, "expires_in", 180));
-                _lastDevicePollAt = Time.realtimeSinceStartup;
+                _deviceLoginDeadline = ThinkingClock.RealSeconds() + Math.Max(60d, Int(d, "expires_in", 180));
+                _lastDevicePollAt = ThinkingClock.RealSeconds();
                 try { Application.OpenURL(loginUrl); } catch { }
                 _statusMessage = "已在浏览器打开星枢登录页，完成登录后将自动同步授权…";
             });
@@ -626,7 +642,7 @@ namespace XingShuRuntime.Utilities
         private void PollDeviceLogin()
         {
             if (!_deviceLoginPending || _devicePollInFlight || string.IsNullOrEmpty(_deviceLoginRequestId)) return;
-            if (Time.realtimeSinceStartup > _deviceLoginDeadline)
+            if (ThinkingClock.RealSeconds() > _deviceLoginDeadline)
             {
                 CancelDeviceLogin();
                 _statusMessage = "星枢登录已超时，请重新点击「浏览器一键登录」";
@@ -658,7 +674,7 @@ namespace XingShuRuntime.Utilities
                         PlayerPrefs.Save();
                         _statusMessage = "星枢账号登录成功！点赞、拉黑、反馈与高信誉车队已全部解锁";
                         RefreshBlacklist();
-                        RefreshRoomProfilesNow();
+                        RefreshRoomProfilesNow(false);
                     }
                 }
                 else if (st == "expired" || st == "rejected" || st == "failed")
@@ -740,8 +756,8 @@ namespace XingShuRuntime.Utilities
         {
             TickHttpRequests();
 
-            float now = Time.realtimeSinceStartup;
-            float probeInterval = IsUsingHubProxy ? 15f : 5f;
+            double now = ThinkingClock.RealSeconds();
+            double probeInterval = IsUsingHubProxy ? 20.0d : (_hubProxyConsecutiveFails >= 2 ? 15.0d : 6.0d);
             if (now - _lastHubProxyProbeAt >= probeInterval)
             {
                 _lastHubProxyProbeAt = now;
@@ -800,7 +816,7 @@ namespace XingShuRuntime.Utilities
             }
         }
 
-        private void ScanGameRoomAndPeers(float now)
+        private void ScanGameRoomAndPeers(double now)
         {
             try
             {
@@ -911,10 +927,9 @@ namespace XingShuRuntime.Utilities
                     _recentPeers.AddRange(_currentPeers);
                 }
 
-                if (neededUids.Count > 0 && now - _lastProfileFetchAt >= 2.0f)
+                if (neededUids.Count > 0 && !_profileFetchInFlight && now >= _nextProfileRetryAt && now - _lastProfileFetchAt >= 2.0d)
                 {
-                    _lastProfileFetchAt = now;
-                    FetchProfiles(neededUids);
+                    FetchProfiles(neededUids, manual: false);
                 }
 
                 if (_isRoomHost && _inWaitRoom && _autoKick && now - _lastKickAt >= 1.5f)
@@ -935,33 +950,108 @@ namespace XingShuRuntime.Utilities
             catch { }
         }
 
-        internal void RefreshRoomProfilesNow()
+        internal void RefreshRoomProfilesNow(bool manual = true)
         {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
             var list = new List<string>(4);
             foreach (RoomPeerModel p in ActivePeers)
             {
-                if (!string.IsNullOrEmpty(p.UidStr)) list.Add(p.UidStr);
+                if (!string.IsNullOrEmpty(p.UidStr) && seen.Add(p.UidStr)) list.Add(p.UidStr);
             }
-            if (list.Count > 0) FetchProfiles(list);
+            if (list.Count == 0) return;
+            if (manual)
+            {
+                _nextProfileRetryAt = 0d;
+            }
+            FetchProfiles(list, manual);
         }
 
-        private void FetchProfiles(List<string> uids)
+        internal void EnsureActivePeersLoaded()
+        {
+            double now = ThinkingClock.RealSeconds();
+            if (_profileFetchInFlight || now < _nextProfileRetryAt || (now - _lastProfileFetchAt) < 2.0d) return;
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var needed = new List<string>(4);
+            foreach (RoomPeerModel p in ActivePeers)
+            {
+                if (string.IsNullOrEmpty(p.UidStr) || !seen.Add(p.UidStr)) continue;
+                if (!_profiles.TryGetValue(p.UidStr, out CreditProfileModel cached) || (now - cached.FetchedAt) > ProfileCacheTtl)
+                {
+                    needed.Add(p.UidStr);
+                }
+            }
+            if (needed.Count > 0)
+            {
+                FetchProfiles(needed, manual: false);
+            }
+        }
+
+        private void FetchProfiles(List<string> uids, bool manual = false)
         {
             if (uids == null || uids.Count == 0) return;
-            var body = new Dictionary<string, object> { ["uids"] = uids };
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var uniqueUids = new List<string>(uids.Count);
+            for (int i = 0; i < uids.Count; i++)
+            {
+                string u = uids[i];
+                if (!string.IsNullOrEmpty(u) && seen.Add(u)) uniqueUids.Add(u);
+            }
+            if (uniqueUids.Count == 0) return;
+
+            if (_profileFetchInFlight)
+            {
+                if (manual) _statusMessage = "正在查询同房玩家信誉分，请稍候…";
+                return;
+            }
+
+            double now = ThinkingClock.RealSeconds();
+            if (!manual && now < _nextProfileRetryAt) return;
+
+            _profileFetchInFlight = true;
+            _lastProfileFetchAt = now;
+            var body = new Dictionary<string, object> { ["uids"] = uniqueUids };
             SendJsonRequest("POST", "/api/credit/profiles", body, requireAuth: false, (ok, code, text) =>
             {
-                if (!ok) return;
+                _profileFetchInFlight = false;
+                if (!ok)
+                {
+                    _profileConsecutiveFails = Math.Min(_profileConsecutiveFails + 1, 5);
+                    double backoff = _profileConsecutiveFails == 1 ? 3.0d : (_profileConsecutiveFails == 2 ? 6.0d : 10.0d);
+                    _nextProfileRetryAt = ThinkingClock.RealSeconds() + backoff;
+                    _lastProfileError = ExtractError(text, code > 0 ? ("HTTP " + code) : "网络连接失败");
+                    _statusMessage = "信誉分查询暂未完成：" + _lastProfileError + "（稍后自动重试）";
+                    return;
+                }
                 var root = BridgeJson.Parse(text) as Dictionary<string, object>;
-                if (root == null) return;
-                if (!(root.TryGetValue("profiles", out object profObj) && profObj is Dictionary<string, object> profMap)) return;
-                float ts = Time.realtimeSinceStartup;
+                if (root == null || !(root.TryGetValue("profiles", out object profObj) && profObj is Dictionary<string, object> profMap))
+                {
+                    _profileConsecutiveFails = Math.Min(_profileConsecutiveFails + 1, 5);
+                    double backoff = _profileConsecutiveFails == 1 ? 3.0d : (_profileConsecutiveFails == 2 ? 6.0d : 10.0d);
+                    _nextProfileRetryAt = ThinkingClock.RealSeconds() + backoff;
+                    _lastProfileError = "服务响应格式异常";
+                    _statusMessage = "信誉分查询暂未完成：服务响应格式异常（稍后自动重试）";
+                    return;
+                }
+                _profileConsecutiveFails = 0;
+                _nextProfileRetryAt = 0d;
+                _lastProfileError = string.Empty;
+                double ts = ThinkingClock.RealSeconds();
+                int parsedCount = 0;
                 foreach (var kv in profMap)
                 {
                     if (kv.Value is Dictionary<string, object> d)
                     {
                         _profiles[kv.Key] = ParseProfile(d, ts);
+                        parsedCount++;
                     }
+                }
+                if (manual ||
+                    _statusMessage.IndexOf("信誉分查询", StringComparison.Ordinal) >= 0 ||
+                    _statusMessage.IndexOf("请求过于频繁", StringComparison.Ordinal) >= 0 ||
+                    _statusMessage.IndexOf("正在查询", StringComparison.Ordinal) >= 0)
+                {
+                    _statusMessage = "已同步 " + parsedCount + " 位玩家星枢信誉分";
                 }
             });
         }
@@ -985,7 +1075,7 @@ namespace XingShuRuntime.Utilities
                 var root = BridgeJson.Parse(text) as Dictionary<string, object>;
                 if (root != null && root.TryGetValue("profile", out object pObj) && pObj is Dictionary<string, object> pDict)
                 {
-                    CreditProfileModel p = ParseProfile(pDict, Time.realtimeSinceStartup);
+                    CreditProfileModel p = ParseProfile(pDict, ThinkingClock.RealSeconds());
                     _profiles[p.Uid] = p;
                     _statusMessage = "已为 " + (string.IsNullOrEmpty(p.Nick) ? p.Uid : p.Nick) + " 点赞（当前信誉 " + p.Score + "）";
                 }
@@ -1045,7 +1135,7 @@ namespace XingShuRuntime.Utilities
                 var root = BridgeJson.Parse(text) as Dictionary<string, object>;
                 if (root == null || !(root.TryGetValue("items", out object itemsObj) && itemsObj is List<object> list)) return;
                 _blacklistEntries.Clear();
-                float ts = Time.realtimeSinceStartup;
+                double ts = ThinkingClock.RealSeconds();
                 foreach (object item in list)
                 {
                     if (!(item is Dictionary<string, object> d)) continue;
@@ -1179,7 +1269,7 @@ namespace XingShuRuntime.Utilities
             _hostingFleetRoom = true;
             _hostedRoomId = _currentRoomId.ToString(CultureInfo.InvariantCulture);
             _hostedRoomPwd = !string.IsNullOrEmpty(overridePwd) ? overridePwd.Trim() : _currentRoomPwd;
-            _lastHeartbeatAt = Time.realtimeSinceStartup;
+            _lastHeartbeatAt = ThinkingClock.RealSeconds();
             SendFleetRoomHeartbeat();
         }
 
@@ -1679,10 +1769,10 @@ namespace XingShuRuntime.Utilities
                 }
             }
 
-            if (missingUids.Count > 0 && Time.realtimeSinceStartup - _lastProfileFetchAt >= 2.0f)
+            double now = ThinkingClock.RealSeconds();
+            if (missingUids.Count > 0 && !_profileFetchInFlight && now >= _nextProfileRetryAt && now - _lastProfileFetchAt >= 2.0d)
             {
-                _lastProfileFetchAt = Time.realtimeSinceStartup;
-                FetchProfiles(missingUids);
+                FetchProfiles(missingUids, manual: false);
             }
 
             CleanupUnusedCardBadges(activeCards);
@@ -1719,10 +1809,10 @@ namespace XingShuRuntime.Utilities
                 UpdateSingleCardBadge(card, uidStr, isSelf, isHeroCard: true);
             }
 
-            if (missingUids.Count > 0 && Time.realtimeSinceStartup - _lastProfileFetchAt >= 2.0f)
+            double now = ThinkingClock.RealSeconds();
+            if (missingUids.Count > 0 && !_profileFetchInFlight && now >= _nextProfileRetryAt && now - _lastProfileFetchAt >= 2.0d)
             {
-                _lastProfileFetchAt = Time.realtimeSinceStartup;
-                FetchProfiles(missingUids);
+                FetchProfiles(missingUids, manual: false);
             }
 
             CleanupUnusedCardBadges(activeCards);
@@ -1808,7 +1898,7 @@ namespace XingShuRuntime.Utilities
             Color textColor;
             if (p == null)
             {
-                labelText = "★ 星枢信誉 查询中…";
+                labelText = !string.IsNullOrEmpty(_lastProfileError) ? "★ 星枢信誉 重试中…" : "★ 星枢信誉 查询中…";
                 pillColor = new Color(0.08f, 0.11f, 0.17f, 0.84f);
                 textColor = new Color(0.82f, 0.90f, 0.98f, 1f);
             }
@@ -1891,9 +1981,9 @@ namespace XingShuRuntime.Utilities
             }
         }
 
-        private void PulseRiskyBorders(float now)
+        private void PulseRiskyBorders(double now)
         {
-            float alpha = 0.58f + 0.40f * Mathf.Abs(Mathf.Sin(now * 4.5f));
+            float alpha = 0.58f + 0.40f * Mathf.Abs(Mathf.Sin((float)((now % 628.0d) * 4.5d)));
             for (int i = 0; i < _cardBadges.Count; i++)
             {
                 CardBadgeVisual vis = _cardBadges[i];
@@ -2083,25 +2173,22 @@ namespace XingShuRuntime.Utilities
                 req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
             }
             req.downloadHandler = new DownloadHandlerBuffer();
-            req.timeout = 12;
+            req.timeout = 0;
             req.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
             if (useProxy)
             {
                 req.SetRequestHeader("X-XingShu-Proxy-Nonce", _hubProxyNonce);
             }
-            else
+            else if (!string.IsNullOrEmpty(token))
             {
-                req.SetRequestHeader("Origin", ApiOrigin);
-                if (!string.IsNullOrEmpty(token))
-                {
-                    req.SetRequestHeader("Authorization", "Bearer " + token);
-                }
+                req.SetRequestHeader("Authorization", "Bearer " + token);
             }
             req.SendWebRequest();
             _httpInFlight.Add(new PendingHttp
             {
                 Request = req,
-                StartedAt = Time.realtimeSinceStartup,
+                StartedAt = ThinkingClock.RealSeconds(),
+                TimeoutSeconds = HttpRequestTimeoutSeconds,
                 Callback = (ok, code, body) =>
                 {
                     if (useProxy && !ok && code <= 0)
@@ -2116,18 +2203,54 @@ namespace XingShuRuntime.Utilities
 
         private void TickHttpRequests()
         {
+            double now = ThinkingClock.RealSeconds();
             for (int i = _httpInFlight.Count - 1; i >= 0; i--)
             {
                 PendingHttp item = _httpInFlight[i];
-                if (!item.Request.isDone && (Time.realtimeSinceStartup - item.StartedAt) < 14f) continue;
+                double timeout = item.TimeoutSeconds > 0d ? item.TimeoutSeconds : HttpRequestTimeoutSeconds;
+                bool timedOut = !item.Request.isDone && (now - item.StartedAt) >= timeout;
+                if (!item.Request.isDone && !timedOut) continue;
 
                 _httpInFlight.RemoveAt(i);
-                long code = item.Request.responseCode;
-                string body = item.Request.downloadHandler != null ? item.Request.downloadHandler.text : string.Empty;
-                bool ok = item.Request.isDone && item.Request.result == UnityWebRequest.Result.Success && code >= 200 && code < 300;
+                long code = 0;
+                string body = string.Empty;
+                string reqError = string.Empty;
+                bool ok = false;
+                if (timedOut)
+                {
+                    try { item.Request.Abort(); } catch { }
+                }
+                else
+                {
+                    code = item.Request.responseCode;
+                    body = item.Request.downloadHandler != null ? item.Request.downloadHandler.text : string.Empty;
+                    reqError = item.Request.error ?? string.Empty;
+                    ok = item.Request.result == UnityWebRequest.Result.Success && code >= 200 && code < 300;
+                }
                 item.Request.Dispose();
+                if (!ok && string.IsNullOrEmpty(body))
+                {
+                    body = SynthesizeHttpErrorJson(timedOut, reqError);
+                }
                 try { item.Callback?.Invoke(ok, code, body ?? string.Empty); } catch { }
             }
+        }
+
+        private static string SynthesizeHttpErrorJson(bool timedOut, string reqError)
+        {
+            if (timedOut) return "{\"error\":\"请求超时，请检查网络连接\"}";
+            if (!string.IsNullOrEmpty(reqError))
+            {
+                if (reqError.IndexOf("timed out", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return "{\"error\":\"请求超时，请检查网络连接\"}";
+                if (reqError.IndexOf("connect", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    reqError.IndexOf("resolve", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return "{\"error\":\"无法连接星枢服务\"}";
+                if (reqError.IndexOf("SSL", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    reqError.IndexOf("TLS", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return "{\"error\":\"安全连接校验失败\"}";
+            }
+            return "{\"error\":\"网络请求异常\"}";
         }
 
         private void UpdateCachedProfileFromResponse(string json)
@@ -2135,7 +2258,7 @@ namespace XingShuRuntime.Utilities
             var root = BridgeJson.Parse(json) as Dictionary<string, object>;
             if (root != null && root.TryGetValue("profile", out object pObj) && pObj is Dictionary<string, object> d)
             {
-                CreditProfileModel p = ParseProfile(d, Time.realtimeSinceStartup);
+                CreditProfileModel p = ParseProfile(d, ThinkingClock.RealSeconds());
                 _profiles[p.Uid] = p;
             }
         }
@@ -2184,7 +2307,7 @@ namespace XingShuRuntime.Utilities
             _currentSquad = sq;
         }
 
-        private static CreditProfileModel ParseProfile(Dictionary<string, object> d, float fetchedAt)
+        private static CreditProfileModel ParseProfile(Dictionary<string, object> d, double fetchedAt)
         {
             var tags = new List<string>(4);
             if (d.TryGetValue("tags", out object tObj) && tObj is List<object> tList)

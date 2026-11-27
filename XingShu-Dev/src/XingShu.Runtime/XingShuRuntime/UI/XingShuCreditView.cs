@@ -81,7 +81,7 @@ namespace XingShuRuntime.UI
         private Button _cancelLoginBtn;
         private InputField _authTokenInput;
 
-        private float _lastAutoRefresh;
+        private double _lastAutoRefresh = -1000d;
 
         internal GameObject Root => _root;
 
@@ -149,7 +149,7 @@ namespace XingShuRuntime.UI
             XingShuViewCardHelper.PlaceTopLeft(pTitle.rectTransform, new Vector2(20f, -12f), new Vector2(360f, 24f));
 
             Button refBtn = XingShuViewCardHelper.CreateActionButton(peersCard, "RefreshPeersBtn", "刷新信誉分",
-                () => { CreditGuardRuntime.Instance?.RefreshRoomProfilesNow(); UpdateSync(); }, 104f, 28f, 12);
+                () => { CreditGuardRuntime.Instance?.RefreshRoomProfilesNow(true); UpdateSync(); }, 104f, 28f, 12);
             XingShuViewCardHelper.PlaceTopRight(refBtn.GetComponent<RectTransform>(), new Vector2(-20f, -10f), new Vector2(104f, 28f));
 
             for (int i = 0; i < 4; i++)
@@ -555,11 +555,11 @@ namespace XingShuRuntime.UI
             CreditGuardRuntime rt = CreditGuardRuntime.Instance;
             if (rt == null) return;
 
-            float now = Time.realtimeSinceStartup;
-            if (now - _lastAutoRefresh > 2.0f)
+            double now = ThinkingClock.RealSeconds();
+            if (now - _lastAutoRefresh > 3.0d)
             {
                 _lastAutoRefresh = now;
-                rt.RefreshRoomProfilesNow();
+                rt.EnsureActivePeersLoaded();
             }
 
             _suppressCallbacks = true;
@@ -590,7 +590,9 @@ namespace XingShuRuntime.UI
                         ? string.Format(CultureInfo.InvariantCulture, "信誉 {0}({1}) · 拔{2:F1}% ({3}局){4}",
                             prof.Score, prof.TierLabel, prof.GiveUpRate, prof.RecordedMatches,
                             string.IsNullOrEmpty(prof.TagsText) ? "" : " · " + prof.TagsText)
-                        : "正在拉取信誉档案…";
+                        : (!string.IsNullOrEmpty(rt.LastProfileError)
+                            ? ("拉取失败（" + rt.LastProfileError + "），自动重试中…")
+                            : "正在拉取信誉档案…");
                     _peerTexts[i].text = string.Format(CultureInfo.InvariantCulture, "{0}{1} (UID {2})\n{3}",
                         nick, peer.IsHost ? " [房主]" : peer.IsSelf ? " [本人]" : "", peer.UidStr, scoreText);
                     if (_peerBlkLabels[i] != null)

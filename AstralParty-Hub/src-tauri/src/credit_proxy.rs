@@ -95,6 +95,7 @@ async fn read_full_http_request(stream: &mut TcpStream) -> Option<(String, Strin
     let mut chunk = [0u8; 4096];
     let mut header_end: Option<usize> = None;
     let mut content_length: usize = 0;
+    let mut sent_continue = false;
 
     loop {
         let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk))
@@ -111,17 +112,27 @@ async fn read_full_http_request(stream: &mut TcpStream) -> Option<(String, Strin
         if header_end.is_none() {
             if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                 header_end = Some(pos + 4);
+                let mut expect_100 = false;
                 if let Ok(hstr) = std::str::from_utf8(&buf[..pos]) {
                     for line in hstr.split("\r\n").skip(1) {
                         if let Some((k, v)) = line.split_once(':') {
-                            if k.trim().eq_ignore_ascii_case("content-length") {
+                            let key = k.trim();
+                            if key.eq_ignore_ascii_case("content-length") {
                                 content_length = v.trim().parse::<usize>().unwrap_or(0);
+                            } else if key.eq_ignore_ascii_case("expect")
+                                && v.trim().eq_ignore_ascii_case("100-continue")
+                            {
+                                expect_100 = true;
                             }
                         }
                     }
                 }
                 if pos + 4 + content_length > MAX_REQUEST_BYTES {
                     return None;
+                }
+                if expect_100 && !sent_continue && content_length > 0 && buf.len() < pos + 4 + content_length {
+                    sent_continue = true;
+                    let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await;
                 }
             }
         }
@@ -254,6 +265,7 @@ pub fn start_credit_proxy(app: tauri::AppHandle) {
         tracing::info!(port = local_addr.port(), "XingShu local credit proxy listening on 127.0.0.1");
 
         let Ok(http_client) = reqwest::Client::builder()
+            .no_proxy()
             .timeout(Duration::from_secs(12))
             .connect_timeout(Duration::from_secs(6))
             .redirect(reqwest::redirect::Policy::none())
@@ -329,6 +341,41 @@ mod tests {
         assert!(r2.starts_with("HTTP/1.1 200"));
         assert!(r2.contains("\"signedIn\":true"));
         assert!(!r2.contains("fake-token"));
+
+        srv.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn credit_proxy_handles_expect_100_continue() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let nonce = Arc::new("test-nonce-100".to_string());
+        let tp = Arc::new(|| None);
+        let hc = reqwest::Client::new();
+
+        let n_bg = nonce.clone();
+        let srv = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.unwrap();
+            handle_connection(stream, peer, n_bg, tp, hc).await;
+        });
+
+        let payload = br#"{"uids":["1556514"]}"#;
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        let head = format!(
+            "POST /_invalid_test_path HTTP/1.1\r\nHost: 127.0.0.1\r\nX-XingShu-Proxy-Nonce: test-nonce-100\r\nExpect: 100-continue\r\nContent-Length: {}\r\n\r\n",
+            payload.len()
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+
+        let mut buf = [0u8; 256];
+        let n = s.read(&mut buf).await.unwrap();
+        let first = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(first.starts_with("HTTP/1.1 100 Continue\r\n\r\n"));
+
+        s.write_all(payload).await.unwrap();
+        let mut rest = String::new();
+        s.read_to_string(&mut rest).await.unwrap();
+        assert!(rest.starts_with("HTTP/1.1 403 Forbidden"));
 
         srv.await.unwrap();
     }
