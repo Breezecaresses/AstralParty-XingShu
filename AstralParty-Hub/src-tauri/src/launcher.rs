@@ -614,12 +614,44 @@ pub async fn launcher_session(installation_id: String, center: State<'_, Extensi
     let (_, executable) = canonical_game(&game)?;
     let sessions = bridge.get_runtime_sessions();
     tauri::async_runtime::spawn_blocking(move || {
-        use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
-        let system = System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_exe(UpdateKind::Always)));
-        let pids: Vec<_> = system.processes().iter().filter_map(|(pid, process)| {
-            let path = process.exe().and_then(|p| dunce::canonicalize(p).ok())?;
-            same_executable(&path, &executable).then_some(pid.as_u32())
-        }).collect();
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
+        let target_name = executable
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string());
+        let mut system = System::new_with_specifics(
+            RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+        );
+        let candidate_pids: Vec<_> = match target_name.as_deref() {
+            Some(expected_name) => system
+                .processes()
+                .iter()
+                .filter_map(|(pid, process)| {
+                    process
+                        .name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(expected_name)
+                        .then_some(*pid)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let pids: Vec<u32> = if candidate_pids.is_empty() {
+            Vec::new()
+        } else {
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&candidate_pids),
+                false,
+                ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+            );
+            candidate_pids
+                .into_iter()
+                .filter_map(|pid| {
+                    let process = system.process(pid)?;
+                    let path = process.exe().and_then(|p| dunce::canonicalize(p).ok())?;
+                    same_executable(&path, &executable).then_some(pid.as_u32())
+                })
+                .collect()
+        };
         let connected = sessions.iter().find(|s| s.platform_id == game.platform && s.connection_state == "CONNECTED"
             && pids.contains(&s.pid) && dunce::canonicalize(&s.executable_path).is_ok_and(|p| same_executable(&p, &executable)));
         LauncherSession { running: !pids.is_empty(), runtime_version: connected.map(|s| s.runtime_version.clone()).filter(|v| !v.is_empty()),
@@ -1308,6 +1340,7 @@ pub struct LauncherBatchModsResult {
     pub skipped_count: usize,
     pub removed_count: usize,
     pub total_count: usize,
+    pub newly_installed_ids: Vec<String>,
 }
 
 #[tauri::command]
@@ -1350,6 +1383,7 @@ pub async fn launcher_install_all_official_mods(
     let mut installed_count = 0usize;
     let mut enabled_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut newly_installed_ids: Vec<String> = Vec::new();
     let batch_key = "xingshu.official.batch";
 
     for (idx, module) in all_modules.into_iter().enumerate() {
@@ -1389,6 +1423,7 @@ pub async fn launcher_install_all_official_mods(
             }
             _ => {
                 let archive = fetch_official_module_archive_with_fallback(&module, |_, _| {}).await?;
+                let mod_id = module.id.clone();
                 let game_owned = game.clone();
                 let db_owned = db.clone();
                 let backup_owned = backup_root.clone();
@@ -1398,8 +1433,13 @@ pub async fn launcher_install_all_official_mods(
                 .await
                 .map_err(|_| error("MOD_INSTALL", "模块写入未完成。"))??;
                 match outcome {
-                    "installed" => installed_count += 1,
-                    "enabled" => enabled_count += 1,
+                    "installed" => {
+                        installed_count += 1;
+                        newly_installed_ids.push(mod_id);
+                    }
+                    "enabled" => {
+                        enabled_count += 1;
+                    }
                     _ => skipped_count += 1,
                 }
             }
@@ -1424,6 +1464,7 @@ pub async fn launcher_install_all_official_mods(
         skipped_count,
         removed_count: 0,
         total_count,
+        newly_installed_ids,
     })
 }
 
@@ -1485,6 +1526,7 @@ pub async fn launcher_uninstall_all_official_mods(
         skipped_count,
         removed_count,
         total_count,
+        newly_installed_ids: Vec::new(),
     })
 }
 

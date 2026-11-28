@@ -437,11 +437,45 @@ pub async fn launch_game_uri(
             return Err(format!("请选择此平台现有的 {} 完整路径", name));
         }
         let path = path.canonicalize().map_err(|e| e.to_string())?;
-        let mut system = sysinfo::System::new_all();
-        system.refresh_all();
-        if let Some((pid, _)) = system.processes().iter().find(|(_, p)| p.exe().and_then(|p| p.canonicalize().ok()).as_ref() == Some(&path)) {
-            return Ok(GameLaunchResult { success: false, uri: path.to_string_lossy().into(), already_running: true,
-                message: format!("对应平台的游戏已运行 (PID: {})", pid) });
+        let target_name = path.file_name().map(|n| n.to_string_lossy().to_string());
+        let mut system = sysinfo::System::new_with_specifics(
+            sysinfo::RefreshKind::nothing()
+                .with_processes(sysinfo::ProcessRefreshKind::nothing()),
+        );
+        let candidate_pids: Vec<_> = match target_name.as_deref() {
+            Some(expected) => system
+                .processes()
+                .iter()
+                .filter_map(|(pid, p)| {
+                    p.name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(expected)
+                        .then_some(*pid)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        if !candidate_pids.is_empty() {
+            system.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::Some(&candidate_pids),
+                false,
+                sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
+            );
+            if let Some(pid) = candidate_pids.into_iter().find(|pid| {
+                system
+                    .process(*pid)
+                    .and_then(|p| p.exe())
+                    .and_then(|exe| dunce::canonicalize(exe).ok())
+                    .as_ref()
+                    == Some(&path)
+            }) {
+                return Ok(GameLaunchResult {
+                    success: false,
+                    uri: path.to_string_lossy().into(),
+                    already_running: true,
+                    message: format!("对应平台的游戏已运行 (PID: {})", pid),
+                });
+            }
         }
         std::process::Command::new(&path).current_dir(path.parent().ok_or("游戏路径无父目录")?)
             .spawn().map_err(|e| format!("启动 {} 失败: {}", id, e))?;

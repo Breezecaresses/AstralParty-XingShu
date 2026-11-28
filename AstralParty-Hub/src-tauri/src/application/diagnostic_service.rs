@@ -4,6 +4,7 @@ use crate::domain::error::HubResult;
 use crate::storage::database::Database;
 use crate::storage::repositories::{GameRepository, TransactionRepository};
 
+#[derive(Clone)]
 pub struct DiagnosticService {
     game_repo: GameRepository,
     tx_repo: TransactionRepository,

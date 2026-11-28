@@ -4,6 +4,7 @@ use crate::domain::error::{HubError, HubResult};
 use crate::domain::installation::GameInstallation;
 use crate::storage::database::Database;
 
+#[derive(Clone)]
 pub struct GameRepository {
     db: Database,
 }

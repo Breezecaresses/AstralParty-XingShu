@@ -563,6 +563,47 @@ export async function reportWorkshopDownloadComplete(
   }
 }
 
+export async function reportOfficialModulesInstalled(
+  moduleIds: string[],
+  client: 'pc' | 'android' = 'pc',
+  token?: string | null,
+): Promise<{ countedIds: string[]; counts: Record<string, number> } | null> {
+  const cleaned = Array.from(
+    new Set(
+      moduleIds
+        .map((id) => String(id || '').trim())
+        .filter((id) => id.length > 0),
+    ),
+  );
+  if (cleaned.length === 0) {
+    return null;
+  }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token?.trim()) {
+    headers.Authorization = `Bearer ${token.trim()}`;
+  }
+  try {
+    const res = await fetch(`${webApiBaseUrl()}/api/workshop/official/install-complete`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ moduleIds: cleaned, client }),
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const data = (await res.json()) as {
+      countedIds?: string[];
+      counts?: Record<string, number>;
+    };
+    return {
+      countedIds: Array.isArray(data?.countedIds) ? data.countedIds : [],
+      counts: data?.counts && typeof data.counts === 'object' ? data.counts : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function downloadWorkshopModWithVerification(options: {
   modId: string;
   urlOrPath: string;

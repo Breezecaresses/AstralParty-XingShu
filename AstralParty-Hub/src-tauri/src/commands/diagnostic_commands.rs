@@ -1,7 +1,7 @@
 use crate::desktop_host::State;
 use crate::application::DiagnosticService;
 use crate::diagnostics::report::DiagnosticReport;
-use crate::domain::error::HubResult;
+use crate::domain::error::{HubError, HubResult};
 use crate::providers::orchestrator::ProviderOrchestrator;
 use crate::providers::provider::{ProbeResult, ProviderContext, ProviderMetadata};
 
@@ -9,7 +9,10 @@ use crate::providers::provider::{ProbeResult, ProviderContext, ProviderMetadata}
 pub async fn get_diagnostic_report(
     diagnostic_service: State<'_, DiagnosticService>,
 ) -> HubResult<DiagnosticReport> {
-    diagnostic_service.generate_report()
+    let svc = diagnostic_service.inner().clone();
+    tokio::task::spawn_blocking(move || svc.generate_report())
+        .await
+        .map_err(|e| HubError::new("DIAGNOSTIC_FAILED", e.to_string(), "DIAGNOSTIC"))?
 }
 
 #[cfg_attr(feature = "web-ui", tauri::command)]

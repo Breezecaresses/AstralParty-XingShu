@@ -4,6 +4,7 @@ use crate::domain::error::{HubError, HubResult};
 use crate::domain::installation::{InstallTransaction, InstallTransactionStep};
 use crate::storage::database::Database;
 
+#[derive(Clone)]
 pub struct TransactionRepository {
     db: Database,
 }
