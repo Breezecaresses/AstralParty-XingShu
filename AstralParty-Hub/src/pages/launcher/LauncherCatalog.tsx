@@ -52,6 +52,8 @@ import {
   formatModBytes,
   installKindLabel,
   modPlatformSummaryBadge,
+  reportOfficialModulesInstalled,
+  reportWorkshopDownloadComplete,
   workshopAssetUrl,
   type WorkshopCategory,
   type WorkshopModItem,
@@ -335,6 +337,10 @@ interface UnifiedModItem {
   canDirectWorkshopInstall: boolean;
 }
 
+const WORKSHOP_CACHE_TTL_MS = 60_000;
+let cachedWorkshopItems: WorkshopModItem[] | null = null;
+let cachedWorkshopAt = 0;
+
 export function LauncherMods() {
   const zh = useTranslation().locale === 'zh-CN';
   const { theme } = useLauncherTheme();
@@ -361,8 +367,8 @@ export function LauncherMods() {
   // Data state
   const [catalog, setCatalog] = useState<ModCatalog>();
   const [currentInst, setCurrentInst] = useState('');
-  const [workshopItems, setWorkshopItems] = useState<WorkshopModItem[]>([]);
-  const [workshopLoading, setWorkshopLoading] = useState(true);
+  const [workshopItems, setWorkshopItems] = useState<WorkshopModItem[]>(() => cachedWorkshopItems ?? []);
+  const [workshopLoading, setWorkshopLoading] = useState(() => !cachedWorkshopItems);
   const [workshopError, setWorkshopError] = useState('');
   const [localStates, setLocalStates] = useState<Record<string, WorkshopLocalItemState>>({});
   const [droppedRecords, setDroppedRecords] = useState<DroppedModRecord[]>([]);
@@ -478,12 +484,22 @@ export function LauncherMods() {
   }, [droppedPaths]);
 
   useEffect(() => {
+    if (revision === 0 && cachedWorkshopItems && Date.now() - cachedWorkshopAt < WORKSHOP_CACHE_TTL_MS) {
+      setWorkshopItems(cachedWorkshopItems);
+      setWorkshopLoading(false);
+      setWorkshopError('');
+      return;
+    }
     const controller = new AbortController();
-    setWorkshopLoading(true);
+    if (!cachedWorkshopItems) setWorkshopLoading(true);
     setWorkshopError('');
     void fetchWorkshopMods('all', '', controller.signal)
       .then(({ items }) => {
-        if (!controller.signal.aborted) setWorkshopItems(items);
+        if (!controller.signal.aborted) {
+          cachedWorkshopItems = items;
+          cachedWorkshopAt = Date.now();
+          setWorkshopItems(items);
+        }
       })
       .catch((issue) => {
         if (!controller.signal.aborted) setWorkshopError(errorMessage(issue));
@@ -908,6 +924,16 @@ export function LauncherMods() {
           modId: item.officialMod.id,
           install: true,
         });
+        void reportOfficialModulesInstalled([item.officialMod.id], 'pc').then((rep) => {
+          if (!rep?.counts || Object.keys(rep.counts).length === 0) return;
+          setWorkshopItems((prev) =>
+            prev.map((mod) =>
+              typeof rep.counts[mod.id] === 'number'
+                ? { ...mod, downloads: rep.counts[mod.id] }
+                : mod,
+            ),
+          );
+        });
         setNotice({
           kind: 'success',
           text: zh
@@ -921,6 +947,14 @@ export function LauncherMods() {
           modId: ws.id,
           skipConflicts,
         });
+        if (ws.sizeBytes > 0) {
+          void reportWorkshopDownloadComplete(ws.id, { bytesReceived: ws.sizeBytes }).then((rep) => {
+            if (typeof rep.downloads !== 'number') return;
+            setWorkshopItems((prev) =>
+              prev.map((mod) => (mod.id === ws.id ? { ...mod, downloads: rep.downloads! } : mod)),
+            );
+          });
+        }
         setNotice({ kind: 'success', text: result.message });
       } else {
         throw new Error(
@@ -1193,7 +1227,23 @@ export function LauncherMods() {
         enabledCount: number;
         skippedCount: number;
         totalCount: number;
+        newlyInstalledIds?: string[];
       }>('launcher_install_all_official_mods', { installationId, includeCore: true });
+      const reportIds = Array.isArray(res.newlyInstalledIds) && res.newlyInstalledIds.length > 0
+        ? res.newlyInstalledIds
+        : [];
+      if (reportIds.length > 0) {
+        void reportOfficialModulesInstalled(reportIds, 'pc').then((rep) => {
+          if (!rep?.counts || Object.keys(rep.counts).length === 0) return;
+          setWorkshopItems((prev) =>
+            prev.map((mod) =>
+              typeof rep.counts[mod.id] === 'number'
+                ? { ...mod, downloads: rep.counts[mod.id] }
+                : mod,
+            ),
+          );
+        });
+      }
       const touched = res.installedCount + res.enabledCount;
       setNotice({
         kind: 'success',
@@ -1467,7 +1517,8 @@ export function LauncherMods() {
               className="pcl-mods-icon-link"
               onClick={() => {
                 forceCoreRefreshRef.current = true;
-                void target.refresh().then(() => setRevision((v) => v + 1));
+                cachedWorkshopAt = 0;
+                void target.refresh(true).then(() => setRevision((v) => v + 1));
               }}
               disabled={target.busy || Boolean(pendingKey)}
               title={zh ? '重新检测目录' : 'Rescan'}

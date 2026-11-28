@@ -19,26 +19,50 @@ export interface Inventory { entries: ExtensionEntry[]; pluginDirectory: string;
 const message = (e: unknown) => e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
 export const categoryName = (category: string) => ({ 'xingshu-plugin': 'DLL / 功能插件', mod: '游戏模组', 'resource-pack': '资源包' }[category] || category);
 
+const TARGETS_CACHE_TTL_MS = 60_000;
+let cachedTargets: GameInstallation[] | null = null;
+let cachedTargetsAt = 0;
+let inFlightTargetsScan: Promise<GameInstallation[]> | null = null;
+
 export function useExtensionTarget() {
   const [channel, setChannelState] = useState(() => localStorage.getItem('extensions.channel') || 'STEAM_CN');
-  const [targets, setTargets] = useState<GameInstallation[]>([]);
+  const [targets, setTargets] = useState<GameInstallation[]>(() => cachedTargets ?? []);
   const [id, setId] = useState(() => localStorage.getItem(`extensions.target.${channel}`) || '');
   const [path, setPath] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pendingScan = useRef<Promise<void> | null>(null);
-  const refresh = useCallback(() => {
+  const refresh = useCallback((force = false) => {
     if (!isTauriRuntime()) return Promise.resolve();
-    if (pendingScan.current) return pendingScan.current;
+    if (!force && cachedTargets && Date.now() - cachedTargetsAt < TARGETS_CACHE_TTL_MS) {
+      setTargets(cachedTargets);
+      setError('');
+      return Promise.resolve();
+    }
+    if (!force && pendingScan.current) return pendingScan.current;
     setBusy(true);
-    const scan = invoke<GameInstallation[]>('list_extension_targets')
-      .then((result) => { setTargets(result); setError(''); })
+    const baseScan =
+      !force && inFlightTargetsScan
+        ? inFlightTargetsScan
+        : (inFlightTargetsScan = invoke<GameInstallation[]>('list_extension_targets').finally(() => {
+            inFlightTargetsScan = null;
+          }));
+    const scan = baseScan
+      .then((result) => {
+        cachedTargets = result;
+        cachedTargetsAt = Date.now();
+        setTargets(result);
+        setError('');
+      })
       .catch((e) => setError(message(e)))
-      .finally(() => { pendingScan.current = null; setBusy(false); });
+      .finally(() => {
+        pendingScan.current = null;
+        setBusy(false);
+      });
     pendingScan.current = scan;
     return scan;
   }, []);
-  useEffect(() => { if (isTauriRuntime()) void refresh(); }, [refresh]);
+  useEffect(() => { if (isTauriRuntime()) void refresh(false); }, [refresh]);
   const options = targets.filter(g => g.platform === channel);
   const selected = options.find(g => g.id === id) || options[0];
   const select = (value: string) => { setId(value); localStorage.setItem(`extensions.target.${channel}`, value); };
@@ -48,7 +72,13 @@ export function useExtensionTarget() {
     setBusy(true); setError('');
     try {
       const game = await invoke<GameInstallation>('register_extension_target', { platformId: channel, path: path.trim() });
-      setTargets(old => [...old.filter(g => g.id !== game.id), game]); select(game.id); setPath('');
+      setTargets(old => {
+        const next = [...old.filter(g => g.id !== game.id), game];
+        cachedTargets = next;
+        cachedTargetsAt = Date.now();
+        return next;
+      });
+      select(game.id); setPath('');
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   };
   return { channel, setChannel, targets, options, selected, select, path, setPath, error, busy, save, refresh };
@@ -57,7 +87,7 @@ export function ExtensionTargetPicker({ target, disabled = false, purpose = 'ins
   return <section className="panel extension-target" aria-label="扩展安装位置">
     <div className="extension-target-title"><FolderOpen size={19} /><strong>{purpose === 'diagnose' ? '检查渠道与游戏目录' : '渠道与安装位置'}</strong><span>{purpose === 'diagnose' ? '仅检查下方选定目录的文件、进程与连接' : '扩展只安装到下方选定目录'}</span></div>
     <div className="extension-channels">{extensionChannels.map(([id, name]) => <button key={id} className={`btn ${target.channel === id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => target.setChannel(id)} disabled={disabled}>{name}<small>{target.targets.filter(g => g.platform === id).length || '未配置'}</small></button>)}</div>
-    <div className="extension-location"><select aria-label="选择游戏安装位置" value={target.selected?.id || ''} disabled={disabled || !target.options.length} onChange={e => target.select(e.target.value)}>{!target.options.length && <option value="">此渠道尚未配置安装位置</option>}{target.options.map(g => <option key={g.id} value={g.id}>{g.install_path}</option>)}</select><button className="btn btn-secondary" disabled={target.busy || disabled} onClick={() => void target.refresh()}><RefreshCw size={14} />重新检测</button></div>
+    <div className="extension-location"><select aria-label="选择游戏安装位置" value={target.selected?.id || ''} disabled={disabled || !target.options.length} onChange={e => target.select(e.target.value)}>{!target.options.length && <option value="">此渠道尚未配置安装位置</option>}{target.options.map(g => <option key={g.id} value={g.id}>{g.install_path}</option>)}</select><button className="btn btn-secondary" disabled={target.busy || disabled} onClick={() => void target.refresh(true)}><RefreshCw size={14} />重新检测</button></div>
     {compact ? (
       <details className="mod-notes" style={{ margin: '8px 0 4px' }}>
         <summary>手动添加或指定其他游戏目录</summary>

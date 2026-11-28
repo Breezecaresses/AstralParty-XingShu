@@ -19,8 +19,8 @@ export interface LauncherStartupSplashProps {
   onSkip: () => void;
 }
 
-const STAGE_DISSOLVE_MS = 1900;
-const STAGE_COMPLETE_MS = 2340;
+const STAGE_DISSOLVE_MS = 900;
+const STAGE_COMPLETE_MS = 1220;
 
 export const LauncherStartupSplash: React.FC<LauncherStartupSplashProps> = ({
   active,

@@ -50,6 +50,12 @@ import './launcher.css';
 type Account = { uid: string; nick?: string };
 type NodeState = 'ok' | 'info' | 'warn' | 'idle';
 
+const ACCOUNT_CACHE_TTL_MS = 60_000;
+const DISK_CACHE_TTL_MS = 30_000;
+let cachedAccount: { value: Account | null; error: boolean; at: number } | null = null;
+const cachedDiskByInstallId = new Map<string, { value: LauncherDiskState; at: number }>();
+const cachedSessionByInstallId = new Map<string, LauncherSession>();
+
 const channelShortNames: Record<string, string> = {
   STEAM_CN: 'Steam CN',
   STEAM_GLOBAL: 'Steam Global',
@@ -64,13 +70,23 @@ export function LauncherHome() {
   const target = useExtensionTarget();
   const installationId = target.selected?.id ?? '';
   const platform = usePlatformAccount();
-  const [diskRead, setDiskRead] = useState<{ id: string; value: LauncherDiskState }>();
-  const [sessionRead, setSessionRead] = useState<{ id: string; value: LauncherSession }>();
+  const [diskRead, setDiskRead] = useState<{ id: string; value: LauncherDiskState } | undefined>(() => {
+    if (!installationId) return undefined;
+    const hit = cachedDiskByInstallId.get(installationId);
+    return hit ? { id: installationId, value: hit.value } : undefined;
+  });
+  const [sessionRead, setSessionRead] = useState<{ id: string; value: LauncherSession } | undefined>(() => {
+    if (!installationId) return undefined;
+    const hit = cachedSessionByInstallId.get(installationId);
+    return hit ? { id: installationId, value: hit } : undefined;
+  });
   const disk = diskRead?.id === installationId ? diskRead.value : undefined;
   const session = sessionRead?.id === installationId ? sessionRead.value : undefined;
-  const [account, setAccount] = useState<Account | null>();
-  const [accountError, setAccountError] = useState(false);
+  const [account, setAccount] = useState<Account | null | undefined>(() => cachedAccount?.value);
+  const [accountError, setAccountError] = useState(() => Boolean(cachedAccount?.error));
   const [phase, setPhase] = useState<LaunchPhase>('idle');
+  const phaseRef = useRef<LaunchPhase>('idle');
+  phaseRef.current = phase;
   const [componentProgress, setComponentProgress] = useState<{
     channel: string;
     stage: string;
@@ -99,15 +115,23 @@ export function LauncherHome() {
   }, []);
 
   useEffect(() => {
+    if (refreshes === 0 && cachedAccount && !cachedAccount.error && Date.now() - cachedAccount.at < ACCOUNT_CACHE_TTL_MS) {
+      setAccount(cachedAccount.value);
+      setAccountError(false);
+      return;
+    }
     let active = true;
     invoke<{ account?: Account }>('get_cloud_account')
       .then((result) => {
+        const nextAccount = result.account ?? null;
+        cachedAccount = { value: nextAccount, error: false, at: Date.now() };
         if (active) {
-          setAccount(result.account ?? null);
+          setAccount(nextAccount);
           setAccountError(false);
         }
       })
       .catch(() => {
+        cachedAccount = { value: null, error: true, at: Date.now() };
         if (active) {
           setAccount(null);
           setAccountError(true);
@@ -123,11 +147,19 @@ export function LauncherHome() {
     setConflict(false);
     setPhase('idle');
     if (!installationId) return;
-    let active = true;
     const forceRefresh = forceCoreRefresh.current;
     forceCoreRefresh.current = false;
+    const cachedDisk = cachedDiskByInstallId.get(installationId);
+    if (cachedDisk) {
+      setDiskRead({ id: installationId, value: cachedDisk.value });
+    }
+    if (refreshes === 0 && !forceRefresh && cachedDisk && Date.now() - cachedDisk.at < DISK_CACHE_TTL_MS) {
+      return;
+    }
+    let active = true;
     invoke<LauncherDiskState>('launcher_check', { installationId, forceRefresh })
       .then((value) => {
+        cachedDiskByInstallId.set(installationId, { value, at: Date.now() });
         if (active) setDiskRead({ id: installationId, value });
       })
       .catch((error) => {
@@ -143,19 +175,46 @@ export function LauncherHome() {
 
   useEffect(() => {
     if (!installationId) return;
+    const cachedSess = cachedSessionByInstallId.get(installationId);
+    if (cachedSess) {
+      setSessionRead({ id: installationId, value: cachedSess });
+    }
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
+      if (!active) return;
+      if (typeof document !== 'undefined' && document.hidden) {
+        timer = setTimeout(poll, 5000);
+        return;
+      }
       const result = await invoke<LauncherSession>('launcher_session', { installationId }).catch(() => undefined);
       if (!active) return;
+      if (result) {
+        cachedSessionByInstallId.set(installationId, result);
+      } else {
+        cachedSessionByInstallId.delete(installationId);
+      }
       setSessionRead(result ? { id: installationId, value: result } : undefined);
       if (result?.runtimeVersion) setPhase((previous) => (previous === 'waiting' ? 'connected' : previous));
-      timer = setTimeout(poll, 2400);
+      const delay = phaseRef.current === 'waiting' ? 2000 : 5000;
+      timer = setTimeout(poll, delay);
+    }
+    const onVisibilityChange = () => {
+      if (!document.hidden && active) {
+        if (timer) clearTimeout(timer);
+        void poll();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
     }
     void poll();
     return () => {
       active = false;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
     };
   }, [installationId, refreshes]);
 
@@ -213,11 +272,13 @@ export function LauncherHome() {
     try {
       const current = await invoke<LauncherDiskState>('launcher_check', { installationId });
       if (!mounted.current) return;
+      cachedDiskByInstallId.set(installationId, { value: current, at: Date.now() });
       setDiskRead({ id: installationId, value: current });
       if (behavior !== 'start' && current.state !== 'installed') {
         setPhase('installing');
         const installed = await invoke<LauncherDiskState>('launcher_install', { installationId });
         if (!mounted.current) return;
+        cachedDiskByInstallId.set(installationId, { value: installed, at: Date.now() });
         setDiskRead({ id: installationId, value: installed });
       }
       if (behavior === 'install') {
@@ -232,7 +293,10 @@ export function LauncherHome() {
       for (let attempt = 0; attempt < 14 && mounted.current; attempt++) {
         const value = await invoke<LauncherSession>('launcher_session', { installationId }).catch(() => undefined);
         if (!mounted.current) return;
-        if (value) setSessionRead({ id: installationId, value });
+        if (value) {
+          cachedSessionByInstallId.set(installationId, value);
+          setSessionRead({ id: installationId, value });
+        }
         if (value?.runtimeVersion) {
           setPhase('connected');
           return;
@@ -255,7 +319,7 @@ export function LauncherHome() {
 
   const refresh = async () => {
     forceCoreRefresh.current = true;
-    await target.refresh();
+    await target.refresh(true);
     if (mounted.current) setRefreshes((count) => count + 1);
   };
 

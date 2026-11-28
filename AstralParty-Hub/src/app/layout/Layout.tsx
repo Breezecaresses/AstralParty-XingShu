@@ -48,8 +48,87 @@ function markSplashPlayed(): void {
   }
 }
 
-export const DesktopLayout: React.FC = () => {
+const DesktopStatusBar: React.FC<{
+  locale: string;
+  activeThemePreset: (typeof PCL_THEMES)[number];
+  versionText: string;
+}> = React.memo(({ locale, activeThemePreset, versionText }) => {
   const [report, setReport] = useState<DiagnosticReport | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      api
+        .getDiagnosticReport()
+        .then((next) => {
+          if (!active) return;
+          setReport((prev) => {
+            if (
+              prev &&
+              prev.overall_status === next.overall_status &&
+              prev.snapshot?.primary_game?.install_path === next.snapshot?.primary_game?.install_path
+            ) {
+              return prev;
+            }
+            return next;
+          });
+        })
+        .catch(() => {
+          if (active) setReport(null);
+        });
+    };
+    refresh();
+    const timer = setInterval(refresh, 30000);
+    const onVis = () => {
+      if (!document.hidden) refresh();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVis);
+    }
+    return () => {
+      active = false;
+      clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVis);
+      }
+    };
+  }, []);
+
+  const statusClass =
+    report?.overall_status === 'HEALTHY'
+      ? 'healthy'
+      : report?.overall_status === 'WARNING'
+      ? 'warning'
+      : 'degraded';
+
+  return (
+    <footer className="desktop-status-bar">
+      <span>
+        <i className={`desktop-status-dot ${statusClass}`} />
+        {report?.snapshot.primary_game
+          ? locale === 'zh-CN'
+            ? '游戏目录已连接'
+            : 'Game directory connected'
+          : locale === 'zh-CN'
+          ? '等待选择游戏目录'
+          : 'Select a game directory'}
+      </span>
+      <span className="desktop-status-meta">
+        <span className="desktop-status-theme">
+          <i style={{ background: activeThemePreset.swatchPrimary }} aria-hidden="true" />
+          {locale === 'zh-CN' ? activeThemePreset.nameZh : activeThemePreset.nameEn}
+        </span>
+        <span className="desktop-status-sep" aria-hidden="true">
+          ·
+        </span>
+        <span className="desktop-status-version">{versionText}</span>
+      </span>
+    </footer>
+  );
+});
+
+export const DesktopLayout: React.FC = () => {
   const { locale } = useTranslation();
   const contentRef = useRef<HTMLElement>(null);
   const [dragOverWindow, setDragOverWindow] = useState(false);
@@ -81,7 +160,7 @@ export const DesktopLayout: React.FC = () => {
     enterTimerRef.current = setTimeout(() => {
       enterTimerRef.current = null;
       setStartupStage('ready');
-    }, 740);
+    }, 260);
   }, []);
 
   useEffect(() => {
@@ -202,17 +281,6 @@ export const DesktopLayout: React.FC = () => {
     setStartupStage('ready');
   }, []);
 
-  useEffect(() => {
-    const refresh = () =>
-      api
-        .getDiagnosticReport()
-        .then(setReport)
-        .catch(() => setReport(null));
-    void refresh();
-    const timer = setInterval(() => void refresh(), 10000);
-    return () => clearInterval(timer);
-  }, []);
-
   const appTitle = locale === 'zh-CN' ? '星枢启动器' : 'XingShu Launcher';
 
   useEffect(() => {
@@ -274,13 +342,6 @@ export const DesktopLayout: React.FC = () => {
     };
   }, [navigate]);
 
-  const statusClass =
-    report?.overall_status === 'HEALTHY'
-      ? 'healthy'
-      : report?.overall_status === 'WARNING'
-      ? 'warning'
-      : 'degraded';
-
   const launcherBgStyle = customBgUrl
     ? ({
         '--xs-bg-blur': `${Math.round(customBgBlur * 0.28)}px`,
@@ -312,36 +373,17 @@ export const DesktopLayout: React.FC = () => {
             {!isLauncherPreview && <UpdatePromptController />}
 
             <main className="content-area" ref={contentRef}>
-              <div className="aurora-route-stage" key={pathname}>
+              <div className="aurora-route-stage">
                 <Outlet />
               </div>
             </main>
           </div>
         </div>
-        <footer className="desktop-status-bar">
-          <span>
-            <i className={`desktop-status-dot ${statusClass}`} />
-            {report?.snapshot.primary_game
-              ? locale === 'zh-CN'
-                ? '游戏目录已连接'
-                : 'Game directory connected'
-              : locale === 'zh-CN'
-              ? '等待选择游戏目录'
-              : 'Select a game directory'}
-          </span>
-          <span className="desktop-status-meta">
-            <span className="desktop-status-theme">
-              <i style={{ background: activeThemePreset.swatchPrimary }} aria-hidden="true" />
-              {locale === 'zh-CN' ? activeThemePreset.nameZh : activeThemePreset.nameEn}
-            </span>
-            <span className="desktop-status-sep" aria-hidden="true">
-              ·
-            </span>
-            <span className="desktop-status-version">
-              {isLauncherPreview ? (locale === 'zh-CN' ? '本地预览' : 'Local preview') : `v${updateBuild.version}`}
-            </span>
-          </span>
-        </footer>
+        <DesktopStatusBar
+          locale={locale}
+          activeThemePreset={activeThemePreset}
+          versionText={isLauncherPreview ? (locale === 'zh-CN' ? '本地预览' : 'Local preview') : `v${updateBuild.version}`}
+        />
         {dragOverWindow && (
           <div className="global-mod-drop-overlay" aria-live="polite">
             <div className="global-mod-drop-card">

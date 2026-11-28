@@ -498,7 +498,7 @@ html.xingshu-splash-window #root {
   user-select: none;
   opacity: 1;
   transform: scale(1);
-  transition: opacity 440ms var(--pcl-ease-out), transform 440ms var(--pcl-ease-out);
+  transition: opacity 260ms var(--pcl-ease-out), transform 260ms var(--pcl-ease-out);
 }
 
 .pcl-splash-overlay.is-floating {
@@ -508,9 +508,9 @@ html.xingshu-splash-window #root {
 }
 
 .pcl-splash-overlay.is-overlay {
-  background: rgba(246, 250, 255, 0.48);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(246, 250, 255, 0.78);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .launcher-frame[data-pcl-theme='obsidian'] .pcl-splash-overlay.is-overlay {
@@ -1654,8 +1654,8 @@ html.xingshu-splash-window #root {
 .launcher-frame.has-custom-bg .pcl-card,
 .launcher-frame.has-custom-bg .pcl-tool-tile,
 .launcher-frame.has-custom-bg .pcl-launch-sidebar {
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .launcher-frame.has-custom-bg:not([data-pcl-scheme='dark']) .pcl-card,
