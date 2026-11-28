@@ -154,6 +154,7 @@ namespace XingShuRuntime.UI
         private XingShuFreeCameraView _freeCameraView;
         private XingShuActionGuardView _actionGuardView;
         private XingShuAutoSocialView _autoSocialView;
+        private XingShuLazyHelperView _lazyHelperView;
         private XingShuCreditView _creditView;
         private XingShuSelectRoleMapView _selectRoleMapView;
         private XingShuBattleStatsView _battleStatsView;
@@ -194,7 +195,8 @@ namespace XingShuRuntime.UI
             16, // 角色状态
             17, // 角色Buff显示
             6,  // 战局守护
-            18, // 自动化社交 (合并快捷致谢/头像点赞/星币商店/结算截图)
+            18, // 自动化社交 (合并快捷致谢/头像点赞/结算截图/动态名字)
+            24, // 懒人助手 (独立模块 lazy-helper)
             19, // 信誉与车队
             22, // 选人地图
             7,  // 对局数据
@@ -230,7 +232,9 @@ namespace XingShuRuntime.UI
             "信誉与车队",     // 19 (独立模块 credit-guard)
             "",               // 20 (已并入 18)
             "",               // 21 (已并入 18)
-            "选人地图"        // 22
+            "选人地图",       // 22
+            "",               // 23 (毛玻璃皮肤“扩展框架”专用保留槽位)
+            "懒人助手"        // 24 (独立模块 lazy-helper)
         };
 
         internal static void Install(GameObject host)
@@ -448,6 +452,36 @@ namespace XingShuRuntime.UI
             {
                 // CASE C: Center OPEN && Current Page != HandCard -> KEEP OPEN, SELECT HandCard
                 Instance.SelectTab(1);
+            }
+        }
+
+        internal static void OpenLazyHelperPage()
+        {
+            if (Instance != null && TabAvailable(24))
+            {
+                if (!Instance._isOpen)
+                {
+                    Instance.SetOpenState(true);
+                }
+                Instance.SelectTab(24);
+            }
+        }
+
+        internal static void ToggleLazyHelperPage()
+        {
+            if (Instance == null || !TabAvailable(24)) return;
+            if (!Instance._isOpen)
+            {
+                Instance.SetOpenState(true);
+                Instance.SelectTab(24);
+            }
+            else if (Instance._currentTabIndex == 24)
+            {
+                Instance.SetOpenState(false);
+            }
+            else
+            {
+                Instance.SelectTab(24);
             }
         }
 
@@ -1261,6 +1295,8 @@ namespace XingShuRuntime.UI
                 () => _actionGuardView?.UpdateSync());
             RegisterTabView(18, TabAvailable(18) ? (_autoSocialView = new XingShuAutoSocialView(_contentArea.transform)).Root : null,
                 () => _autoSocialView?.UpdateSync());
+            RegisterTabView(24, TabAvailable(24) ? (_lazyHelperView = new XingShuLazyHelperView(_contentArea.transform)).Root : null,
+                () => _lazyHelperView?.UpdateSync());
             RegisterTabView(19, TabAvailable(19) ? (_creditView = new XingShuCreditView(_contentArea.transform)).Root : null,
                 () => _creditView?.UpdateSync());
             RegisterTabView(22, TabAvailable(22) ? (_selectRoleMapView = new XingShuSelectRoleMapView(_contentArea.transform)).Root : null,
@@ -1362,11 +1398,12 @@ namespace XingShuRuntime.UI
                 case 15: return LauncherModules.CanLoad("MegathSkillDamageHint");
                 case 16: return LauncherModules.CanLoad("PlayerCombatStatusHud");
                 case 17: return LauncherModules.CanLoad("PlayerStarBuffHud");
-                case 18: return LauncherModules.CanLoad("XingShuAutoThanks") || LauncherModules.CanLoad("XingShuAutoPraise") || LauncherModules.CanLoad("DailyStarCoinShop") || LauncherModules.CanLoad("SettlementScreenshot") || LauncherModules.CanLoad("XingShuColorName");
+                case 18: return LauncherModules.CanLoad("XingShuAutoThanks") || LauncherModules.CanLoad("XingShuAutoPraise") || LauncherModules.CanLoad("SettlementScreenshot") || LauncherModules.CanLoad("XingShuColorName");
                 case 19: return LauncherModules.CanLoad("CreditGuardRuntime");
                 case 20:
                 case 21: return false;
                 case 22: return LauncherModules.CanLoad("SelectRoleMapNameHint");
+                case 24: return LauncherModules.CanLoad("LazyHelperRuntime") || LauncherModules.CanLoad("DailyStarCoinShop");
                 default: return true;
             }
         }

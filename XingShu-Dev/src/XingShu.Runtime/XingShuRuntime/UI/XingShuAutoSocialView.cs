@@ -26,9 +26,6 @@ namespace XingShuRuntime.UI
         private Text _praiseOffsetYText;
         private Text _praiseParamText;
 
-        private Toggle _dailyShopToggle;
-        private Text _dailyShopStatus;
-
         private Toggle _settlementScreenshotToggle;
         private Text _settlementScreenshotPathText;
 
@@ -126,22 +123,19 @@ namespace XingShuRuntime.UI
                 () => { XingShuAutoPraise.ResetPosition(); UpdateSync(); }, 88f, 28f, 12);
             XingShuViewCardHelper.PlaceTopRight(resetPosBtn.GetComponent<RectTransform>(), new Vector2(-20f, -240f), new Vector2(88f, 28f));
 
-            // Card 3: 每日星币商店
-            GameObject shopCard = XingShuViewCardHelper.CreateCardContainer(content, "Card_DailyStarCoinShop", 156f);
-            Text shopTitle = XingShuUIFactory.CreateText(shopCard, "Title", "每日星币商店", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
-            XingShuViewCardHelper.PlaceTopLeft(shopTitle.rectTransform, new Vector2(20f, -12f), new Vector2(360f, 26f));
+            // Card 3: 每日星币商店已迁移至独立模块「懒人助手」
+            GameObject shopCard = XingShuViewCardHelper.CreateCardContainer(content, "Card_DailyStarCoinShopMoved", 96f);
+            Text shopTitle = XingShuUIFactory.CreateText(shopCard, "Title", "每日星币与日常领取已升级为独立「懒人助手」", 16, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            XingShuViewCardHelper.PlaceTopLeft(shopTitle.rectTransform, new Vector2(20f, -12f), new Vector2(460f, 24f));
 
             Text shopDesc = XingShuUIFactory.CreateText(shopCard, "Description",
-                "每天登录后处理官方随机货架：先领免费商品，再买完剩余星币商品。\n默认关闭，按游戏账号保存；星币不足时保留未购商品，不兑换其他货币。",
-                12, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            XingShuViewCardHelper.PlaceStretchTop(shopDesc.rectTransform, 44f, 44f, 40f);
+                "每日免费/星币商店、周常活跃度、通行证、邮件、随机箱与签到已整合进「懒人助手」独立分页。",
+                12, XingShuUITheme.SecondaryText, TextAnchor.MiddleLeft);
+            XingShuViewCardHelper.PlaceStretchTop(shopDesc.rectTransform, 44f, 32f, 40f);
 
-            _dailyShopStatus = XingShuUIFactory.CreateText(shopCard, "Status", DailyStarCoinShop.Status, 12, XingShuUITheme.MutedText, TextAnchor.MiddleLeft);
-            XingShuViewCardHelper.PlaceStretchTop(_dailyShopStatus.rectTransform, 102f, 36f, 40f);
-
-            _dailyShopToggle = XingShuUIFactory.CreateToggle(shopCard, "DailyShopToggle", "自动购买", DailyStarCoinShop.IsEnabled,
-                value => { if (!_suppressCallbacks) DailyStarCoinShop.SetEnabled(value); });
-            XingShuViewCardHelper.PlaceTopRight(_dailyShopToggle.GetComponent<RectTransform>(), new Vector2(-20f, -10f), new Vector2(165f, 34f));
+            Button openLazyBtn = XingShuViewCardHelper.CreateActionButton(shopCard, "OpenLazyHelperBtn", "前往懒人助手",
+                XingShuUICenter.OpenLazyHelperPage, 128f, 30f, 12);
+            XingShuViewCardHelper.PlaceTopRight(openLazyBtn.GetComponent<RectTransform>(), new Vector2(-20f, -10f), new Vector2(128f, 30f));
 
             // Card 4: 自动结算战绩截图
             GameObject screenshotCard = XingShuViewCardHelper.CreateCardContainer(content, "Card_AutoSettlementScreenshot", 152f);
@@ -344,11 +338,6 @@ namespace XingShuRuntime.UI
                 _praiseOffsetXSlider.value = ox;
             if (_praiseOffsetYSlider != null && Mathf.Abs(_praiseOffsetYSlider.value - oy) > 0.5f)
                 _praiseOffsetYSlider.value = oy;
-            if (_dailyShopToggle != null)
-            {
-                _dailyShopToggle.isOn = DailyStarCoinShop.IsEnabled;
-                _dailyShopToggle.interactable = DailyStarCoinShop.CanConfigure;
-            }
             if (_settlementScreenshotToggle != null && _settlementScreenshotToggle.isOn != XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled)
                 _settlementScreenshotToggle.isOn = XingShuRuntime.MatchPort.SettlementScreenshot.IsEnabled;
             if (_colorNameToggle != null && _colorNameToggle.isOn != XingShuColorName.IsEnabled)
@@ -362,8 +351,6 @@ namespace XingShuRuntime.UI
             if (_praiseOffsetXText != null) _praiseOffsetXText.text = FormatSignedPx(ox);
             if (_praiseOffsetYText != null) _praiseOffsetYText.text = FormatSignedPx(oy);
             if (_praiseParamText != null) _praiseParamText.text = $"当前参数：大小 {Mathf.RoundToInt(scale * 100f)}% · 偏移 ({FormatSignedPx(ox)}, {FormatSignedPx(oy)})";
-            if (_dailyShopStatus != null && _dailyShopStatus.text != DailyStarCoinShop.Status)
-                _dailyShopStatus.text = DailyStarCoinShop.Status;
             if (_settlementScreenshotPathText != null)
             {
                 string summary = FormatScreenshotPathSummary();

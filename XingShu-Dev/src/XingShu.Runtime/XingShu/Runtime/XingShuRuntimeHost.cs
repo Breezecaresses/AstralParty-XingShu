@@ -78,6 +78,8 @@ namespace XingShu.Runtime
                     XingShuRuntime.MatchPort.SettlementScreenshot.Install(targetHost);
                 if (LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.CreditGuardRuntime)))
                     XingShuRuntime.Utilities.CreditGuardRuntime.Install(targetHost);
+                if (LauncherModules.CanLoad("LazyHelperRuntime") || LauncherModules.CanLoad("DailyStarCoinShop"))
+                    XingShuRuntime.Utilities.LazyHelperRuntime.Install(targetHost);
                 if (LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.MegathSkillDamageHint))
                     || LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.BattleStatsOverlay)))
                     XingShuRuntime.MatchPort.MatchProtocolObserver.Install(targetHost);

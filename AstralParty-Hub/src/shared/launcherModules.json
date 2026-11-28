@@ -1,7 +1,7 @@
 [
   {"id":"hand-monitor","name":"手牌监视","description":"局内手牌入口与已授权合作局队友同步","types":["HandCardDisplayManager","HandCardDock"]},
   {"id":"battle-stats","name":"对局统计","description":"局内统计挂件与对局数据","types":["BattleStatsOverlay"]},
-  {"id":"auto-social","name":"自动化社交","description":"整合局内快捷致谢、头像自动点赞、每日星币商店、结算自动截图与彩色动态名字","types":["XingShuAutoThanks","XingShuAutoPraise","DailyStarCoinShop","SettlementScreenshot","XingShuColorName"]},
+  {"id":"auto-social","name":"自动化社交","description":"整合局内快捷致谢、头像自动点赞、结算自动截图与彩色动态名字","types":["XingShuAutoThanks","XingShuAutoPraise","SettlementScreenshot","XingShuColorName"]},
   {"id":"defense-hint","name":"防御与卡牌点数提示","description":"本人防御/闪避所需点数参考，以及战斗卡牌打出后点数与加成明细","types":["DefensePointHint","BattleCardPointHint"]},
   {"id":"knockback-preview","name":"击飞预测","description":"局内击飞概率参考","types":["MonsterKillProbability"]},
   {"id":"monster-action","name":"怪物行动可视","description":"地图上实时显示怪物10格索敌推演、投掷点数、移动路径选择与主动技能冷却","types":["MonsterTargetRuntime","MonsterCooldownRuntime"]},
@@ -15,5 +15,6 @@
   {"id":"megath-damage","name":"游戏理解","description":"整合芬妮潜能二选一队友透视、梅加斯技能伤害、米米星币与维生素药丸治愈预测，及全角色美工刀/治愈/标靶/星光叠加伤害计算（可拖动调节位置）","types":["MegathSkillDamageHint"]},
   {"id":"player-combat-hud","name":"角色状态头顶显示","description":"在棋盘玩家角色上方显示技能冷却、血量、基础攻防与最终移速（可调节位置）","types":["PlayerCombatStatusHud"]},
   {"id":"player-star-buffs","name":"角色Buff显示","description":"在左侧角色头像⭐区域显示疾行、角色专属、攻防增益与减益等 Buff，支持分类与单项自由开关及位置缩放调节","types":["PlayerStarBuffHud"]},
-  {"id":"credit-guard","name":"信誉分与车队","description":"局内与房间实时显示星枢社区信誉分与拔线率，支持一键点赞、个人拉黑、星枢官方反馈、高信誉密码开房、自动跟房与组队同步","types":["CreditGuardRuntime"]}
+  {"id":"credit-guard","name":"信誉分与车队","description":"局内与房间实时显示星枢社区信誉分与拔线率，支持一键点赞、个人拉黑、星枢官方反馈、高信誉密码开房、自动跟房与组队同步","types":["CreditGuardRuntime"]},
+  {"id":"lazy-helper","name":"懒人助手","description":"回到大厅空闲时按账号独立开关自动购买每日免费/星币商品、领取日常周常成就、通行证、邮件、活动签到与非自选随机箱","types":["LazyHelperRuntime","DailyStarCoinShop"]}
 ]

@@ -27,7 +27,7 @@ namespace XingShuRuntime.Core
             new[] { "battle-card-points", "defense-hint" },
             new[] { "quick-thanks", "auto-social" },
             new[] { "avatar-praise", "auto-social" },
-            new[] { "star-coin-shop", "auto-social" },
+            new[] { "star-coin-shop", "lazy-helper" },
             new[] { "settlement-capture", "auto-social" },
         };
 
