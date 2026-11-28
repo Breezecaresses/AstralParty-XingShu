@@ -598,5 +598,29 @@
     "version": "1.0.0-game-ui-r8.61",
     "sha256": "c387d54646822731a52a6290e96fa76497bee10916627338723ec14093fa36d0",
     "bundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\111661d4da79135f6d1fdadbc1140b74\\__data"
+  },
+  {
+    "platform": "STEAM_CN",
+    "version": "1.0.0-game-ui-r8.62",
+    "sha256": "6a481e71ce891c6243a495ce3197734ece109779666abe52c4298a8aab5c19d9",
+    "bundleRelativePath": "AstralParty_CN_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\74ec34421f662150b01741f232d7497c\\__data"
+  },
+  {
+    "platform": "TAPTAP",
+    "version": "1.0.0-game-ui-r8.62",
+    "sha256": "75f2fedd6807e8352f205d3067047778e4563e22dcfc296821a53c8420053868",
+    "bundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\f468bb754fee0362b0d1074e74e7e885\\__data"
+  },
+  {
+    "platform": "BILIBILI",
+    "version": "1.0.0-game-ui-r8.62",
+    "sha256": "37d1e2500b198f11de4a48e478c18f3996cb1a3c7b4da0a3bda57e6fa6826ffd",
+    "bundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\21b07f52b18434b20781372324ee459f\\__data"
+  },
+  {
+    "platform": "WEGAME",
+    "version": "1.0.0-game-ui-r8.62",
+    "sha256": "9bdc02e977685430a0fbe30d20bf4ace6e53523896965fcb815a5ed5bf6c5d84",
+    "bundleRelativePath": "吉星派对_Data\\com.unity.addressables\\AssetBundles\\57a198703b66364d5420d39c0d251747\\111661d4da79135f6d1fdadbc1140b74\\__data"
   }
 ]
