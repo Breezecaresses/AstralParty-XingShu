@@ -12,7 +12,7 @@
   {"id":"replay-player","name":"局内录像","description":"游戏内回放播放面板","types":["ReplayPlayerGUI"]},
   {"id":"static-portraits","name":"立绘替换","description":"独立的立绘与动态资源显示设置","types":["StaticPortraitGUI"]},
   {"id":"select-map-name","name":"选人地图提示","description":"在选人界面右侧显示当前地图名称","types":["SelectRoleMapNameHint"]},
-  {"id":"megath-damage","name":"梅加斯伤害计算","description":"游玩梅加斯时显示主动技能理论最大伤害面板（可拖动调节位置）","types":["MegathSkillDamageHint"]},
+  {"id":"megath-damage","name":"游戏理解","description":"整合芬妮潜能二选一队友透视、梅加斯技能伤害、米米星币与维生素药丸治愈预测，及全角色美工刀/治愈/标靶/星光叠加伤害计算（可拖动调节位置）","types":["MegathSkillDamageHint"]},
   {"id":"player-combat-hud","name":"角色状态头顶显示","description":"在棋盘玩家角色上方显示技能冷却、血量、基础攻防与最终移速（可调节位置）","types":["PlayerCombatStatusHud"]},
   {"id":"player-star-buffs","name":"角色Buff显示","description":"在左侧角色头像⭐区域显示疾行、角色专属、攻防增益与减益等 Buff，支持分类与单项自由开关及位置缩放调节","types":["PlayerStarBuffHud"]},
   {"id":"credit-guard","name":"信誉分与车队","description":"局内与房间实时显示星枢社区信誉分与拔线率，支持一键点赞、个人拉黑、星枢官方反馈、高信誉密码开房、自动跟房与组队同步","types":["CreditGuardRuntime"]}

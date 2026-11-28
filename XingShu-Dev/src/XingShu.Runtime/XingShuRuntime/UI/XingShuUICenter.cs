@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using XingShuRuntime.Core;
 using XingShuRuntime.Utilities;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace XingShuRuntime.UI
@@ -118,6 +119,7 @@ namespace XingShuRuntime.UI
         private int _activeBuiltStyle;
         private Canvas _canvas;
         private CanvasScaler _canvasScaler;
+        private GraphicRaycaster _raycaster;
         private CanvasGroup _canvasGroup;
         private RectTransform _logicalRootRt;
         private RectTransform _mainFrameRt;
@@ -221,7 +223,7 @@ namespace XingShuRuntime.UI
             "",               // 12 (已并入 11)
             "防御与卡牌点数", // 13
             "",               // 14 (已并入 13)
-            "梅加斯伤害",     // 15
+            "游戏理解",       // 15 (原梅加斯伤害计算，整合芬妮/米米/全角色叠加伤害)
             "角色状态",       // 16
             "角色Buff显示",   // 17
             "自动化社交",     // 18
@@ -287,6 +289,8 @@ namespace XingShuRuntime.UI
             _externalPagesByTabId.Clear();
             XingShuGlassSkin.InvalidateRestyleCache();
             _canvasScaler = null;
+            _raycaster = null;
+            _canvasGroup = null;
             _logicalRootRt = null;
             _leftRailRt = null;
             _returnWrapRt = null;
@@ -609,6 +613,18 @@ namespace XingShuRuntime.UI
             }
         }
 
+        internal static void OpenGameInsightPage()
+        {
+            if (Instance != null)
+            {
+                if (!Instance._isOpen)
+                {
+                    Instance.SetOpenState(true);
+                }
+                Instance.SelectTab(15);
+            }
+        }
+
         internal static void ToggleBattleStatsPage()
         {
             if (Instance == null) return;
@@ -741,6 +757,28 @@ namespace XingShuRuntime.UI
             {
                 _canvas.enabled = open;
             }
+            if (_raycaster != null)
+            {
+                _raycaster.enabled = open;
+            }
+            if (_canvasGroup != null)
+            {
+                _canvasGroup.interactable = open;
+                _canvasGroup.blocksRaycasts = open;
+            }
+            if (!open)
+            {
+                try
+                {
+                    EventSystem es = EventSystem.current;
+                    if (es != null && _canvas != null && es.currentSelectedGameObject != null
+                        && es.currentSelectedGameObject.transform.IsChildOf(_canvas.transform))
+                    {
+                        es.SetSelectedGameObject(null);
+                    }
+                }
+                catch { }
+            }
 
             if (open)
             {
@@ -794,7 +832,7 @@ namespace XingShuRuntime.UI
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 1.0f;
 
-            canvasGo.AddComponent<GraphicRaycaster>();
+            _raycaster = canvasGo.AddComponent<GraphicRaycaster>();
             _canvasGroup = canvasGo.AddComponent<CanvasGroup>();
 
             GameObject logicalRoot = XingShuUIFactory.CreateUIObject("LogicalRoot_1080p", canvasGo);
@@ -1470,7 +1508,7 @@ namespace XingShuRuntime.UI
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 1.0f;
 
-            canvasGo.AddComponent<GraphicRaycaster>();
+            _raycaster = canvasGo.AddComponent<GraphicRaycaster>();
             _canvasGroup = canvasGo.AddComponent<CanvasGroup>();
 
             GameObject logicalRoot = XingShuUIFactory.CreateUIObject("LogicalRoot_1080p", canvasGo);

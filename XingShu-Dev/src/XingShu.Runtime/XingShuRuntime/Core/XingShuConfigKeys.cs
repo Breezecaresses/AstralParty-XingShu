@@ -506,7 +506,7 @@ internal static class XingShuConfigKeys
 	internal const string CustomLobbyBgMuteVanillaBgm = "XINGSHU_CUSTOM_LOBBY_BG_MUTE_VANILLA_BGM";
 	internal const bool CustomLobbyBgMuteVanillaBgmDefault = false;
 
-	// 梅加斯机械超人开技能理论最大伤害面板 (MegathSkillDamageHint)
+	// 游戏理解面板 (原梅加斯伤害计算，含芬妮二选一透视 / 米米收益 / 全角色叠加伤害)
 	internal const string MegathDamageHintEnabled = "XINGSHU_MEGATH_DMG_HINT";
 	internal const bool MegathDamageHintEnabledDefault = true;
 	internal const string MegathDamageHintPosX = "XINGSHU_MEGATH_DMG_X";
@@ -519,6 +519,22 @@ internal static class XingShuConfigKeys
 	internal const float MegathDamageHintScaleDefault = 1.0f;
 	internal const string MegathDamageHintLocked = "XINGSHU_MEGATH_DMG_LOCKED";
 	internal const bool MegathDamageHintLockedDefault = false;
+	internal const string MegathDamageHintCollapsed = "XINGSHU_MEGATH_DMG_COLLAPSED";
+	internal const bool MegathDamageHintCollapsedDefault = false;
+	internal const string GameInsightFannyEnabled = "XINGSHU_INSIGHT_FANNY";
+	internal const bool GameInsightFannyEnabledDefault = true;
+	internal const string GameInsightMimiEnabled = "XINGSHU_INSIGHT_MIMI";
+	internal const bool GameInsightMimiEnabledDefault = true;
+	internal const string GameInsightStackDamageEnabled = "XINGSHU_INSIGHT_STACK_DMG";
+	internal const bool GameInsightStackDamageEnabledDefault = true;
+	internal const string StatsWidgetDetailedMode = "XINGSHU_STATS_WIDGET_DETAILED";
+	internal const bool StatsWidgetDetailedModeDefault = false;
+	internal const string MatchEconomyPanelVisible = "XINGSHU_ECONOMY_PANEL_VISIBLE";
+	internal const bool MatchEconomyPanelVisibleDefault = false;
+	internal const string MatchEconomyPanelX = "XINGSHU_ECONOMY_PANEL_X";
+	internal const float MatchEconomyPanelXDefault = 24f;
+	internal const string MatchEconomyPanelY = "XINGSHU_ECONOMY_PANEL_Y";
+	internal const float MatchEconomyPanelYDefault = 88f;
 
 	// 角色状态显示 (PlayerCombatStatusHud：棋盘角色头顶与怪物推演同层锁死 + 左侧头像下方可调位置)
 	internal const string PlayerCombatHudEnabled = "XINGSHU_PLAYER_COMBAT_HUD";
