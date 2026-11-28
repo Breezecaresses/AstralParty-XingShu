@@ -28,13 +28,36 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 {
     private const float TextRefreshIntervalSeconds = 0.12f;
 
+    private const string HpIconUrl = "ui://xuaw6o8jmmmw3s";
+    private const string AtkIconUrl = "ui://xuaw6o8jmmmw3v";
+    private const string DefIconUrl = "ui://xuaw6o8jmmmw3u";
+    private const string CdIconUrl = "ui://xuaw6o8jg1i49m";
+    private const string FallbackMoveIconUrl = "ui://xuaw6o8jmmmw3t";
+
+    private sealed class TokenCell
+    {
+        internal GLoader Icon;
+        internal GTextField ValueText;
+        internal string LastIconUrl = "";
+        internal string LastText = "";
+        internal Color LastColor;
+    }
+
+    private struct HudToken
+    {
+        internal int Row;
+        internal string IconUrl;
+        internal string Text;
+        internal Color Color;
+    }
+
     private sealed class PillSlot
     {
         internal long PlayerId;
         internal GComponent Panel;
         internal GGraph Background;
         internal GGraph AccentBar;
-        internal GTextField Label;
+        internal readonly List<TokenCell> Cells = new List<TokenCell>(8);
         internal float Width;
         internal float Height;
         internal float AnchorX;
@@ -43,6 +66,10 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         internal Color LastAccentColor;
         internal bool ActiveInFrame;
     }
+
+    private static string _cachedMoveIconUrl;
+    private static bool _moveIconResolved;
+    private static readonly List<HudToken> _tokenScratch = new List<HudToken>(8);
 
     private sealed class HeroCdEntry
     {
@@ -467,8 +494,14 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 
             if (refreshText || string.IsNullOrEmpty(slot.LastText))
             {
-                string ubb = BuildHeadStatusText(p);
-                UpdatePillContent(slot, ubb, compact: false, accentColor: ResolveSlotAccentColor(p));
+                BuildHeadTokens(p, _tokenScratch);
+                if (_tokenScratch.Count == 0)
+                {
+                    slot.ActiveInFrame = false;
+                    slot.Panel.visible = false;
+                    continue;
+                }
+                UpdatePillTokens(slot, _tokenScratch, compact: false, accentColor: ResolveSlotAccentColor(p));
             }
 
             if (slot.Panel != null && !slot.Panel.isDisposed)
@@ -585,14 +618,14 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
 
             if (refreshText || string.IsNullOrEmpty(slot.LastText))
             {
-                string ubb = BuildAvatarStatusText(p);
-                if (string.IsNullOrEmpty(ubb))
+                BuildAvatarTokens(p, _tokenScratch);
+                if (_tokenScratch.Count == 0)
                 {
                     slot.ActiveInFrame = false;
                     slot.Panel.visible = false;
                     continue;
                 }
-                UpdatePillContent(slot, ubb, compact: true, accentColor: ResolveSlotAccentColor(p));
+                UpdatePillTokens(slot, _tokenScratch, compact: true, accentColor: ResolveSlotAccentColor(p));
             }
 
             slot.AnchorX = anchorLocal.x;
@@ -661,70 +694,275 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         return true;
     }
 
-    private string BuildHeadStatusText(BattlePlayerData p)
+    private static string ResolveMoveIconUrl()
     {
-        var hero = p.player.Hero;
-        string line1 = "";
-        if (_showCd)
+        if (_moveIconResolved && !string.IsNullOrEmpty(_cachedMoveIconUrl))
         {
-            line1 = FormatCdToken(p);
+            return _cachedMoveIconUrl;
         }
-
-        if (_showHp)
+        try
         {
-            int hp = p.Property?.HP != null ? p.Property.HP.Value : hero.Hp;
-            int maxHp = (p.Property != null && p.Property.maxHP > 0) ? p.Property.maxHP : hero.MaxHp;
-            string hpCol = hp <= 2 ? "#FF8DA1" : "#FFFFFF";
-            string hpPart = $"[color={hpCol}]HP {hp}/{maxHp}[/color]";
-            line1 = string.IsNullOrEmpty(line1) ? hpPart : (line1 + "  " + hpPart);
-        }
-
-        string line2 = _showAtkDef ? FormatAtkDefTokens(p) : "";
-        if (_showMove)
-        {
-            string movePart = FormatMoveToken(p);
-            if (!string.IsNullOrEmpty(movePart))
+            var dict = StaticConfigure.Buff?.InfoDict;
+            if (dict != null && dict.Count > 0)
             {
-                line2 = string.IsNullOrEmpty(line2) ? movePart : (line2 + " " + movePart);
+                string bestIcon = null;
+                int bestRank = int.MaxValue;
+                foreach (var kv in dict)
+                {
+                    var cfg = kv.Value;
+                    if (cfg == null || string.IsNullOrEmpty(cfg.Icon)) continue;
+                    string name = SafeGetBuffLocal(cfg.NameId);
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    int rank = int.MaxValue;
+                    if (name.IndexOf("加急加快", StringComparison.Ordinal) >= 0) rank = 0;
+                    else if (name.IndexOf("加急", StringComparison.Ordinal) >= 0 || name.IndexOf("加快", StringComparison.Ordinal) >= 0) rank = 1;
+                    else if (name.IndexOf("疾行", StringComparison.Ordinal) >= 0) rank = 2;
+                    else if (name.IndexOf("加速", StringComparison.Ordinal) >= 0) rank = 3;
+
+                    if (rank < bestRank)
+                    {
+                        bestRank = rank;
+                        bestIcon = cfg.Icon;
+                        if (rank == 0) break;
+                    }
+                }
+                if (!string.IsNullOrEmpty(bestIcon))
+                {
+                    _cachedMoveIconUrl = bestIcon;
+                    _moveIconResolved = true;
+                    return _cachedMoveIconUrl;
+                }
             }
         }
-
-        if (!string.IsNullOrEmpty(line1) && !string.IsNullOrEmpty(line2))
-        {
-            return line1 + "\n" + line2;
-        }
-        return !string.IsNullOrEmpty(line1) ? line1 : line2;
+        catch { }
+        return FallbackMoveIconUrl;
     }
 
-    private string BuildAvatarStatusText(BattlePlayerData p)
+    private void BuildHeadTokens(BattlePlayerData p, List<HudToken> tokens)
     {
-        string result = "";
+        tokens.Clear();
+        int nextRow = 0;
+        if (_showCd || _showHp)
+        {
+            if (_showCd)
+            {
+                tokens.Add(new HudToken
+                {
+                    Row = nextRow,
+                    IconUrl = CdIconUrl,
+                    Text = ResolveCdShortText(p, out Color cdCol),
+                    Color = cdCol,
+                });
+            }
+            if (_showHp)
+            {
+                tokens.Add(new HudToken
+                {
+                    Row = nextRow,
+                    IconUrl = HpIconUrl,
+                    Text = ResolveHpShortText(p, out Color hpCol),
+                    Color = hpCol,
+                });
+            }
+            nextRow++;
+        }
+
+        if (_showAtkDef || _showMove)
+        {
+            bool addedRow = false;
+            if (_showAtkDef)
+            {
+                var hero = p.player.Hero;
+                int baseAtk = hero.Attack;
+                int baseDef = hero.Defense;
+                int curAtk = p.Property?.ATK != null ? p.Property.ATK.Value : baseAtk;
+                int curDef = p.Property?.DEF != null ? p.Property.DEF.Value : baseDef;
+                tokens.Add(new HudToken
+                {
+                    Row = nextRow,
+                    IconUrl = AtkIconUrl,
+                    Text = FormatStatNumber(baseAtk, curAtk),
+                    Color = new Color(1f, 0.62f, 0.52f, 1f),
+                });
+                tokens.Add(new HudToken
+                {
+                    Row = nextRow,
+                    IconUrl = DefIconUrl,
+                    Text = FormatStatNumber(baseDef, curDef),
+                    Color = new Color(0.50f, 0.84f, 1f, 1f),
+                });
+                addedRow = true;
+            }
+            if (_showMove && TryResolveMoveShortText(p, out string moveText, out Color moveCol))
+            {
+                tokens.Add(new HudToken
+                {
+                    Row = nextRow,
+                    IconUrl = ResolveMoveIconUrl(),
+                    Text = moveText,
+                    Color = moveCol,
+                });
+                addedRow = true;
+            }
+            if (addedRow) nextRow++;
+        }
+    }
+
+    private void BuildAvatarTokens(BattlePlayerData p, List<HudToken> tokens)
+    {
+        tokens.Clear();
         if (_showCd)
         {
-            result = FormatCdToken(p);
+            tokens.Add(new HudToken
+            {
+                Row = 0,
+                IconUrl = CdIconUrl,
+                Text = ResolveCdShortText(p, out Color cdCol),
+                Color = cdCol,
+            });
         }
         if (_showAtkDef)
         {
-            string atkDef = FormatAtkDefTokens(p);
-            result = string.IsNullOrEmpty(result) ? atkDef : (result + "  " + atkDef);
-        }
-        if (_showMove)
-        {
-            string movePart = FormatMoveToken(p);
-            if (!string.IsNullOrEmpty(movePart))
+            var hero = p.player.Hero;
+            int baseAtk = hero.Attack;
+            int baseDef = hero.Defense;
+            int curAtk = p.Property?.ATK != null ? p.Property.ATK.Value : baseAtk;
+            int curDef = p.Property?.DEF != null ? p.Property.DEF.Value : baseDef;
+            tokens.Add(new HudToken
             {
-                result = string.IsNullOrEmpty(result) ? movePart : (result + " " + movePart);
+                Row = 0,
+                IconUrl = AtkIconUrl,
+                Text = FormatStatNumber(baseAtk, curAtk),
+                Color = new Color(1f, 0.62f, 0.52f, 1f),
+            });
+            tokens.Add(new HudToken
+            {
+                Row = 0,
+                IconUrl = DefIconUrl,
+                Text = FormatStatNumber(baseDef, curDef),
+                Color = new Color(0.50f, 0.84f, 1f, 1f),
+            });
+        }
+        if (_showMove && TryResolveMoveShortText(p, out string moveText, out Color moveCol))
+        {
+            tokens.Add(new HudToken
+            {
+                Row = 0,
+                IconUrl = ResolveMoveIconUrl(),
+                Text = moveText,
+                Color = moveCol,
+            });
+        }
+        if (tokens.Count == 0 && _showHp)
+        {
+            tokens.Add(new HudToken
+            {
+                Row = 0,
+                IconUrl = HpIconUrl,
+                Text = ResolveHpShortText(p, out Color hpCol),
+                Color = hpCol,
+            });
+        }
+    }
+
+    private static string FormatStatNumber(int baseVal, int curVal)
+    {
+        return curVal != baseVal ? $"{curVal}({baseVal})" : curVal.ToString();
+    }
+
+    private static string ResolveHpShortText(BattlePlayerData p, out Color color)
+    {
+        var hero = p.player.Hero;
+        int hp = p.Property?.HP != null ? p.Property.HP.Value : hero.Hp;
+        int maxHp = (p.Property != null && p.Property.maxHP > 0) ? p.Property.maxHP : hero.MaxHp;
+        color = hp <= 2 ? new Color(1f, 0.55f, 0.63f, 1f) : new Color(1f, 1f, 1f, 1f);
+        return $"{hp}/{maxHp}";
+    }
+
+    private static string ResolveCdShortText(BattlePlayerData p, out Color color)
+    {
+        int skillId = p.player.GetBattleActiveSkillId();
+        int maxCd = 0;
+        if (skillId > 0)
+        {
+            try
+            {
+                if (StaticConfigure.Skill != null && StaticConfigure.Skill.InfoDict != null
+                    && StaticConfigure.Skill.InfoDict.TryGetValue(skillId, out var scfg) && scfg != null)
+                {
+                    maxCd = scfg.Round;
+                }
+            }
+            catch { }
+        }
+        if (skillId > 0 && maxCd > 0)
+        {
+            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
+            long pid = p.player.Id;
+            bool isSelf = logic?.account != null && logic.account.IsSelf(pid);
+            bool isWatchedSelf = logic?.watch != null && logic.watch.PlayerIsWatcher() && pid == logic.watch.SubscribePlayerId.Value;
+            var room = logic?.room?.curRoomInfo;
+            bool isPve = room != null && room.IsPVE();
+            int currentRound = room != null ? Math.Max(_cdRound, room.Round) : _cdRound;
+
+            bool hasTracked = _heroCds.TryGetValue(pid, out var entry) && entry.SkillId == skillId && entry.Cd >= 0;
+            int trackedCd = hasTracked ? PlayerCombatStatusPolicy.ProjectRoundCooldown(entry.Cd, entry.Round, currentRound) : -1;
+            int propCd = p.Property?.activeSkillCD != null ? p.Property.activeSkillCD.Value : -1;
+            int curCd = PlayerCombatStatusPolicy.ResolveHeroActiveSkillCd(
+                isSelf || isWatchedSelf,
+                propCd,
+                hasTracked,
+                trackedCd,
+                isPve,
+                p.SkillCD);
+            color = curCd <= 0 ? new Color(0.49f, 1f, 0.61f, 1f) : new Color(1f, 0.78f, 0.34f, 1f);
+            return $"{curCd}/{maxCd}";
+        }
+        color = new Color(0.72f, 0.78f, 0.86f, 1f);
+        return "被动";
+    }
+
+    private bool TryResolveMoveShortText(BattlePlayerData p, out string text, out Color color)
+    {
+        string raw = FormatMoveToken(p);
+        if (string.IsNullOrEmpty(raw))
+        {
+            text = "";
+            color = Color.white;
+            return false;
+        }
+        int delta = ResolveMoveTotalDelta(p);
+        color = delta < 0 ? new Color(1f, 0.55f, 0.63f, 1f) : new Color(0.45f, 0.96f, 0.67f, 1f);
+        text = (delta > 0 ? "+" : "") + delta.ToString();
+        return true;
+    }
+
+    private int ResolveMoveTotalDelta(BattlePlayerData p)
+    {
+        long pid = p.player.Id;
+        int extraAdd = p.Property?.ExtraAddMovePoint != null ? p.Property.ExtraAddMovePoint.Value : 0;
+        int extraMinus = p.Property?.ExtraMinusMovePoint != null ? p.Property.ExtraMinusMovePoint.Value : 0;
+        bool hasServerUpdate = _playersWithServerAddMove.Contains(pid);
+        int additionMoveSum = 0;
+        if (!hasServerUpdate && extraAdd == 0 && extraMinus == 0 && p.player.Hero.AdditionAttrs != null)
+        {
+            foreach (var kv in p.player.Hero.AdditionAttrs)
+            {
+                var attr = kv.Value;
+                if (attr != null) additionMoveSum += attr.MovePoint + attr.NextMovePoint + attr.SkillAppendMovePoint2;
             }
         }
-        if (string.IsNullOrEmpty(result) && _showHp)
-        {
-            var hero = p.player.Hero;
-            int hp = p.Property?.HP != null ? p.Property.HP.Value : hero.Hp;
-            int maxHp = (p.Property != null && p.Property.maxHP > 0) ? p.Property.maxHP : hero.MaxHp;
-            string hpCol = hp <= 2 ? "#FF8DA1" : "#FFFFFF";
-            result = $"[color={hpCol}]HP {hp}/{maxHp}[/color]";
-        }
-        return result;
+        int buffTempAdd = CollectBuffTempMoveBonus(p);
+        int fallbackAdd = Math.Max(0, additionMoveSum + p.player.Hero.AppendMovePoint1 + p.player.Hero.AppendMovePoint2);
+        int baselinePerm = _baselinePermanentAdd.TryGetValue(pid, out int bp) ? bp : (buffTempAdd == 0 ? fallbackAdd : 0);
+        int pveUpgradeMove = ComputePveStarUpgradeMoveBonus(p);
+        PlayerCombatStatusPolicy.ResolveMoveSpeedBreakdown(
+            extraAdd, extraMinus, hasServerUpdate, additionMoveSum,
+            p.player.Hero.AppendMovePoint1, p.player.Hero.AppendMovePoint2,
+            buffTempAdd, baselinePerm, pveUpgradeMove,
+            out int permanentNet, out int tempAdd);
+        return permanentNet + tempAdd;
     }
 
     private void EnsureBuffSignalBound(GameLogicManager logic)
@@ -927,41 +1165,6 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         {
             return "";
         }
-    }
-
-    private static string FormatCdToken(BattlePlayerData p)
-    {
-        int skillId = p.player.GetBattleActiveSkillId();
-        int maxCd = 0;
-        if (skillId > 0 && StaticConfigure.Skill?.InfoDict != null
-            && StaticConfigure.Skill.InfoDict.TryGetValue(skillId, out var scfg) && scfg != null)
-        {
-            maxCd = scfg.Round;
-        }
-        if (skillId > 0 && maxCd > 0)
-        {
-            var logic = SimpleSingletonProvider<GameLogicManager>.hasInstance ? SimpleSingletonProvider<GameLogicManager>.inst : null;
-            long pid = p.player.Id;
-            bool isSelf = logic?.account != null && logic.account.IsSelf(pid);
-            bool isWatchedSelf = logic?.watch != null && logic.watch.PlayerIsWatcher() && pid == logic.watch.SubscribePlayerId.Value;
-            var room = logic?.room?.curRoomInfo;
-            bool isPve = room != null && room.IsPVE();
-            int currentRound = room != null ? Math.Max(_cdRound, room.Round) : _cdRound;
-
-            bool hasTracked = _heroCds.TryGetValue(pid, out var entry) && entry.SkillId == skillId && entry.Cd >= 0;
-            int trackedCd = hasTracked ? PlayerCombatStatusPolicy.ProjectRoundCooldown(entry.Cd, entry.Round, currentRound) : -1;
-            int propCd = p.Property?.activeSkillCD != null ? p.Property.activeSkillCD.Value : -1;
-            int curCd = PlayerCombatStatusPolicy.ResolveHeroActiveSkillCd(
-                isSelf || isWatchedSelf,
-                propCd,
-                hasTracked,
-                trackedCd,
-                isPve,
-                p.SkillCD);
-            string cdCol = curCd <= 0 ? "#7CFF9B" : "#FFC857";
-            return $"[color={cdCol}]CD {curCd}/{maxCd}[/color]";
-        }
-        return "[color=#B8C8DC]被动[/color]";
     }
 
     private static bool SyncCdSession(RoomInfo room)
@@ -1219,16 +1422,6 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         catch (Exception) { }
     }
 
-    private static string FormatAtkDefTokens(BattlePlayerData p)
-    {
-        var hero = p.player.Hero;
-        int baseAtk = hero.Attack;
-        int baseDef = hero.Defense;
-        int curAtk = p.Property?.ATK != null ? p.Property.ATK.Value : baseAtk;
-        int curDef = p.Property?.DEF != null ? p.Property.DEF.Value : baseDef;
-        return PlayerCombatStatusPolicy.FormatAtkDefTokens(baseAtk, curAtk, baseDef, curDef);
-    }
-
     private static Color ResolveSlotAccentColor(BattlePlayerData p)
     {
         switch (p.player.Slot)
@@ -1340,54 +1533,172 @@ public sealed class PlayerCombatStatusHud : MonoBehaviour
         var accent = new GGraph { touchable = false };
         panel.AddChild(accent);
 
-        var label = new GTextField
-        {
-            name = compact ? "XINGSHU_PlayerAvatarHudLabel" : "XINGSHU_PlayerHeadHudLabel",
-            touchable = false,
-            autoSize = AutoSizeType.Both,
-            align = compact ? AlignType.Left : AlignType.Center,
-            singleLine = compact,
-            UBBEnabled = true,
-            stroke = 1.1f,
-            strokeColor = new Color(0f, 0f, 0f, 0.94f),
-        };
-        var tf = label.textFormat;
-        tf.size = compact
-            ? (Application.isMobilePlatform ? 15 : 13)
-            : (Application.isMobilePlatform ? 18 : 15);
-        tf.lineSpacing = compact ? 1 : 3;
-        tf.bold = true;
-        tf.color = new Color(0.96f, 0.98f, 1f, 1f);
-        label.textFormat = tf;
-        panel.AddChild(label);
-
         return new PillSlot
         {
             PlayerId = playerId,
             Panel = panel,
             Background = bg,
             AccentBar = accent,
-            Label = label,
         };
     }
 
-    private static void UpdatePillContent(PillSlot slot, string ubbText, bool compact, Color accentColor)
+    private static TokenCell EnsureTokenCell(PillSlot slot, int index, bool compact)
     {
-        if (slot.LastText == ubbText && slot.LastAccentColor == accentColor && slot.Width > 0f) return;
-        slot.LastText = ubbText;
+        while (slot.Cells.Count <= index)
+        {
+            var icon = new GLoader
+            {
+                name = "XINGSHU_HudIcon_" + slot.Cells.Count,
+                touchable = false,
+                fill = FillType.Scale,
+                align = AlignType.Center,
+                verticalAlign = VertAlignType.Middle,
+            };
+            float iconSz = compact
+                ? (Application.isMobilePlatform ? 16f : 14f)
+                : (Application.isMobilePlatform ? 18f : 15f);
+            icon.SetSize(iconSz, iconSz);
+            slot.Panel.AddChild(icon);
+
+            var txt = new GTextField
+            {
+                name = "XINGSHU_HudVal_" + slot.Cells.Count,
+                touchable = false,
+                autoSize = AutoSizeType.Both,
+                align = AlignType.Left,
+                singleLine = true,
+                UBBEnabled = false,
+                stroke = 1.15f,
+                strokeColor = new Color(0f, 0f, 0f, 0.94f),
+            };
+            var tf = txt.textFormat;
+            tf.size = compact
+                ? (Application.isMobilePlatform ? 14 : 12)
+                : (Application.isMobilePlatform ? 16 : 14);
+            tf.bold = true;
+            tf.color = Color.white;
+            txt.textFormat = tf;
+            slot.Panel.AddChild(txt);
+
+            slot.Cells.Add(new TokenCell { Icon = icon, ValueText = txt });
+        }
+        return slot.Cells[index];
+    }
+
+    private static string BuildTokenSignature(List<HudToken> tokens)
+    {
+        if (tokens == null || tokens.Count == 0) return "";
+        var parts = new string[tokens.Count];
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            parts[i] = t.Row + ":" + t.IconUrl + ":" + t.Text + ":" + ColorUtility.ToHtmlStringRGBA(t.Color);
+        }
+        return string.Join("|", parts);
+    }
+
+    private static void UpdatePillTokens(PillSlot slot, List<HudToken> tokens, bool compact, Color accentColor)
+    {
+        string sig = BuildTokenSignature(tokens);
+        if (slot.LastText == sig && slot.LastAccentColor == accentColor && slot.Width > 0f) return;
+        slot.LastText = sig;
         slot.LastAccentColor = accentColor;
-        slot.Label.text = ubbText;
 
-        float padX = compact ? 14f : 18f;
-        float padY = compact ? 6f : 10f;
-        float minW = compact ? (Application.isMobilePlatform ? 112f : 96f) : (Application.isMobilePlatform ? 130f : 110f);
-        float minH = compact ? 20f : 26f;
-        float w = Mathf.Max(minW, slot.Label.width + padX);
-        float h = Mathf.Max(minH, slot.Label.height + padY);
+        float iconSz = compact
+            ? (Application.isMobilePlatform ? 16f : 14f)
+            : (Application.isMobilePlatform ? 18f : 15f);
+        float iconGap = compact ? 3f : 4f;
+        float itemGap = compact ? 7f : 9f;
+        float rowGap = compact ? 2f : 4f;
+        float leftPad = 10f;
+        float rightPad = compact ? 8f : 10f;
+        float topPad = compact ? 4f : 6f;
+        float botPad = compact ? 4f : 6f;
 
-        float textX = compact ? 9f : (w - slot.Label.width) * 0.5f + 1.5f;
-        float textY = (h - slot.Label.height) * 0.5f;
-        slot.Label.SetXY(textX, textY);
+        int maxRow = 0;
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Row > maxRow) maxRow = tokens[i].Row;
+        }
+        int rowCount = maxRow + 1;
+        float[] rowWidths = new float[rowCount];
+        float[] rowHeights = new float[rowCount];
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            TokenCell cell = EnsureTokenCell(slot, i, compact);
+            var tk = tokens[i];
+            if (cell.LastIconUrl != tk.IconUrl)
+            {
+                cell.Icon.url = tk.IconUrl;
+                cell.LastIconUrl = tk.IconUrl;
+            }
+            if (cell.LastText != tk.Text)
+            {
+                cell.ValueText.text = tk.Text;
+                cell.LastText = tk.Text;
+            }
+            if (cell.LastColor != tk.Color)
+            {
+                var tf = cell.ValueText.textFormat;
+                tf.color = tk.Color;
+                cell.ValueText.textFormat = tf;
+                cell.LastColor = tk.Color;
+            }
+            cell.Icon.visible = true;
+            cell.ValueText.visible = true;
+
+            float itemW = iconSz + iconGap + cell.ValueText.width;
+            float itemH = Mathf.Max(iconSz, cell.ValueText.height);
+            int r = tk.Row;
+            rowWidths[r] = rowWidths[r] > 0f ? (rowWidths[r] + itemGap + itemW) : itemW;
+            if (itemH > rowHeights[r]) rowHeights[r] = itemH;
+        }
+        for (int i = tokens.Count; i < slot.Cells.Count; i++)
+        {
+            slot.Cells[i].Icon.visible = false;
+            slot.Cells[i].ValueText.visible = false;
+        }
+
+        float contentW = 0f;
+        float contentH = 0f;
+        for (int r = 0; r < rowCount; r++)
+        {
+            if (rowWidths[r] > contentW) contentW = rowWidths[r];
+            if (rowHeights[r] > 0f)
+            {
+                contentH = contentH > 0f ? (contentH + rowGap + rowHeights[r]) : rowHeights[r];
+            }
+        }
+
+        float minW = compact ? (Application.isMobilePlatform ? 112f : 96f) : (Application.isMobilePlatform ? 124f : 108f);
+        float minH = compact ? 22f : 26f;
+        float w = Mathf.Max(minW, leftPad + contentW + rightPad);
+        float h = Mathf.Max(minH, topPad + contentH + botPad);
+
+        float[] rowCursors = new float[rowCount];
+        float[] rowTops = new float[rowCount];
+        float curY = (h - contentH) * 0.5f;
+        for (int r = 0; r < rowCount; r++)
+        {
+            rowTops[r] = curY;
+            rowCursors[r] = compact
+                ? leftPad
+                : (leftPad + Mathf.Max(0f, (w - leftPad - rightPad - rowWidths[r]) * 0.5f));
+            if (rowHeights[r] > 0f) curY += rowHeights[r] + rowGap;
+        }
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            TokenCell cell = slot.Cells[i];
+            int r = tokens[i].Row;
+            float x = rowCursors[r];
+            float rh = rowHeights[r];
+            float yCenter = rowTops[r] + rh * 0.5f;
+            cell.Icon.SetXY(x, yCenter - iconSz * 0.5f);
+            cell.ValueText.SetXY(x + iconSz + iconGap, yCenter - cell.ValueText.height * 0.5f);
+            rowCursors[r] = x + iconSz + iconGap + cell.ValueText.width + itemGap;
+        }
 
         slot.Width = w;
         slot.Height = h;
