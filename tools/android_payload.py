@@ -52,6 +52,7 @@ KNOWN_ANDROID_VERSIONS_R160 = {
     '4faab4631948778c730aea73924bd89eecea7a4d3e0b1244a342b95fbedaa624': '1.0.0-android-preview8.63',
     '703e96f938b188a69e5139410eeb9a64bb46ff3a31c78f68e0e1142e8a0cc168': '1.0.0-android-preview8.64',
     '27fdd2b9cf980ca66aac46c39f987b147acc442626f135cb91d15a366fb1b000': '1.0.0-android-preview8.65',
+    '571cef01c2caaf558a3891814424cc73ce2bf1d21f7e2cbcf72745534a7db943': '1.0.0-android-preview8.66',
 }
 
 
@@ -123,6 +124,7 @@ def previous_hashes(manifest, additional_manifests=()):
         found.add('4faab4631948778c730aea73924bd89eecea7a4d3e0b1244a342b95fbedaa624')
         found.add('703e96f938b188a69e5139410eeb9a64bb46ff3a31c78f68e0e1142e8a0cc168')
         found.add('27fdd2b9cf980ca66aac46c39f987b147acc442626f135cb91d15a366fb1b000')
+        found.update(KNOWN_ANDROID_VERSIONS_R160.keys())
     releases = publish_directory(ROOT)
     manifests = set(releases.glob('XingShu_Android_*/candidate.json'))
     manifests.update(releases.glob('XingShu_*/Android/candidate.json'))

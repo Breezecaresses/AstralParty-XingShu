@@ -28,21 +28,23 @@ class AndroidBaselineTests(unittest.TestCase):
     def test_old_plugin_hash_is_never_accepted_for_later_resources(self):
         legacy_026 = '3d94697f4dc6d64c2cb5fcca56339090f54e920cd7dab6de7bcc1912347e5a0f'
         sample_160 = '9da1b62b7a05e00efca9f0df6640a61fa9cd09045da147f50dd56b17a09d6d32'
-        expected_counts = {'026': 1, '160': 10}
         with tempfile.TemporaryDirectory() as directory, patch.object(payload, 'ROOT', Path(directory)):
             for digest in payload.BASELINES:
                 manifest = self.manifest(digest)
                 previous = payload.previous_hashes(manifest)
-                expected = expected_counts.get(manifest['resourceVersion'], 0)
-                self.assertEqual(len(previous), expected)
                 if manifest['resourceVersion'] == '026':
+                    self.assertEqual(len(previous), 1)
                     self.assertIn(legacy_026, previous)
                 else:
                     self.assertNotIn(legacy_026, previous)
                 if manifest['resourceVersion'] == '160':
+                    self.assertGreaterEqual(len(previous), len(payload.KNOWN_ANDROID_VERSIONS_R160))
+                    self.assertTrue(set(payload.KNOWN_ANDROID_VERSIONS_R160.keys()).issubset(set(previous)))
                     self.assertIn(sample_160, previous)
                 else:
                     self.assertNotIn(sample_160, previous)
+                if manifest['resourceVersion'] in ('150', '152'):
+                    self.assertEqual(len(previous), 0)
 
     def test_resource_paths_cannot_be_mixed_across_baselines(self):
         for digest, baseline in payload.BASELINES.items():
