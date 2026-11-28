@@ -202,6 +202,7 @@ namespace XingShuRuntime.Utilities
         private double _lastKickAt;
         private double _lastCardOverlayAt;
         private bool _cardOverlayActive;
+        private long _dismissedHudRoomId;
         private string _statusMessage = "信誉分与车队模块已就绪";
 
         // Official room wait stay extension (real wall-clock, immune to game speedup)
@@ -265,6 +266,7 @@ namespace XingShuRuntime.Utilities
         private GUIStyle _hudTitleStyle;
         private GUIStyle _hudRowStyle;
         private GUIStyle _hudWarnStyle;
+        private GUIStyle _hudCloseBtnStyle;
         private bool _guiInitFailed;
 
         internal bool IsEnabled
@@ -284,6 +286,7 @@ namespace XingShuRuntime.Utilities
             get => _hudStripEnabled;
             set
             {
+                if (value) _dismissedHudRoomId = 0;
                 if (_hudStripEnabled == value) return;
                 _hudStripEnabled = value;
                 XingShuConfigService.SetBool(XingShuConfigKeys.CreditGuardHudStrip, value);
@@ -842,14 +845,25 @@ namespace XingShuRuntime.Utilities
                 long prevRoomId = _currentRoomId;
 
                 _inRoom = room != null && room.IsInRoom && info != null;
+                if (_inRoom && IsInHomeScene())
+                {
+                    // Exiting back to lobby/store can leave stale curRoomInfo/IsInRoom behind on some client builds.
+                    if (IsHomeLobbyPanelOpen() ||
+                        (room.roomController != null && room.roomController.roomStateType == RoomStateType.NONE && !IsRoomPanelOpen()))
+                    {
+                        _inRoom = false;
+                    }
+                }
                 if (!_inRoom)
                 {
                     _inWaitRoom = false;
                     _isRoomHost = false;
                     _currentRoomId = 0;
                     _currentRoomServerId = 0;
+                    _dismissedHudRoomId = 0;
                     _currentPeers.Clear();
                     _kickedInRoom.Clear();
+                    DisposeCardOverlays();
 
                     if (prevInRoom && prevRoomId > 0)
                     {
@@ -862,6 +876,7 @@ namespace XingShuRuntime.Utilities
                 }
 
                 _currentRoomId = info.Id;
+                if (prevRoomId != _currentRoomId) _dismissedHudRoomId = 0;
                 _currentRoomServerId = info.info != null ? info.info.RoomServerId : 0;
                 _currentRoomName = StripRichTags(info.Name ?? string.Empty);
                 _currentRoomPwd = info.Pwd ?? string.Empty;
@@ -2084,9 +2099,29 @@ namespace XingShuRuntime.Utilities
                 && SimpleSingletonProvider<SceneManager>.inst.currentType.Value == SceneType.Home;
         }
 
+        private static bool IsRoomPanelOpen()
+        {
+            if (!SimpleSingletonProvider<UIManager>.hasInstance) return false;
+            var panel = SimpleSingletonProvider<UIManager>.inst?.currentPanel;
+            if (panel == null) return false;
+            return (panel is RoomWaitPanel wp && wp.IsOpen()) || (panel is RoomHeroPanel hp && hp.IsOpen());
+        }
+
+        private static bool IsHomeLobbyPanelOpen()
+        {
+            if (!SimpleSingletonProvider<UIManager>.hasInstance) return false;
+            var panel = SimpleSingletonProvider<UIManager>.inst?.currentPanel;
+            return panel is HomePanel || panel is ProductRecommendationPanel;
+        }
+
         private void OnGUI()
         {
-            if (!_enabled || !_hudStripEnabled || !_inRoom || _currentPeers.Count == 0 || _cardOverlayActive || _guiInitFailed || !IsInHomeScene()) return;
+            if (!_enabled || !_hudStripEnabled || !_inRoom || _currentPeers.Count == 0 ||
+                _cardOverlayActive || _guiInitFailed || !IsInHomeScene() || !IsRoomPanelOpen() ||
+                XingShuRuntime.UI.XingShuUICenter.IsOpen || (_currentRoomId > 0 && _dismissedHudRoomId == _currentRoomId))
+            {
+                return;
+            }
             try
             {
                 EnsureGuiStyles();
@@ -2100,7 +2135,12 @@ namespace XingShuRuntime.Utilities
                 GUI.color = new Color(0.08f, 0.10f, 0.15f, 0.82f);
                 GUI.DrawTexture(new Rect(x, y, w, h), Texture2D.whiteTexture);
                 GUI.color = prevColor;
-                GUI.Label(new Rect(x + 10f, y + 5f, w - 20f, 20f), "★ 星枢社区信誉监护", _hudTitleStyle);
+                GUI.Label(new Rect(x + 10f, y + 5f, w - 42f, 20f), "★ 星枢社区信誉监护", _hudTitleStyle);
+                if (GUI.Button(new Rect(x + w - 26f, y + 4f, 20f, 20f), "×", _hudCloseBtnStyle))
+                {
+                    if (_currentRoomId > 0) _dismissedHudRoomId = _currentRoomId;
+                    else HudStripEnabled = false;
+                }
 
                 for (int i = 0; i < _currentPeers.Count; i++)
                 {
@@ -2147,6 +2187,17 @@ namespace XingShuRuntime.Utilities
             {
                 _hudWarnStyle = new GUIStyle(_hudRowStyle);
                 _hudWarnStyle.normal.textColor = new Color(1.0f, 0.45f, 0.48f, 1f);
+            }
+            if (_hudCloseBtnStyle == null)
+            {
+                _hudCloseBtnStyle = new GUIStyle(GUI.skin.button)
+                {
+                    fontSize = 13,
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleCenter,
+                    padding = new RectOffset(0, 0, 0, 0)
+                };
+                _hudCloseBtnStyle.normal.textColor = new Color(0.84f, 0.90f, 0.98f, 1f);
             }
         }
 
