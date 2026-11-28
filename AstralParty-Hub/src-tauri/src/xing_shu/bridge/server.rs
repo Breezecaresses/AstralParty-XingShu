@@ -963,13 +963,8 @@ impl BridgeServer {
         let _ = std::fs::write(path, challenge.as_bytes());
     }
 
-    /// Writes the session challenge file for the live production server only.
-    /// Never overwrites the user's real %APPDATA% challenge from tests or unstarted instances.
-    pub fn write_session_challenge_file(&self) {
-        if cfg!(test) || self.security_policy().allow_test_runners {
-            return;
-        }
-        if !*self.is_server_started.lock().unwrap() {
+    fn write_session_challenge_to_appdata_if_allowed(&self, is_started: bool) {
+        if !is_started || cfg!(test) || self.security_policy().allow_test_runners {
             return;
         }
         let path = if let Ok(appdata) = std::env::var("APPDATA") {
@@ -983,11 +978,22 @@ impl BridgeServer {
         self.write_session_challenge_to_path(&path);
     }
 
+    /// Writes the session challenge file for the live production server only.
+    /// Never overwrites the user's real %APPDATA% challenge from tests or unstarted instances.
+    pub fn write_session_challenge_file(&self) {
+        let pipe_started = *self.is_server_started.lock().unwrap();
+        let tcp_started = self.state.lock().unwrap().tcp_server_started;
+        self.write_session_challenge_to_appdata_if_allowed(pipe_started || tcp_started);
+    }
+
     pub fn set_session_challenge(&self, challenge: impl Into<String>) {
-        self.state.lock().unwrap().session_challenge = challenge.into();
-        if *self.is_server_started.lock().unwrap() {
-            self.write_session_challenge_file();
-        }
+        let tcp_started = {
+            let mut state = self.state.lock().unwrap();
+            state.session_challenge = challenge.into();
+            state.tcp_server_started
+        };
+        let pipe_started = *self.is_server_started.lock().unwrap();
+        self.write_session_challenge_to_appdata_if_allowed(pipe_started || tcp_started);
     }
 
     pub fn connection_state(&self) -> BridgeServerState {
@@ -1093,7 +1099,7 @@ impl BridgeServer {
         *started = true;
 
         // 3. Start legacy Named Pipe listener (for backwards compatibility / offline transport)
-        self.write_session_challenge_file();
+        self.write_session_challenge_to_appdata_if_allowed(true);
 
         {
             let mut state = self.state.lock().unwrap();
@@ -1128,7 +1134,7 @@ impl BridgeServer {
         }
         *started = true;
 
-        self.write_session_challenge_file();
+        self.write_session_challenge_to_appdata_if_allowed(true);
 
         {
             let mut state = self.state.lock().unwrap();
@@ -1260,7 +1266,7 @@ impl BridgeServer {
             state.tcp_addr = Some(local_addr);
         }
 
-        self.write_session_challenge_file();
+        self.write_session_challenge_to_appdata_if_allowed(true);
 
         let server_clone = self.clone();
         if tokio::runtime::Handle::try_current().is_ok() {
@@ -5947,5 +5953,24 @@ mod tests {
         let tmp_file = dir.path().join("Bridge").join("session_challenge.txt");
         server.write_session_challenge_to_path(&tmp_file);
         assert_eq!(std::fs::read_to_string(&tmp_file).unwrap(), "test-isolated-challenge");
+    }
+
+    #[tokio::test]
+    async fn test_challenge_helper_and_start_tcp_do_not_deadlock_while_started_lock_held() {
+        let server = BridgeServer::new_test();
+        let real_path = std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| std::path::PathBuf::from(appdata).join("XingShu").join("Bridge").join("session_challenge.txt"));
+        let before_bytes = real_path.as_ref().and_then(|p| std::fs::read(p).ok());
+
+        {
+            let _started_guard = server.is_server_started.lock().unwrap();
+            server.write_session_challenge_to_appdata_if_allowed(true);
+            let _ = server.start_tcp_sync("127.0.0.1:0").expect("start_tcp_sync must not deadlock with is_server_started locked");
+        }
+        server.stop();
+
+        let after_bytes = real_path.as_ref().and_then(|p| std::fs::read(p).ok());
+        assert_eq!(before_bytes, after_bytes, "test BridgeServer must never clobber real APPDATA challenge file");
     }
 }
