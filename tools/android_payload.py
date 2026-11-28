@@ -44,6 +44,46 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+KNOWN_ANDROID_VERSIONS_R160 = {
+    '65a63638fa0af5fc70106ab362b63ed6ba9af0411fb40cd4c919dfc1b2915ea4': '1.0.0-android-preview8.59',
+    '1b5de1af6db16aac691d36d42c782aec0dbbf44e86292d42b91ae41a1bc435fa': '1.0.0-android-preview8.60',
+    'be402c19138c63fd4743197ab1dbe70c7e82315b4ad75fb4732840f60e326023': '1.0.0-android-preview8.61',
+    '599a6232270ae4a12753da4ce34d4433998c6a47d0fc7dcf69020bfc618b5c66': '1.0.0-android-preview8.62',
+    '4faab4631948778c730aea73924bd89eecea7a4d3e0b1244a342b95fbedaa624': '1.0.0-android-preview8.63',
+    '703e96f938b188a69e5139410eeb9a64bb46ff3a31c78f68e0e1142e8a0cc168': '1.0.0-android-preview8.64',
+    '27fdd2b9cf980ca66aac46c39f987b147acc442626f135cb91d15a366fb1b000': '1.0.0-android-preview8.65',
+}
+
+
+def previous_version_map(manifest, additional_manifests=()):
+    """Return {sha256_lower: runtimeVersion} for known historical Android payloads."""
+    validate_baseline_manifest(manifest)
+    versions = {}
+    if manifest['originalSha256'] == '10da88362ca670dacdafd9f994b62711f1503bff9c6c26a0aa958e165ab5dc5a':
+        versions.update(KNOWN_ANDROID_VERSIONS_R160)
+    releases = publish_directory(ROOT)
+    manifests = set(releases.glob('XingShu_Android_*/candidate.json'))
+    manifests.update(releases.glob('XingShu_*/Android/candidate.json'))
+    explicit = {Path(path).resolve() for path in additional_manifests}
+    manifests.update(explicit)
+    for path in sorted(manifests):
+        try:
+            old = json.loads(path.read_text(encoding='utf-8-sig'))
+        except Exception:
+            continue
+        if any(old.get(key) != manifest.get(key) for key in ('platform', 'package', 'appVersion', 'originalSha256', 'bundleRelativePath')):
+            continue
+        ver = str(old.get('runtimeVersion') or '').strip()
+        cand_sha = str(old.get('candidateSha256') or '').strip().lower()
+        if ver and cand_sha:
+            versions[cand_sha] = ver
+    current_sha = str(manifest.get('candidateSha256') or '').strip().lower()
+    vanilla_sha = str(manifest.get('originalSha256') or '').strip().lower()
+    versions.pop(current_sha, None)
+    versions.pop(vanilla_sha, None)
+    return dict(sorted(versions.items()))
+
+
 def previous_hashes(manifest, additional_manifests=()):
     # Only intact candidates for this exact game/resource build are accepted.
     validate_baseline_manifest(manifest)

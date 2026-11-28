@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 
-from android_payload import previous_hashes, sha, validate_baseline_manifest
+from android_payload import previous_hashes, previous_version_map, sha, validate_baseline_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "XingShu-Dev/build/android-r836/candidate.json"
@@ -98,6 +98,11 @@ def build_android_core_manifest(
     known_prev = sorted(
         h.lower() for h in previous_hashes(m, previous_manifest_paths) if SHA256_RE.match(h.lower())
     )
+    prev_versions = {
+        h: ver
+        for h, ver in previous_version_map(m, previous_manifest_paths).items()
+        if SHA256_RE.match(h) and SAFE_VERSION_RE.match(ver) and len(ver) <= 64
+    }
 
     return {
         "formatVersion": 1,
@@ -114,6 +119,7 @@ def build_android_core_manifest(
         "candidateSize": cand_size,
         "vanillaSize": van_size,
         "previousHashes": known_prev,
+        "previousVersions": prev_versions,
     }
 
 
