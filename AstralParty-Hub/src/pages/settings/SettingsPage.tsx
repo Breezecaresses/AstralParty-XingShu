@@ -1,21 +1,55 @@
 import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { openExternalUrl, isLauncherPreview, isTauriRuntime } from '../../shared/runtime';
 import { DesktopOnlyBanner } from '../../components/DesktopOnlyBanner';
 import { PROJECT_SOURCE, PROJECT_SOURCE_LABEL } from '../../shared/projectSource';
 import { api } from '../../shared/api/tauri';
 import type { GameInstallation, ProbeResult, ProviderMetadata } from '../../shared/types';
-import { Folder, Save, Database, Shield, RefreshCw, Globe, Check } from 'lucide-react';
+import { Folder, Save, Database, Shield, RefreshCw, Globe, Check, Trash2 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useTranslation } from '../../i18n';
 import { AppUpdatePanel } from './AppUpdatePanel';
 
+type CacheCategorySummary = { key: string; label: string; bytes: number; files: number };
+type CacheSummary = { totalBytes: number; totalFiles: number; categories: CacheCategorySummary[] };
+type CacheCleanupResult = {
+  freedBytes: number;
+  removedFiles: number;
+  skippedLockedFiles: number;
+  remainingBytes: number;
+  remainingFiles: number;
+  categories: CacheCategorySummary[];
+};
+
+function formatCacheBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 export const SettingsPage: React.FC = () => {
   const { locale, setLocale, t } = useTranslation();
+  const isZh = locale === 'zh-CN';
   const [game, setGame] = useState<GameInstallation | null>(null);
   const [manualPath, setManualPath] = useState('');
   const [providers, setProviders] = useState<Array<[ProviderMetadata, ProbeResult]>>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  const [cacheSummary, setCacheSummary] = useState<CacheSummary | null>(null);
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [cacheNotice, setCacheNotice] = useState<{ text: string; isError: boolean } | null>(null);
+
+  const loadCacheSummary = async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      const summary = await invoke<CacheSummary>('get_hub_cache_summary');
+      setCacheSummary(summary);
+    } catch {
+      // ignore if unavailable
+    }
+  };
 
   const loadData = () => {
     api.getPrimaryGame().then((g) => {
@@ -24,11 +58,42 @@ export const SettingsPage: React.FC = () => {
     });
 
     api.probeProviders().then(setProviders).catch(console.error);
+    void loadCacheSummary();
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleClearCache = async () => {
+    if (!isTauriRuntime() || cacheBusy) return;
+    setCacheBusy(true);
+    setCacheNotice(null);
+    try {
+      const res = await invoke<CacheCleanupResult>('clear_hub_caches');
+      setCacheSummary({
+        totalBytes: res.remainingBytes,
+        totalFiles: res.remainingFiles,
+        categories: res.categories,
+      });
+      const lockNote = res.skippedLockedFiles > 0
+        ? (isZh ? `（已跳过 ${res.skippedLockedFiles} 个运行中占用的页面缓存文件）` : ` (${res.skippedLockedFiles} in-use files skipped)`)
+        : '';
+      setCacheNotice({
+        text: isZh
+          ? `已清理 ${res.removedFiles} 个缓存文件，释放 ${formatCacheBytes(res.freedBytes)}${lockNote}`
+          : `Cleared ${res.removedFiles} cached files, freed ${formatCacheBytes(res.freedBytes)}${lockNote}`,
+        isError: false,
+      });
+    } catch (e: any) {
+      setCacheNotice({
+        text: typeof e?.message === 'string' ? e.message : String(e),
+        isError: true,
+      });
+    } finally {
+      setCacheBusy(false);
+    }
+  };
 
   const handleSavePath = async () => {
     if (!manualPath.trim()) return;
@@ -189,6 +254,76 @@ export const SettingsPage: React.FC = () => {
           <p style={{ color: 'var(--text-secondary)', lineHeight: 1.8 }}>Hub 与游戏内运行时源码：{PROJECT_SOURCE_LABEL}</p>
           <button type="button" className="btn btn-secondary" onClick={() => void openExternalUrl(PROJECT_SOURCE)}>{PROJECT_SOURCE} ↗</button>
           <p style={{ color: 'var(--text-muted)', marginTop: 12 }}>代码许可见项目仓库的 LICENSE；角色、卡面及游戏配置素材来源于吉星派对，相关权利归原权利人所有。</p>
+        </div>
+
+        {/* 本地缓存与临时数据清理 */}
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">
+              <Trash2 size={18} color="var(--primary)" />
+              <span>{isZh ? '存储与本地缓存' : 'Storage & Local Cache'}</span>
+            </h2>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => void loadCacheSummary()}
+                disabled={cacheBusy || !isTauriRuntime()}
+              >
+                <RefreshCw size={13} />
+                <span>{isZh ? '刷新统计' : 'Scan'}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void handleClearCache()}
+                disabled={cacheBusy || !isTauriRuntime()}
+              >
+                <Trash2 size={13} />
+                <span>{cacheBusy ? (isZh ? '清理中…' : 'Clearing…') : (isZh ? '清理缓存' : 'Clear Cache')}</span>
+              </button>
+            </div>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '6px 0 12px', lineHeight: 1.6 }}>
+            {isZh
+              ? '可一键清理模组预览图缓存、临时导入文件、更新清单缓存、桌面端页面缓存与工坊下载包缓存；不会清除账号登录态、已安装 Mod、备份快照或事务记录。'
+              : 'Clears mod preview cache, staged drop temp files, manifest cache, WebView cache, and workshop payload cache without touching accounts, installed mods, or backups.'}
+          </p>
+          {!isTauriRuntime() ? (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {isZh ? '仅桌面客户端支持本地磁盘缓存检测与清理。' : 'Desktop app required for local disk cache cleanup.'}
+            </div>
+          ) : cacheSummary ? (
+            <div className="code-box" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div>
+                <strong>{isZh ? '当前可清理缓存总计：' : 'Total cached data: '}</strong>
+                {formatCacheBytes(cacheSummary.totalBytes)}（{cacheSummary.totalFiles} {isZh ? '个文件' : 'files'}）
+              </div>
+              {cacheSummary.categories.map((cat) => (
+                <div key={cat.key} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  • {cat.label}：{formatCacheBytes(cat.bytes)}（{cat.files} {isZh ? '个' : 'files'}）
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {isZh ? '正在统计本地缓存大小…' : 'Calculating local cache size…'}
+            </div>
+          )}
+          {cacheNotice && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: '8px 12px',
+                borderRadius: 6,
+                backgroundColor: cacheNotice.isError ? 'var(--danger-bg)' : 'var(--success-bg)',
+                color: cacheNotice.isError ? 'var(--danger)' : 'var(--success)',
+                fontSize: 13,
+              }}
+            >
+              {cacheNotice.text}
+            </div>
+          )}
         </div>
 
         {/* 资源冲突防线与运维快捷中心 */}

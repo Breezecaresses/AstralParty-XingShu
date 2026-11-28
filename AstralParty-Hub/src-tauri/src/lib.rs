@@ -30,6 +30,8 @@ pub mod workshop;
 #[cfg(feature = "web-ui")]
 pub mod app_update;
 #[cfg(feature = "web-ui")]
+pub mod cache_cleanup;
+#[cfg(feature = "web-ui")]
 pub mod account_login;
 #[cfg(feature = "web-ui")]
 mod credit_proxy;
@@ -407,6 +409,8 @@ pub fn run() {
             app_update::check_app_update,
             app_update::prepare_app_update,
             app_update::apply_app_update,
+            cache_cleanup::get_hub_cache_summary,
+            cache_cleanup::clear_hub_caches,
             // Player commands
             get_player_profile,
             list_character_progress,
