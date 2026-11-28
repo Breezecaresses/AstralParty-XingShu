@@ -78,6 +78,9 @@ namespace XingShu.Runtime
                     XingShuRuntime.MatchPort.SettlementScreenshot.Install(targetHost);
                 if (LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.CreditGuardRuntime)))
                     XingShuRuntime.Utilities.CreditGuardRuntime.Install(targetHost);
+                if (LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.MegathSkillDamageHint))
+                    || LauncherModules.CanLoad(nameof(XingShuRuntime.Utilities.BattleStatsOverlay)))
+                    XingShuRuntime.MatchPort.MatchProtocolObserver.Install(targetHost);
                 LogLifecycle("[XingShuRuntimeHost.Initialize] SpectatorEventInterceptor 初始化完成");
             }
             catch (Exception ex)

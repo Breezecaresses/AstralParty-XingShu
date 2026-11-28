@@ -180,6 +180,37 @@ public sealed class BattleStatsOverlay : MonoBehaviour
 		get => Instance != null && Instance._isWidgetShowing && HasActiveBattleContext;
 	}
 
+	internal static bool IsDetailedMode => Instance != null && Instance._widget != null
+		? Instance._widget.DetailedMode
+		: XingShuConfigService.GetBool(XingShuConfigKeys.StatsWidgetDetailedMode, XingShuConfigKeys.StatsWidgetDetailedModeDefault);
+
+	internal static void SetDetailedMode(bool detailed)
+	{
+		XingShuConfigService.SetBool(XingShuConfigKeys.StatsWidgetDetailedMode, detailed);
+		XingShuConfigService.Save();
+		if (Instance != null)
+		{
+			if (detailed && HasActiveBattleContext)
+			{
+				Instance._isWidgetShowing = true;
+			}
+			if (Instance._widget != null && Instance._widget.Ready)
+			{
+				Instance._widget.SetDetailedMode(detailed);
+			}
+		}
+	}
+
+	internal static void ToggleDetailedMode()
+	{
+		bool next = !IsDetailedMode;
+		SetDetailedMode(next);
+		if (Instance == null || !HasActiveBattleContext)
+		{
+			XingShuRuntime.UI.XingShuUICenter.OpenBattleStatsPage();
+		}
+	}
+
 	internal static void RefreshWidgetPreferences()
 	{
 		if (Instance != null && Instance._widget != null)
@@ -290,6 +321,7 @@ public sealed class BattleStatsOverlay : MonoBehaviour
 			{
 				host.AddComponent<BattleStatsOverlay>();
 			}
+			MatchEconomyPanel.Install(host);
 			AssistBall.RegisterAction("battle_stats", "对局统计", ToggleWindow, 30, "轻量统计挂件 · 大小/透明度/位置设置 · 独立采集开关", "统计", () => Instance != null && Instance._enabled);
 		}
 	}

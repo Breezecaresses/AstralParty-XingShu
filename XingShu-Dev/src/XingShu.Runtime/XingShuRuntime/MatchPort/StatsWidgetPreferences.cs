@@ -22,20 +22,25 @@ internal sealed class StatsWidgetPreferences
 
 	internal const float Height = 230f;
 
-	internal static float PanelWidth(int visibleMetricCount)
+	internal const float DetailedMinWidth = 610f;
+
+	internal const float DetailedHeight = 488f;
+
+	internal static float PanelWidth(int visibleMetricCount, bool detailed = false)
 	{
 		int clamped = Math.Max(1, Math.Min(9, visibleMetricCount));
 		float metricColWidth = clamped <= 4 ? 56f : 46f;
-		return Math.Max(316f, 146f + clamped * metricColWidth + 18f);
+		float normalW = Math.Max(316f, 146f + clamped * metricColWidth + 18f);
+		return detailed ? Math.Max(DetailedMinWidth, normalW) : normalW;
 	}
 
-	internal static float PanelHeight(int visibleMetricCount, bool collapsed = false)
+	internal static float PanelHeight(int visibleMetricCount, bool collapsed = false, bool detailed = false)
 	{
 		if (collapsed)
 		{
 			return HeaderHeight;
 		}
-		return Height;
+		return detailed ? DetailedHeight : Height;
 	}
 
 	internal static float Limit(float v, float min, float max, float fallback)

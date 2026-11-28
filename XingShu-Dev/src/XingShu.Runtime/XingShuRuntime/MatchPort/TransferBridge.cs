@@ -157,8 +157,22 @@ public static class TransferBridge
 		}
 	}
 
+	internal static bool IsOwnPredictDelegate(object callback)
+	{
+		return _subscription != null && _subscription.Active && ReferenceEquals(callback, _subscription.Predict);
+	}
+
+	internal static bool IsOwnBuyDelegate(object callback)
+	{
+		return _subscription != null && _subscription.Active && ReferenceEquals(callback, _subscription.Buy);
+	}
+
 	private static UniTask ObservePredict(Subscription s, PredictActionS2C model, int err, bool dispatch)
 	{
+		if (err == 0 && model != null)
+		{
+			try { MatchProtocolObserver.ObservePredictExternal(model); } catch { }
+		}
 		if (!s.Active)
 		{
 			return s.PreviousPredict(model, err, dispatch);
@@ -194,6 +208,10 @@ public static class TransferBridge
 
 	private static UniTask ObserveBuy(Subscription s, PVEShopBuyS2C model, int err, bool dispatch)
 	{
+		if (err == 0 && model != null)
+		{
+			try { MatchProtocolObserver.ObservePveShopBuyExternal(model); } catch { }
+		}
 		if (!s.Active)
 		{
 			return s.PreviousBuy(model, err, dispatch);

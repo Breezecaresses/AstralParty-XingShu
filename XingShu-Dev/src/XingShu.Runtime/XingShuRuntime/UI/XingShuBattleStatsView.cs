@@ -180,6 +180,18 @@ namespace XingShuRuntime.UI
                 scsRt.sizeDelta = new Vector2(-48f, 24f);
 
                 Sprite btnSprite = XingShuUIAssetService.GetSprite("button_secondary.png");
+                Button economyBtn = XingShuUIFactory.CreateButton(cardGo, "EconomyPanelBtn", "切换普通/详细统计卡",
+                    btnSprite,
+                    XingShuUIAssetService.IsFallbackSprite(btnSprite) ? XingShuUITheme.ButtonSecondaryBase : Color.white,
+                    XingShuUITheme.PrimaryText,
+                    BattleStatsOverlay.ToggleDetailedMode, 12);
+                RectTransform epbRt = economyBtn.GetComponent<RectTransform>();
+                epbRt.anchorMin = new Vector2(0f, 1f);
+                epbRt.anchorMax = new Vector2(0f, 1f);
+                epbRt.pivot = new Vector2(0f, 1f);
+                epbRt.anchoredPosition = new Vector2(24f, -298f);
+                epbRt.sizeDelta = new Vector2(180f, 30f);
+
                 Button resetPosBtn = XingShuUIFactory.CreateButton(cardGo, "ResetPosBtn", "重置挂件位置",
                     btnSprite,
                     XingShuUIAssetService.IsFallbackSprite(btnSprite) ? XingShuUITheme.ButtonSecondaryBase : Color.white,
