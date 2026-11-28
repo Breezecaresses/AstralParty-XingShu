@@ -1,4 +1,4 @@
-use super::{data_root, error, request, token, AccountLogin};
+use super::{data_root, request, token, AccountLogin};
 use crate::domain::error::HubResult;
 use crate::xing_shu::bridge::protocol::{PlayerHandSummary, SpectatorHandPayload};
 use crate::xing_shu::bridge::server::BridgeServer;
@@ -6,10 +6,10 @@ use crate::xing_shu::bridge::session::RuntimeSession;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, io::ErrorKind, path::Path, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager, State};
 
-const OPT_OUT_FILE: &str = "cloud-hands-disabled";
+const LEGACY_OPT_OUT_FILE: &str = "cloud-hands-disabled";
 
 #[derive(Default)]
 pub(super) struct CloudHandSync {
@@ -18,18 +18,20 @@ pub(super) struct CloudHandSync {
     status: &'static str,
 }
 
+fn clear_legacy_opt_out(root: &Path) {
+    let file = root.join(LEGACY_OPT_OUT_FILE);
+    let _ = std::fs::remove_file(file);
+}
+
 impl CloudHandSync {
     pub(super) fn restore(&mut self, app: AppHandle, root: &Path, session: Option<String>) -> HubResult<Value> {
         self.stop();
-        let disabled = root.join(OPT_OUT_FILE).try_exists()
-            .map_err(|_| error("无法读取云端手牌设置。"))?;
-        if !disabled {
-            if let Some(session) = session {
-                self.status = "waiting_match";
-                self.task = Some(tokio::spawn(poll(app, session, self.generation)));
-            } else {
-                self.status = "signed_out";
-            }
+        clear_legacy_opt_out(root);
+        if let Some(session) = session {
+            self.status = "waiting_match";
+            self.task = Some(tokio::spawn(poll(app, session, self.generation)));
+        } else {
+            self.status = "signed_out";
         }
         Ok(self.status())
     }
@@ -44,7 +46,7 @@ impl CloudHandSync {
 
     fn status(&self) -> Value {
         json!({"enabled": self.task.as_ref().is_some_and(|t| !t.is_finished()),
-               "status": if self.status.is_empty() { "disabled" } else { self.status }})
+               "status": if self.status.is_empty() { "signed_out" } else { self.status }})
     }
 }
 
@@ -57,30 +59,17 @@ pub(crate) async fn restore_on_startup(app: AppHandle) -> HubResult<()> {
     Ok(())
 }
 
-fn save_preference(root: &Path, enabled: bool) -> HubResult<()> {
-    let file = root.join(OPT_OUT_FILE);
-    let result = if enabled {
-        match std::fs::remove_file(file) {
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-            result => result,
-        }
-    } else {
-        std::fs::write(file, b"disabled")
-    };
-    result.map_err(|_| error("无法保存云端手牌设置。"))
-}
-
 #[tauri::command]
 pub fn cloud_hand_sync_status(state: State<'_, AccountLogin>) -> Value {
     state.hand_sync.lock().unwrap().status()
 }
 
 #[tauri::command]
-pub async fn set_cloud_hand_sync(app: AppHandle, state: State<'_, AccountLogin>, enabled: bool) -> HubResult<Value> {
+pub async fn set_cloud_hand_sync(app: AppHandle, state: State<'_, AccountLogin>, _enabled: bool) -> HubResult<Value> {
     let _gate = state.gate.lock().await;
     let root = data_root(&app)?;
-    let session = if enabled { token(&root)? } else { None };
-    save_preference(&root, enabled)?;
+    clear_legacy_opt_out(&root);
+    let session = token(&root)?;
     state.hand_sync.lock().unwrap().restore(app, &root, session)
 }
 
@@ -233,14 +222,13 @@ mod tests {
     use crate::xing_shu::bridge::protocol::RuntimeMatchContext;
 
     #[test]
-    fn cloud_hands_save_and_clear_explicit_opt_out() {
+    fn cloud_hands_clears_legacy_opt_out_file() {
         let root = tempfile::tempdir().unwrap();
-        let flag = root.path().join(OPT_OUT_FILE);
-        assert!(!flag.exists());
-        save_preference(root.path(), false).unwrap();
+        let flag = root.path().join(LEGACY_OPT_OUT_FILE);
+        std::fs::write(&flag, b"disabled").unwrap();
         assert!(flag.is_file());
-        save_preference(root.path(), true).unwrap();
-        save_preference(root.path(), true).unwrap();
+        clear_legacy_opt_out(root.path());
+        clear_legacy_opt_out(root.path());
         assert!(!flag.exists());
     }
 

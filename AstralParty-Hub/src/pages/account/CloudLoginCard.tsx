@@ -41,7 +41,6 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
   const [qqChannelKey, setQqChannelKey] = useState('');
   const [qqPairedAccount, setQqPairedAccount] = useState<Account | null>(null);
   const [cloudHands, setCloudHands] = useState<CloudHandState>({enabled: true, status: 'signed_out'});
-  const [cloudHandPending, setCloudHandPending] = useState(false);
 
   const selectedChannel = channels.find(ch => channelKey(ch) === qqChannelKey) ?? channels[0] ?? null;
   const qqAuthorizedBanner = deriveQqAuthorizedBanner(account, qqPairedAccount, isZh);
@@ -51,18 +50,6 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
       const state = await invoke<CloudHandState>('cloud_hand_sync_status');
       if (state) setCloudHands(state);
     } catch { /* non-tauri or not ready */ }
-  };
-
-  const toggleCloudHands = async () => {
-    setCloudHandPending(true);
-    try {
-      const state = await invoke<CloudHandState>('set_cloud_hand_sync', {enabled: !cloudHands.enabled});
-      setCloudHands(state);
-    } catch (error) {
-      setNotice(readable(error), 'error');
-    } finally {
-      setCloudHandPending(false);
-    }
   };
 
   const refresh = async () => {
@@ -191,15 +178,13 @@ export function CloudLoginCard({isZh}: {isZh: boolean}) {
         <div style={{marginTop: 12, padding: '10px 14px', borderRadius: 10, background: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap'}}>
           <div style={{fontSize: 13, color: 'var(--text-secondary)'}}>
             <strong style={{color: 'var(--text-primary)'}}>{isZh ? '游戏内云端手牌自动推送：' : 'In-game Cloud Hand Auto-Push: '}</strong>
-            <span>{cloudHands.enabled
-              ? (cloudHands.status === 'forwarded'
-                ? (isZh ? '已开启并正在转发手牌' : 'Enabled · Forwarding hands')
-                : (isZh ? '已开启，进入允许观战的合作对局即自动推送队友手牌' : 'Enabled · Auto-syncs teammate hands in co-op matches'))
-              : (isZh ? '已关闭' : 'Off')}</span>
+            <span>{cloudHands.status === 'forwarded'
+              ? (isZh ? '已自动开启并正在转发队友手牌' : 'Auto-enabled · Forwarding teammate hands')
+              : (isZh ? '登录后默认自动开启，进入允许观战的合作对局即自动推送队友手牌' : 'Auto-enabled on sign-in · Syncs teammate hands in observable co-op matches')}</span>
           </div>
-          <button className="btn btn-secondary" disabled={cloudHandPending} onClick={toggleCloudHands} style={{padding: '5px 12px', fontSize: 12}}>
-            {cloudHands.enabled ? (isZh ? '关闭云端推送' : 'Disable push') : (isZh ? '开启云端推送' : 'Enable push')}
-          </button>
+          <span className="status-pill ok" style={{fontSize: 12, padding: '3px 10px'}}>
+            {isZh ? '已自动开启' : 'Auto Active'}
+          </span>
         </div>
       )}
       <p style={{fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)', margin: '14px 0 0'}}>
