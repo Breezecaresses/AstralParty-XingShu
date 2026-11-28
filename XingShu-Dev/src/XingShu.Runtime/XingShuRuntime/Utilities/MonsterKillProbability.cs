@@ -767,7 +767,39 @@ public sealed class MonsterKillProbability : MonoBehaviour
 		{
 			return "";
 		}
-		return "[" + (playerDefender ? "被击飞" : "击飞") + " " + probability.Text + "] ";
+		double p = probability.Expected;
+		string tag;
+		if (playerDefender)
+		{
+			tag = p >= 0.9999 ? "必被击飞"
+				: p >= 0.70 ? "极高危·被击飞"
+				: p >= 0.40 ? "高危·被击飞"
+				: p >= 0.15 ? "有风险·被击飞"
+				: p > 0.0001 ? "较稳·被击飞"
+				: "稳扛·被击飞";
+		}
+		else
+		{
+			tag = p >= 0.9999 ? "必击飞"
+				: p >= 0.70 ? "极稳·击飞"
+				: p >= 0.40 ? "较大概率·击飞"
+				: p >= 0.15 ? "有机会·击飞"
+				: p > 0.0001 ? "偏低·击飞"
+				: "击不飞";
+		}
+		return "[" + tag + " " + probability.Text + "] ";
+	}
+
+	internal static bool TryBuildRoleDistribution(BattleRole role, bool attack, out KillProbabilityMath.Distribution dist, out string note)
+	{
+		if (Instance == null || role == null)
+		{
+			dist = null;
+			note = "";
+			return false;
+		}
+		dist = Instance.RoleDistribution(role, attack, out note);
+		return dist != null;
 	}
 
 	private void CacheCards(BattlePlayerData player)
@@ -1208,7 +1240,7 @@ public sealed class MonsterKillProbability : MonoBehaviour
 			{
 				int fontSize = _fightFontSize;
 				string targetColorHex = _targetColorHex;
-				_fightLabel.text = $"[size={fontSize}]{StatusMarkup(_currentFightPrediction, false)}  [b][color={targetColorHex}]{_currentFightPrediction.Name}[/color][/b][/size]";
+				_fightLabel.text = $"[size={fontSize}][b]{StatusMarkup(_currentFightPrediction, false)}  [color={targetColorHex}]{_currentFightPrediction.Name}[/color][/b][/size]";
 			}
 		}
 	}

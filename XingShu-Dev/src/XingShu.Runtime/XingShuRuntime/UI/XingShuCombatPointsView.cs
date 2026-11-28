@@ -13,6 +13,8 @@ namespace XingShuRuntime.UI
     {
         private readonly GameObject _root;
         private Toggle _defenseHintToggle;
+        private Slider _defenseHintScaleSlider;
+        private Text _defenseHintScaleText;
         private Toggle _battleCardHintToggle;
         private Toggle _battleCardLockToggle;
         private Slider _battleCardScaleSlider;
@@ -37,18 +39,25 @@ namespace XingShuRuntime.UI
             XingShuViewCardHelper.CreatePageScroll(_root, "CombatPointsScrollView", out GameObject content);
 
             // Card 1: 防御点数提示
-            GameObject defCard = XingShuViewCardHelper.CreateCardContainer(content, "Card_DefenseHint", 132f);
-            Text defTitle = XingShuUIFactory.CreateText(defCard, "Title", "防御点数提示", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
+            GameObject defCard = XingShuViewCardHelper.CreateCardContainer(content, "Card_DefenseHint", 192f);
+            Text defTitle = XingShuUIFactory.CreateText(defCard, "Title", "防御与出牌建议提示", 18, XingShuUITheme.PrimaryText, TextAnchor.MiddleLeft, FontStyle.Bold);
             XingShuViewCardHelper.PlaceTopLeft(defTitle.rectTransform, new Vector2(20f, -14f), new Vector2(450f, 28f));
 
             Text defDesc = XingShuUIFactory.CreateText(defCard, "Description",
-                "本人防御时显示压至最低伤害、避免击飞所需的总防御和骰点。\n含已同步防御牌；数值未完全揭示时按保守上限估算，不代替操作。",
+                "防御阶段结合双方攻防牌分布、已揭示骰点与当前血量，直白提示：\n不用出牌是否稳扛、具体出哪几张手牌防得住、以及血量不足时直接对比推荐闪避率。",
                 13, XingShuUITheme.SecondaryText, TextAnchor.UpperLeft);
-            XingShuViewCardHelper.PlaceStretchTop(defDesc.rectTransform, 54f, 64f, 40f);
+            XingShuViewCardHelper.PlaceStretchTop(defDesc.rectTransform, 50f, 52f, 40f);
 
             _defenseHintToggle = XingShuUIFactory.CreateToggle(defCard, "EnableDefenseHint", "显示提示", DefensePointHint.IsEnabled,
                 value => { if (!_suppressCallbacks) DefensePointHint.SetEnabled(value); });
             XingShuViewCardHelper.PlaceTopRight(_defenseHintToggle.GetComponent<RectTransform>(), new Vector2(-20f, -12f), new Vector2(160f, 32f));
+
+            XingShuViewCardHelper.AddPercentSliderRow(defCard, "DefenseHintScale", "提示面板大小（70%–160%）", 114f,
+                XingShuConfigKeys.DefenseHintScaleMin, XingShuConfigKeys.DefenseHintScaleMax,
+                DefensePointHint.Scale,
+                v => { DefensePointHint.SetScale(Mathf.Round(v * 20f) / 20f); UpdateSync(); },
+                () => _suppressCallbacks,
+                out _defenseHintScaleSlider, out _defenseHintScaleText);
 
             // Card 2: 战斗卡牌点数提示
             GameObject card = XingShuViewCardHelper.CreateCardContainer(content, "Card_BattleCardPointHint", 282f);
@@ -94,6 +103,7 @@ namespace XingShuRuntime.UI
 
         internal void UpdateSync()
         {
+            float defScale = DefensePointHint.Scale;
             float scale = BattleCardPointHint.Scale;
             float marginX = Mathf.Clamp(BattleCardPointHint.AtkX, 0f, 0.45f);
             float posY = BattleCardPointHint.AtkY;
@@ -101,6 +111,8 @@ namespace XingShuRuntime.UI
             _suppressCallbacks = true;
             if (_defenseHintToggle != null && _defenseHintToggle.isOn != DefensePointHint.IsEnabled)
                 _defenseHintToggle.isOn = DefensePointHint.IsEnabled;
+            if (_defenseHintScaleSlider != null && Mathf.Abs(_defenseHintScaleSlider.value - defScale) > 0.005f)
+                _defenseHintScaleSlider.value = defScale;
             if (_battleCardHintToggle != null && _battleCardHintToggle.isOn != BattleCardPointHint.IsEnabled)
                 _battleCardHintToggle.isOn = BattleCardPointHint.IsEnabled;
             if (_battleCardScaleSlider != null && Mathf.Abs(_battleCardScaleSlider.value - scale) > 0.005f)
@@ -112,6 +124,7 @@ namespace XingShuRuntime.UI
             if (_battleCardLockToggle != null && _battleCardLockToggle.isOn != locked)
                 _battleCardLockToggle.isOn = locked;
             _suppressCallbacks = false;
+            if (_defenseHintScaleText != null) _defenseHintScaleText.text = $"{Mathf.RoundToInt(defScale * 100f)}%";
             if (_battleCardScaleText != null) _battleCardScaleText.text = $"{Mathf.RoundToInt(scale * 100f)}%";
             if (_battleCardMarginXText != null) _battleCardMarginXText.text = $"{Mathf.RoundToInt(BattleCardPointHint.AtkX * 100f)}%";
             if (_battleCardYText != null) _battleCardYText.text = $"{Mathf.RoundToInt(posY * 100f)}%";

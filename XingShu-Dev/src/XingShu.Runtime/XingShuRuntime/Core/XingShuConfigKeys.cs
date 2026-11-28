@@ -652,4 +652,10 @@ internal static class XingShuConfigKeys
 	internal const bool CreditGuardExtendRoomWaitDefault = true;
 	internal const string CreditGuardRoomWaitMinutes = "XINGSHU_CREDIT_ROOM_WAIT_MINUTES";
 	internal const int CreditGuardRoomWaitMinutesDefault = 60;
+
+	// 防御点数提示面板缩放 (DefensePointHint)
+	internal const string DefenseHintScale = "XINGSHU_DEFENSE_HINT_SCALE";
+	internal const float DefenseHintScaleDefault = 1.0f;
+	internal const float DefenseHintScaleMin = 0.7f;
+	internal const float DefenseHintScaleMax = 1.6f;
 }
