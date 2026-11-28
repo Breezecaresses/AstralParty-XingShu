@@ -223,7 +223,7 @@ namespace XingShuRuntime.UI
                 }
             }
 
-            if (_battleStatusText != null && roomId != _lastObservedRoomId || _battleStatusText != null)
+            if (_battleStatusText != null)
             {
                 _lastObservedRoomId = roomId;
                 string battleText = isBattle ? (roomId > 0 ? $"对局中 (ID: {roomId})" : "战斗准备中") : "当前无有效战局";

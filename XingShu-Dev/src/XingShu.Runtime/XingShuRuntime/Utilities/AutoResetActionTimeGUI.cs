@@ -29,11 +29,31 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 
 	private float _statusMsgTimer;
 
-	private float _maintenanceTimer;
+	private double _nextMaintenanceRealTime;
+
+	private double _lastReconnectRealTime;
 
 	private static TimeOutKickPlayerS2CRPC.OnTimeOutKickPlayerS2CServerDelegate _originalKickCallback;
 
+	private static TimeOutKickPlayerS2CRPC.OnTimeOutKickPlayerS2CServerDelegate _wrappedKickCallback;
+
 	private static bool _hookRegistered;
+
+	private static bool _capturedAfkCheck;
+
+	private static bool _savedAfkCheck;
+
+	private static TimeProtector _cachedTimeProtector;
+
+	private static bool _capturedTimeProtectorDefaults;
+
+	private static bool _savedTimeProtectorEnabled;
+
+	private static float _savedTimeScaleThreshold;
+
+	private static float _savedMaxSlowDuration;
+
+	private static float _savedMaxSlowDurationCe;
 
 	private bool _showUI;
 
@@ -96,12 +116,22 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 					EnsureRPCHook();
 					EnforceAntiCheatProtectionBypass();
 				}
+				else
+				{
+					RestoreRPCHook();
+					RestoreAntiCheatProtectionDefaults();
+				}
 			}
 		}
 		else
 		{
 			XingShuConfigService.SetBool(XingShuConfigKeys.AutoReconnectEnabled, value);
 			XingShuConfigService.Save();
+			if (!value)
+			{
+				RestoreRPCHook();
+				RestoreAntiCheatProtectionDefaults();
+			}
 		}
 	}
 
@@ -217,19 +247,26 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 		XingShuOverlayInput.Register(this, () => _showUI && !UseModernView, () => XingShuOverlayInput.ScaledRect(_windowRect, XingShuMobileUIHelper.ScaleFactor));
 		Instance = this;
 		LoadConfig();
-		EnsureRPCHook();
-		EnforceAntiCheatProtectionBypass();
+		if (_enabled)
+		{
+			EnsureRPCHook();
+			EnforceAntiCheatProtectionBypass();
+		}
 	}
 
 	private void Start()
 	{
-		EnsureRPCHook();
-		EnforceAntiCheatProtectionBypass();
+		if (_enabled)
+		{
+			EnsureRPCHook();
+			EnforceAntiCheatProtectionBypass();
+		}
 	}
 
 	private void OnDestroy()
 	{
 		RestoreRPCHook();
+		RestoreAntiCheatProtectionDefaults();
 		if (Instance == this)
 		{
 			Instance = null;
@@ -275,15 +312,19 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 
 	private void Update()
 	{
+		double now = ThinkingClock.RealSeconds();
 		if (_enabled)
 		{
-			_maintenanceTimer += Time.unscaledDeltaTime;
-			if (_maintenanceTimer >= 1f)
+			if (now >= _nextMaintenanceRealTime)
 			{
-				_maintenanceTimer = 0f;
+				_nextMaintenanceRealTime = now + ActionGuardPolicy.MaintenanceIntervalRealSeconds;
 				EnsureRPCHook();
 				EnforceAntiCheatProtectionBypass();
 			}
+		}
+		else if (_hookRegistered)
+		{
+			RestoreRPCHook();
 		}
 		if (_statusMsgTimer > 0f)
 		{
@@ -299,24 +340,37 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 	{
 		try
 		{
+			if (Instance != null && !Instance._enabled)
+			{
+				RestoreRPCHook();
+				return;
+			}
 			NetManager inst = MonoSingletonProvider<NetManager>.inst;
 			if (inst == null || inst.RPC == null || inst.RPC.TimeOutKickPlayerS2C == null)
 			{
+				_hookRegistered = false;
 				return;
 			}
-			TimeOutKickPlayerS2CRPC.OnTimeOutKickPlayerS2CServerDelegate onTimeOutKickPlayerS2CServerCallBackAsync = inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync;
-			if (onTimeOutKickPlayerS2CServerCallBackAsync != new TimeOutKickPlayerS2CRPC.OnTimeOutKickPlayerS2CServerDelegate(InterceptedTimeOutKickCallback))
+			if (_wrappedKickCallback == null)
 			{
-				if (onTimeOutKickPlayerS2CServerCallBackAsync != null)
-				{
-					_originalKickCallback = onTimeOutKickPlayerS2CServerCallBackAsync;
-				}
-				inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync = InterceptedTimeOutKickCallback;
-				_hookRegistered = true;
+				_wrappedKickCallback = InterceptedTimeOutKickCallback;
 			}
+			TimeOutKickPlayerS2CRPC.OnTimeOutKickPlayerS2CServerDelegate current = inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync;
+			if (current == _wrappedKickCallback)
+			{
+				_hookRegistered = true;
+				return;
+			}
+			if (current != null)
+			{
+				_originalKickCallback = current;
+			}
+			inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync = _wrappedKickCallback;
+			_hookRegistered = true;
 		}
 		catch (Exception ex)
 		{
+			_hookRegistered = false;
 			Debug.LogWarning("[XingShu 超时自动重连] 挂接 TimeOutKickPlayerS2C 异常: " + ex.Message);
 		}
 	}
@@ -326,7 +380,9 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 		try
 		{
 			NetManager inst = MonoSingletonProvider<NetManager>.inst;
-			if (inst != null && inst.RPC != null && inst.RPC.TimeOutKickPlayerS2C != null && inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync == new TimeOutKickPlayerS2CRPC.OnTimeOutKickPlayerS2CServerDelegate(InterceptedTimeOutKickCallback))
+			if (inst != null && inst.RPC != null && inst.RPC.TimeOutKickPlayerS2C != null &&
+				_wrappedKickCallback != null &&
+				inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync == _wrappedKickCallback)
 			{
 				inst.RPC.TimeOutKickPlayerS2C.OnTimeOutKickPlayerS2CServerCallBackAsync = _originalKickCallback;
 			}
@@ -334,27 +390,71 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 		}
 		catch
 		{
+			_hookRegistered = false;
 		}
 	}
 
 	private static async UniTask InterceptedTimeOutKickCallback(TimeOutKickPlayerS2C model, int errId, bool isDispatch)
 	{
-		if (Instance != null && Instance._enabled)
+		bool enabled = Instance != null && Instance._enabled;
+		double now = ThinkingClock.RealSeconds();
+		long currentRoomId = CurrentRoomId;
+		long kickRoomId = model != null ? model.RoomId : 0L;
+		bool isExit = model != null && model.IsExit;
+		double lastReconnect = Instance != null ? Instance._lastReconnectRealTime : 0d;
+
+		KickEvaluationOutcome outcome = ActionGuardPolicy.EvaluateKick(
+			enabled,
+			IsInBattle,
+			currentRoomId,
+			kickRoomId,
+			isExit,
+			now,
+			lastReconnect);
+
+		if (outcome == KickEvaluationOutcome.ForwardOriginal)
+		{
+			if (_originalKickCallback != null)
+			{
+				await _originalKickCallback(model, errId, isDispatch);
+			}
+			return;
+		}
+
+		if (Instance != null)
 		{
 			Instance._interceptedKickCount++;
 			Instance._lastInterceptTimeStr = DateTime.Now.ToString("HH:mm:ss");
-			Instance.ShowStatus("已成功拦截服务端超时踢出！正在无感恢复战局...");
-			Debug.LogWarning($"[XingShu 超时自动重连] 拦截到服务端超时踢出: RoomId={model?.RoomId}, IsExit={model?.IsExit}。已阻断断网与退回登录，正在执行无感战局同步！");
-			if (SimpleSingletonProvider<SceneManager>.hasInstance && SimpleSingletonProvider<SceneManager>.inst.currentType != null && SimpleSingletonProvider<SceneManager>.inst.currentType.Value == SceneType.Battle)
-			{
-				TriggerSeamlessReconnect(model?.RoomId ?? 0);
-			}
-			await UniTask.CompletedTask;
 		}
-		else if (_originalKickCallback != null)
+
+		if (outcome == KickEvaluationOutcome.IgnoreMismatchRoom)
 		{
-			await _originalKickCallback(model, errId, isDispatch);
+			Debug.LogWarning($"[XingShu 超时自动重连] 忽略过期/非当前房间踢出包: KickRoomId={kickRoomId}, CurrentRoomId={currentRoomId}");
+			return;
 		}
+		if (outcome == KickEvaluationOutcome.IgnoreExitSignal)
+		{
+			Debug.Log($"[XingShu 超时自动重连] 收到主动退出/结束标记踢出包 (RoomId={kickRoomId}, IsExit=true)，跳过强制重连");
+			if (_originalKickCallback != null)
+			{
+				await _originalKickCallback(model, errId, isDispatch);
+			}
+			return;
+		}
+		if (outcome == KickEvaluationOutcome.CooldownBlocked)
+		{
+			Debug.Log("[XingShu 超时自动重连] 命中真实时钟重连防抖窗口，跳过重复重连");
+			return;
+		}
+
+		if (Instance != null)
+		{
+			Instance._lastReconnectRealTime = now;
+			Instance.ShowStatus("已拦截服务端超时踢出，正在无感恢复战局...");
+		}
+		Debug.LogWarning($"[XingShu 超时自动重连] 拦截到服务端超时踢出: RoomId={kickRoomId}, IsExit={isExit}。正在执行无感战局同步！");
+		TriggerSeamlessReconnect(kickRoomId);
+		await UniTask.CompletedTask;
 	}
 
 	public static void TriggerSeamlessReconnect(long targetRoomId = 0L)
@@ -378,7 +478,6 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 				RoomLogic roomLogic = SimpleSingletonProvider<GameLogicManager>.inst?.room;
 				if (roomLogic != null && roomLogic.roomController != null)
 				{
-					roomLogic.roomController.roomStateType = RoomStateType.NONE;
 					roomLogic.RequestSyncRoomC2S(num);
 					if (Instance != null)
 					{
@@ -389,8 +488,7 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 				}
 			}
 			Debug.Log("[XingShu 超时自动重连] 网络已断开或需重新握手，正在调用游戏原生 ReconnectServer 无感重连流...");
-			InvokeNativeReconnectServer(inst);
-			if (Instance != null)
+			if (InvokeNativeReconnectServer(inst) && Instance != null)
 			{
 				Instance._reconnectSuccessCount++;
 				Instance.ShowStatus("正在调用游戏原生重连流恢复战局...");
@@ -402,7 +500,7 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 		}
 	}
 
-	private static void InvokeNativeReconnectServer(NetManager net)
+	private static bool InvokeNativeReconnectServer(NetManager net)
 	{
 		try
 		{
@@ -421,22 +519,40 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 			if (method != null)
 			{
 				method.Invoke(net, null);
+				return true;
 			}
-			else
-			{
-				net.Reconnect();
-			}
+			net.Reconnect();
+			return true;
 		}
 		catch (Exception ex)
 		{
 			Debug.LogWarning("[XingShu 超时自动重连] InvokeNativeReconnectServer 反射调用异常: " + ex.Message);
+			return false;
 		}
+	}
+
+	private static TimeProtector FindOrCachedTimeProtector()
+	{
+		if (_cachedTimeProtector == null)
+		{
+			_cachedTimeProtector = UnityEngine.Object.FindObjectOfType<TimeProtector>();
+		}
+		return _cachedTimeProtector;
 	}
 
 	public static void EnforceAntiCheatProtectionBypass()
 	{
 		try
 		{
+			if (Instance != null && !Instance._enabled)
+			{
+				return;
+			}
+			if (!_capturedAfkCheck)
+			{
+				_savedAfkCheck = GMConfig.AFKCheck;
+				_capturedAfkCheck = true;
+			}
 			GMConfig.AFKCheck = false;
 			FieldInfo field = typeof(OperationTimer).GetField("_AFK", BindingFlags.Static | BindingFlags.NonPublic);
 			if (field != null)
@@ -448,34 +564,60 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 			{
 				field2.SetValue(null, 0);
 			}
-			TimeProtector timeProtector = UnityEngine.Object.FindObjectOfType<TimeProtector>();
+			TimeProtector timeProtector = FindOrCachedTimeProtector();
 			if (timeProtector != null)
 			{
+				FieldInfo field3 = typeof(TimeProtector).GetField("timeScaleThreshold", BindingFlags.Instance | BindingFlags.NonPublic);
+				FieldInfo field4 = typeof(TimeProtector).GetField("maxSlowDuration", BindingFlags.Instance | BindingFlags.NonPublic);
+				FieldInfo field5 = typeof(TimeProtector).GetField("maxSlowDuration_CE", BindingFlags.Instance | BindingFlags.NonPublic);
+				FieldInfo field6 = typeof(TimeProtector).GetField("slowStartTime", BindingFlags.Instance | BindingFlags.NonPublic);
+				if (!_capturedTimeProtectorDefaults)
+				{
+					_savedTimeProtectorEnabled = timeProtector.enabled;
+					if (field3 != null) _savedTimeScaleThreshold = Convert.ToSingle(field3.GetValue(timeProtector));
+					if (field4 != null) _savedMaxSlowDuration = Convert.ToSingle(field4.GetValue(timeProtector));
+					if (field5 != null) _savedMaxSlowDurationCe = Convert.ToSingle(field5.GetValue(timeProtector));
+					_capturedTimeProtectorDefaults = true;
+				}
 				if (timeProtector.enabled)
 				{
 					timeProtector.enabled = false;
 					Debug.Log("[XingShu 超时自动重连] 已成功禁用 TimeProtector 变速检测组件");
 				}
-				FieldInfo field3 = typeof(TimeProtector).GetField("timeScaleThreshold", BindingFlags.Instance | BindingFlags.NonPublic);
-				if (field3 != null)
-				{
-					field3.SetValue(timeProtector, 0f);
-				}
-				FieldInfo field4 = typeof(TimeProtector).GetField("maxSlowDuration", BindingFlags.Instance | BindingFlags.NonPublic);
-				if (field4 != null)
-				{
-					field4.SetValue(timeProtector, float.MaxValue);
-				}
-				FieldInfo field5 = typeof(TimeProtector).GetField("slowStartTime", BindingFlags.Instance | BindingFlags.NonPublic);
-				if (field5 != null)
-				{
-					field5.SetValue(timeProtector, Time.realtimeSinceStartup);
-				}
+				if (field3 != null) field3.SetValue(timeProtector, 0f);
+				if (field4 != null) field4.SetValue(timeProtector, float.MaxValue);
+				if (field5 != null) field5.SetValue(timeProtector, float.MaxValue);
+				if (field6 != null) field6.SetValue(timeProtector, Time.realtimeSinceStartup);
 			}
 		}
 		catch (Exception ex)
 		{
 			Debug.LogWarning("[XingShu 超时自动重连] 防反作弊/挂机保护绕过处理异常: " + ex.Message);
+		}
+	}
+
+	private static void RestoreAntiCheatProtectionDefaults()
+	{
+		try
+		{
+			if (_capturedAfkCheck)
+			{
+				GMConfig.AFKCheck = _savedAfkCheck;
+			}
+			TimeProtector timeProtector = FindOrCachedTimeProtector();
+			if (timeProtector != null && _capturedTimeProtectorDefaults)
+			{
+				FieldInfo field3 = typeof(TimeProtector).GetField("timeScaleThreshold", BindingFlags.Instance | BindingFlags.NonPublic);
+				FieldInfo field4 = typeof(TimeProtector).GetField("maxSlowDuration", BindingFlags.Instance | BindingFlags.NonPublic);
+				FieldInfo field5 = typeof(TimeProtector).GetField("maxSlowDuration_CE", BindingFlags.Instance | BindingFlags.NonPublic);
+				if (field3 != null) field3.SetValue(timeProtector, _savedTimeScaleThreshold);
+				if (field4 != null) field4.SetValue(timeProtector, _savedMaxSlowDuration);
+				if (field5 != null) field5.SetValue(timeProtector, _savedMaxSlowDurationCe);
+				timeProtector.enabled = _savedTimeProtectorEnabled;
+			}
+		}
+		catch
+		{
 		}
 	}
 
@@ -547,6 +689,11 @@ internal sealed class AutoResetActionTimeGUI : MonoBehaviour
 			{
 				EnsureRPCHook();
 				EnforceAntiCheatProtectionBypass();
+			}
+			else
+			{
+				RestoreRPCHook();
+				RestoreAntiCheatProtectionDefaults();
 			}
 		}
 		GUILayout.EndHorizontal();
